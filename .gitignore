@@ -1,0 +1,22 @@
+__pycache__/
+*.py[cod]
+_archive/
+runtime/
+.idea/
+
+# 输出数据目录（可由流程重新生成）
+1.原始受体/
+2.原始配体/
+3.受体/
+4.配体/
+5.临时文件/
+6.对接结果/
+7.分析结果/
+8.转换PDB/
+9.PyMOL/
+10.实验报告/
+
+# 本机配置与凭证
+config.ini
+license.key
+license_cache.json
