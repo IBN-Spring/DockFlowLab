@@ -103,14 +103,15 @@ def estimate_protein_radius(pdb_path):
 
 
 def calculate_protein_center(pdb_path):
-    """计算蛋白质中心坐标（几何中心）"""
+    """计算蛋白质中心坐标（几何中心），多级回退确保鲁棒性"""
+    # 方案1: OpenBabel (精确但依赖重)
     try:
         from openbabel import openbabel as ob
         mol = ob.OBMol()
         conv = ob.OBConversion()
         conv.SetInFormat("pdb")
         if not conv.ReadFile(mol, pdb_path):
-            raise Exception("无法读取PDB文件")
+            raise Exception("OpenBabel无法读取PDB文件")
         x, y, z = 0.0, 0.0, 0.0
         count = 0
         for atom in ob.OBMolAtomIter(mol):
@@ -121,9 +122,24 @@ def calculate_protein_center(pdb_path):
         if count == 0:
             raise Exception("PDB文件中未找到原子")
         return (x / count, y / count, z / count)
+    except ImportError:
+        log("OpenBabel未安装，使用NumPy解析PDB", "WARNING")
     except Exception as e:
-        log(f"蛋白质中心计算失败: {str(e)}", "WARNING")
-        return (0.0, 0.0, 0.0)  # 默认中心
+        log(f"OpenBabel解析失败: {str(e)}，回退到NumPy", "WARNING")
+
+    # 方案2: 直接解析PDB坐标 (快速且无依赖)
+    try:
+        coords = extract_all_atom_coords(pdb_path)
+        if coords is not None and len(coords) > 0:
+            center = np.mean(coords, axis=0)
+            log(f"使用NumPy计算中心: {tuple(np.round(center, 2))}Å ({len(coords)}个原子)", "INFO")
+            return tuple(center)
+    except Exception as e:
+        log(f"NumPy解析失败: {str(e)}", "WARNING")
+
+    # 方案3: 安全默认值（原点）
+    log("所有方法失败，使用原点作为中心（可能导致盒子偏离受体）", "WARNING")
+    return (0.0, 0.0, 0.0)
 
 
 def calculate_docking_box(protein_path, log_text=None):
@@ -233,18 +249,40 @@ def extract_active_residue_coords(receptor_pdbqt_path, log_text=None):
 
 
 def calculate_initial_box(coord_array, ligand_flag=False, log_text=None):
-    """计算初始盒子参数（基于配体/残基坐标，初始尺寸25Å）"""
+    """计算初始盒子参数（基于配体/残基坐标，初始尺寸25Å）
+
+    Args:
+        coord_array: 原子坐标数组 (N, 3)
+        ligand_flag: True=配体成盒(紧贴), False=残基成盒(需要更大空间)
+        log_text: 日志输出列表
+    """
+    if coord_array is None or len(coord_array) == 0:
+        log("坐标数组为空，使用默认盒子", "WARNING", log_text=log_text)
+        return (0.0, 0.0, 0.0), (25.0, 25.0, 25.0)
+
     min_coords = np.min(coord_array, axis=0)
     max_coords = np.max(coord_array, axis=0)
     center = np.round((min_coords + max_coords) / 2, 3)
+
+    span = max_coords - min_coords
+
     if ligand_flag:
-        base_size = np.round((max_coords - min_coords) + CONFIG["box_padding"], 1)  # 配体成盒
+        # 配体成盒：紧贴边界 + 单倍padding（允许配体轻微旋转）
+        base_size = np.round(span + CONFIG["box_padding"], 1)
+        log(f"配体成盒策略：分子跨度{np.round(span, 1)}Å + padding {CONFIG['box_padding']}Å", log_text=log_text)
     else:
-        base_size = np.round((max_coords - min_coords) + CONFIG["box_padding"], 1)  # 残基成盒
+        # 残基成盒：需要更大空间覆盖活性口袋 + 双倍padding（容纳配体结合空间）
+        base_size = np.round(span + CONFIG["box_padding"] * 2.5, 1)
+        log(f"残基成盒策略：残基跨度{np.round(span, 1)}Å + padding {CONFIG['box_padding']*2.5}Å", log_text=log_text)
+
+    # 确保最小尺寸
     init_size = np.array([25.0, 25.0, 25.0])
     init_size = np.maximum(init_size, base_size)
+
+    # 应用配置范围
     min_size, max_size = CONFIG["box_size_range"]
     init_size = np.clip(init_size, min_size, max_size)
+
     log(f"初始盒子：中心{center}Å，尺寸{init_size}Å（体积：{np.prod(init_size):.1f}Å³）", log_text=log_text)
     return tuple(center), tuple(init_size)
 
@@ -264,19 +302,37 @@ def calculate_coverage(center, size, active_residues):
 
 
 def auto_adjust_box(center, size, active_residues, log_text=None):
+    """自动调整盒子以达到目标覆盖率
+
+    Args:
+        center: 盒子中心坐标 (x, y, z)
+        size: 盒子尺寸 (sx, sy, sz)
+        active_residues: 活性残基列表 [{"x", "y", "z", "id"}, ...]
+        log_text: 日志输出
+
+    Returns:
+        (adjusted_center, adjusted_size): 调整后的中心和尺寸
+    """
     if not active_residues:
         log("⚠️ 无活性残基，跳过盒子调整", log_text=log_text)
-        return center, size
+        # 确保最小安全尺寸
+        safe_size = np.maximum(size, 20.0)
+        return center, tuple(safe_size)
+
     MIN_BOX_DIMENSION = 10.0
     max_attempts = 20
     min_size_cfg, max_size_cfg = CONFIG["box_size_range"]
     coverage_target = CONFIG["box_coverage"] * 100  # 转换为百分比
     limit_volume = CONFIG.get("limit_volume", False)
     max_volume = 27000
+
     current_center = np.array(center, dtype=np.float64)
     current_size = np.array(size, dtype=np.float64)
     current_coverage, _ = calculate_coverage(current_center, current_size, active_residues)
+
     log(f"初始覆盖率: {current_coverage:.1f}%，目标覆盖率: {coverage_target:.1f}%", log_text=log_text)
+
+    # 体积限制模式
     if limit_volume:
         log(f"体积限制模式: 最大体积={max_volume}Å³", log_text=log_text)
         attempts = 0
@@ -289,61 +345,95 @@ def auto_adjust_box(center, size, active_residues, log_text=None):
                 log_text=log_text)
             attempts += 1
         return tuple(current_center), tuple(current_size)
+
+    # 覆盖率模式
     if coverage_target > 0:
         log(f"覆盖率模式: 强制达到{coverage_target:.1f}%覆盖率", log_text=log_text)
+
+        # 缩小盒子以达到目标覆盖率
         if current_coverage > coverage_target:
             log(f"初始覆盖率高于目标，开始缩小盒子...", log_text=log_text)
             attempts = 0
+            prev_diff = abs(current_coverage - coverage_target)
+
             while current_coverage > coverage_target and attempts < max_attempts:
                 scale_factor = 0.9  # 每次缩小10%
                 new_size = current_size * scale_factor
                 new_size = np.maximum(new_size, MIN_BOX_DIMENSION)
                 new_coverage, _ = calculate_coverage(current_center, new_size, active_residues)
+
+                # 检查是否改善
+                new_diff = abs(new_coverage - coverage_target)
+
                 if new_coverage >= coverage_target:
                     current_size = new_size
                     current_coverage = new_coverage
                     log(f"缩小盒子: {current_size}Å (覆盖率: {current_coverage:.1f}%)", log_text=log_text)
+
+                    # 精度达标 或 无法进一步改善，退出
+                    if new_diff < 1.0 or new_diff >= prev_diff:
+                        log(f"覆盖率达标或无法进一步优化，停止调整", log_text=log_text)
+                        break
+                    prev_diff = new_diff
                 else:
-                    scale_factor = 0.95  # 缩小5%
+                    # 缩小过度，尝试微调
+                    scale_factor = 0.95
                     new_size = current_size * scale_factor
                     new_size = np.maximum(new_size, MIN_BOX_DIMENSION)
                     new_coverage, _ = calculate_coverage(current_center, new_size, active_residues)
+
                     if new_coverage >= coverage_target:
                         current_size = new_size
                         current_coverage = new_coverage
                         log(f"微调缩小: {current_size}Å (覆盖率: {current_coverage:.1f}%)", log_text=log_text)
+
+                        if abs(new_coverage - coverage_target) < 1.0:
+                            break
                     else:
                         log(f"已达到最小可行尺寸，无法进一步缩小", log_text=log_text)
                         break
+
                 attempts += 1
+
+        # 扩展盒子以达到目标覆盖率
         elif current_coverage < coverage_target:
             log(f"初始覆盖率低于目标，开始扩展盒子...", log_text=log_text)
             attempts = 0
+
             while current_coverage < coverage_target and attempts < max_attempts:
                 scale_factor = 1.1  # 每次扩展10%
                 new_size = current_size * scale_factor
-                # 强制上限：不得超过 box_size_range 的最大值
+
+                # 强制上限
                 if max_size_cfg > 0:
                     new_size = np.minimum(new_size, max_size_cfg)
+
                 new_coverage, _ = calculate_coverage(current_center, new_size, active_residues)
                 current_size = new_size
                 current_coverage = new_coverage
                 log(f"扩展盒子: {current_size}Å (覆盖率: {current_coverage:.1f}%)", log_text=log_text)
+
                 if current_coverage >= coverage_target:
                     break
+
                 if max_size_cfg > 0 and np.all(current_size >= max_size_cfg):
                     log(f"已达到盒子大小上限 {max_size_cfg}Å，停止扩展", "WARNING", log_text=log_text)
                     break
+
                 attempts += 1
+
         final_coverage, _ = calculate_coverage(current_center, current_size, active_residues)
-        if abs(final_coverage - coverage_target) > 5.0:  # 如果偏差超过5%
+        if abs(final_coverage - coverage_target) > 5.0:
             log(f"警告: 最终覆盖率({final_coverage:.1f}%)与目标({coverage_target:.1f}%)偏差较大", "WARNING",
                 log_text=log_text)
+
         final_volume = np.prod(current_size)
         log(f"✅ 最终盒子尺寸: {current_size}Å", log_text=log_text)
         log(f"✅ 最终盒子体积: {final_volume:.1f}Å³", log_text=log_text)
         log(f"✅ 最终覆盖率: {final_coverage:.1f}%", log_text=log_text)
         return tuple(current_center), tuple(current_size)
+
+    # 盒子大小范围模式
     log(f"盒子大小模式: 限制范围=[{min_size_cfg}, {max_size_cfg}]Å", log_text=log_text)
     if np.any(current_size < min_size_cfg):
         current_size = np.maximum(current_size, min_size_cfg)
@@ -351,6 +441,7 @@ def auto_adjust_box(center, size, active_residues, log_text=None):
     if np.any(current_size > max_size_cfg):
         current_size = np.minimum(current_size, max_size_cfg)
         log(f"调整到最大尺寸: {current_size}Å", log_text=log_text)
+
     final_coverage, _ = calculate_coverage(current_center, current_size, active_residues)
     final_volume = np.prod(current_size)
     log(f"✅ 最终盒子尺寸: {current_size}Å", log_text=log_text)

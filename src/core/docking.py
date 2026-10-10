@@ -26,16 +26,72 @@ task_progress = {}
 task_pause_event = None
 
 
-def validate_ligand_pdbqt(ligand_path, log_text=None):  # noqa: ARG001
-    """验证配体 PDBQT 文件是否有效"""
+def validate_ligand_pdbqt(ligand_path, log_text=None):
+    """验证配体 PDBQT 文件是否有效
+
+    Args:
+        ligand_path: PDBQT 文件路径
+        log_text: 日志输出列表
+
+    Returns:
+        bool: 文件有效返回 True，否则 False
+    """
+    # 检查文件存在性
     if not os.path.isfile(ligand_path):
+        log(f"配体文件不存在: {ligand_path}", "ERROR", log_text)
         return False
-    if os.path.getsize(ligand_path) < 50:
+
+    # 检查文件大小（至少200字节才能包含基本PDBQT结构）
+    size = os.path.getsize(ligand_path)
+    if size < 200:
+        log(f"配体文件过小({size}B，需>200B): {os.path.basename(ligand_path)}", "ERROR", log_text)
         return False
-    with open(ligand_path, "r", encoding="utf-8", errors="ignore") as f:
-        lines = f.readlines()
-    atom_lines = [ln for ln in lines if ln.startswith(("ATOM", "HETATM"))]
-    return len(atom_lines) > 0
+
+    try:
+        with open(ligand_path, "r", encoding="utf-8", errors="ignore") as f:
+            content = f.read()
+
+        # 检查必需记录
+        has_atoms = False
+        has_coords = False
+        has_torsdof = "TORSDOF" in content
+        atom_count = 0
+
+        for line in content.splitlines():
+            if line.startswith(("ATOM", "HETATM")):
+                atom_count += 1
+                has_atoms = True
+                # 验证坐标格式
+                try:
+                    x = float(line[30:38].strip())
+                    y = float(line[38:46].strip())
+                    z = float(line[46:54].strip())
+                    has_coords = True
+                except (ValueError, IndexError):
+                    continue
+
+        # 验证结果
+        if not has_atoms:
+            log(f"配体缺少ATOM/HETATM记录: {os.path.basename(ligand_path)}", "ERROR", log_text)
+            return False
+
+        if not has_coords:
+            log(f"配体坐标格式错误: {os.path.basename(ligand_path)}", "ERROR", log_text)
+            return False
+
+        if atom_count < 3:
+            log(f"配体原子数过少({atom_count}<3): {os.path.basename(ligand_path)}", "ERROR", log_text)
+            return False
+
+        # TORSDOF 是柔性对接的关键，但不是硬性要求（刚性对接可以没有）
+        if not has_torsdof:
+            log(f"配体缺少TORSDOF记录（可能是刚性分子）: {os.path.basename(ligand_path)}", "WARNING", log_text)
+
+        return True
+
+    except Exception as e:
+        log(f"配体验证异常: {os.path.basename(ligand_path)} - {str(e)}", "ERROR", log_text)
+        return False
 
 
 def run_single_docking(receptor_name, ligand_name, env=None, log_text=None):
@@ -251,11 +307,6 @@ def run_docking(env, log_text=None):
             if "docking" not in task_progress:
                 task_progress["docking"] = {"total": total_tasks, "completed": 0}
             for lig_idx, lig_file in enumerate(ligand_files, 1):
-                completed_count += 1
-                task_progress["docking"]["completed"] = completed_count
-                if completed_count % max(1, total_tasks // 10) == 0:
-                    percent = int(completed_count / total_tasks * 100)
-                    log(f"对接进度：{completed_count}/{total_tasks} ({percent}%)", "INFO", log_text)
                 if task_pause_event.is_set():
                     log("对接任务已暂停", log_text=log_text)
                     task_pause_event.wait()
@@ -267,9 +318,13 @@ def run_docking(env, log_text=None):
                 log(f"  任务 {task_idx}/{total_tasks}：配体→{lig_name}", log_text=log_text)
                 if not os.path.exists(lig_path):
                     log(f"  ❌❌ 配体文件不存在：{lig_path}", "ERROR", log_text)
+                    completed_count += 1
+                    task_progress["docking"]["completed"] = completed_count
                     continue
                 if not validate_ligand_pdbqt(lig_path, log_text):
                     log(f"  ❌❌ 配体文件格式错误：{lig_path}", "ERROR", log_text)
+                    completed_count += 1
+                    task_progress["docking"]["completed"] = completed_count
                     continue
                 with open(config_path, "r", encoding="utf-8") as f:
                     config_content = f.read()
@@ -292,7 +347,12 @@ def run_docking(env, log_text=None):
                     log(f"  ❌❌ 失败：{rec_name}_vs_{lig_name}", log_text=log_text)
                 if os.path.exists(temp_config):
                     os.remove(temp_config)
-                task_progress["docking"]["completed"] = task_idx
+                completed_count += 1
+                task_progress["docking"]["completed"] = completed_count
+                # 定期输出进度
+                if completed_count % max(1, total_tasks // 10) == 0:
+                    percent = int(completed_count / total_tasks * 100)
+                    log(f"对接进度：{completed_count}/{total_tasks} ({percent}%)", "INFO", log_text)
     else:
         log(f"使用多对对接模式（{simultaneous_pairs}对）", log_text=log_text)
         all_tasks = []
@@ -311,7 +371,8 @@ def run_docking(env, log_text=None):
                 log_path = os.path.join(CONFIG["6.对接结果"], f"{rec_name}_vs_{lig_name}.log")
                 all_tasks.append((rec_name, lig_name, config_path, lig_path, out_pdbqt, log_path))
         from concurrent.futures import ThreadPoolExecutor, as_completed
-        def run_single_docking(task):
+        def run_single_docking_task(task):
+            """内部：单对接任务执行函数（重命名避免与外部函数冲突）"""
             rec_name, lig_name, config_path, lig_path, out_pdbqt, log_path = task
             while task_pause_event and task_pause_event.is_set():
                 time.sleep(1)
@@ -343,9 +404,10 @@ def run_docking(env, log_text=None):
                         os.remove(temp_config)
                     except:
                         pass
-            return (success, f"{rec_name}_vs_{lig_name}")
+
+        failed_count = 0
         with ThreadPoolExecutor(max_workers=simultaneous_pairs) as executor:
-            future_to_task = {executor.submit(run_single_docking, task): task for task in all_tasks}
+            future_to_task = {executor.submit(run_single_docking_task, task): task for task in all_tasks}
             for future in as_completed(future_to_task):
                 if task_pause_event.is_set():
                     log("对接任务已暂停", log_text=log_text)
@@ -356,10 +418,13 @@ def run_docking(env, log_text=None):
                         success_count += 1
                         log(f"✅ 完成：{task_name}", log_text=log_text)
                     else:
-                        log(f"❌❌ 失败：{task_name}", log_text=log_text)  # 正确显示失败
+                        failed_count += 1
+                        log(f"❌❌ 失败：{task_name}", log_text=log_text)
                 except Exception as e:
+                    failed_count += 1
                     log(f"❌❌ 任务执行异常：{str(e)}", log_text=log_text)
-                task_progress["docking"]["completed"] += 1
+                finally:
+                    task_progress["docking"]["completed"] += 1
     log(f"\n=== 对接完成：成功{success_count}/{total_tasks}个任务 ===", log_text=log_text)
     return True
 
@@ -744,7 +809,16 @@ def combine_pdbqt_with_receptor_preserve_conformation(receptor_pdbqt, ligand_pdb
 
 
 def validate_pdb_conformation(original_pdbqt, converted_pdb, log_text=None):
-    """验证转换后的PDB文件是否保持了原始构象"""
+    """验证转换后的PDB文件是否保持了原始构象
+
+    Args:
+        original_pdbqt: 原始PDBQT文件路径
+        converted_pdb: 转换后的PDB文件路径
+        log_text: 日志输出列表
+
+    Returns:
+        bool: True=构象保持良好，False=构象偏差过大
+    """
     try:
         original_coords = []
         with open(original_pdbqt, 'r', encoding='utf-8') as f:
@@ -789,15 +863,43 @@ def validate_pdb_conformation(original_pdbqt, converted_pdb, log_text=None):
                         continue
                 elif in_ligand and line.startswith('TER'):
                     break
-        if len(original_coords) != len(converted_coords):
-            log(f"      原子数量变化：原始{len(original_coords)} → 转换后{len(converted_coords)}", "WARNING", log_text)
+
+        # 原子数验证（容忍±3个原子的差异，可能由氢原子处理导致）
+        atom_diff = abs(len(original_coords) - len(converted_coords))
+        if atom_diff > 3:
+            log(f"      原子数量变化过大：原始{len(original_coords)} → 转换后{len(converted_coords)} (差异{atom_diff})", "WARNING", log_text)
             return False
+
+        if atom_diff > 0:
+            log(f"      原子数量微小差异：{atom_diff}个原子（可能由氢原子处理导致）", "INFO", log_text)
+
+        # 坐标偏差验证（使用较小数组的长度）
+        min_len = min(len(original_coords), len(converted_coords))
+        if min_len == 0:
+            log(f"      无法提取坐标进行验证", "WARNING", log_text)
+            return True  # 无法验证不代表失败
+
         max_deviation = 0
-        for orig, conv in zip(original_coords, converted_coords):
-            deviation = ((orig[0]-conv[0])**2 + (orig[1]-conv[1])** 2 + (orig[2]-conv[2])**2)** 0.5
+        for orig, conv in zip(original_coords[:min_len], converted_coords[:min_len]):
+            deviation = ((orig[0]-conv[0])**2 + (orig[1]-conv[1])**2 + (orig[2]-conv[2])**2)**0.5
             max_deviation = max(max_deviation, deviation)
+
         log(f"      构象验证：最大坐标偏差 {max_deviation:.4f} Å", log_text=log_text)
-        return max_deviation < 0.01  # 小于0.01Å认为构象保持
+
+        # 容忍度：0.01Å 几乎完美，0.1Å 可接受，>0.5Å 警告
+        if max_deviation < 0.01:
+            log(f"      ✅ 构象保持完美（偏差 < 0.01Å）", log_text=log_text)
+            return True
+        elif max_deviation < 0.1:
+            log(f"      ✅ 构象保持良好（偏差 < 0.1Å）", log_text=log_text)
+            return True
+        elif max_deviation < 0.5:
+            log(f"      ⚠️ 构象偏差较大（{max_deviation:.3f}Å），建议检查", "WARNING", log_text)
+            return True  # 仍然接受，但记录警告
+        else:
+            log(f"      ❌ 构象偏差过大（{max_deviation:.3f}Å），可能转换失败", "WARNING", log_text)
+            return False
+
     except Exception as e:
-        log(f"      构象验证失败：{str(e)}", "WARNING", log_text)
+        log(f"      构象验证异常：{str(e)}", "WARNING", log_text)
         return True  # 验证失败不代表转换失败

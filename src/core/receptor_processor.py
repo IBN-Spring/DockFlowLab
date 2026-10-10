@@ -231,7 +231,19 @@ def _run_receptor_in_subprocess(receptor_file, env):
         lines = [line for line in proc.stdout.splitlines() if line.strip()]
         if not lines:
             return (receptor_file, '失败', '子进程无输出', [('ERROR', '子进程无输出')])
-        return tuple(json.loads(lines[-1]))
+
+        # 安全解析JSON
+        try:
+            result = json.loads(lines[-1])
+            # 验证返回格式
+            if isinstance(result, (list, tuple)) and len(result) == 4:
+                return tuple(result)
+            else:
+                err_msg = f'子进程返回格式错误（期望4元组，实际: {type(result).__name__}）'
+                return (receptor_file, '失败', err_msg, [('ERROR', str(result)[:200])])
+        except json.JSONDecodeError as e:
+            err_msg = f'JSON解析失败: {str(e)}'
+            return (receptor_file, '失败', err_msg, [('ERROR', f'原始输出: {lines[-1][:200]}')])
     except Exception as e:
         return (receptor_file, '失败', f'子进程执行失败: {str(e)}', [('ERROR', f'子进程执行失败: {str(e)}')])
 

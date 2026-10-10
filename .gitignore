@@ -1,22 +1,80 @@
+# Python
 __pycache__/
 *.py[cod]
-_archive/
-runtime/
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Conda
+.conda/
+*.conda
+
+# IDE
+.vscode/
 .idea/
+*.swp
+*.swo
+*~
+.DS_Store
 
-# 输出数据目录（可由流程重新生成）
-1.原始受体/
-2.原始配体/
-3.受体/
-4.配体/
-5.临时文件/
-6.对接结果/
-7.分析结果/
-8.转换PDB/
-9.PyMOL/
-10.实验报告/
+# Jupyter
+.ipynb_checkpoints
+*.ipynb
 
-# 本机配置与凭证
-config.ini
-license.key
-license_cache.json
+# 测试
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+*.log
+
+# 项目特定
+data/输出/
+data/临时/
+tools/*.exe
+tools/*.dll
+*.pdbqt
+*.pdb
+*.sdf
+*.mol2
+logs/
+temp/
+tmp/
+outputs/
+*.csv
+*.png
+*.html
+!data/模板/*.html
+
+# MCP
+mcp_server.log
+
+# 打包
+*.zip
+*.tar.gz
+*.dmg
+*.deb
+*.rpm
+
+# 敏感信息
+.env
+secrets.json
+config.local.json
