@@ -56,9 +56,10 @@ dev = [
 ]
 
 [project.scripts]
-dockflowlab = "dockflowlab.app:main"
+dockflowlab-cli = "dockflowlab.cli:main"
 
 [project.gui-scripts]
+dockflowlab = "dockflowlab.app:gui_main"
 dockflowlab-gui = "dockflowlab.app:gui_main"
 
 [tool.setuptools]

@@ -289,12 +289,23 @@ class Workspace:
     def _extensions_for(self, kind: str) -> set[str]:
         return TARGET_EXTENSIONS if kind == KIND_TARGET else LIGAND_EXTENSIONS
 
-    def _allocate_stem(self, kind: str, proposed: str, digest: str) -> tuple[str, ProjectFile | None]:
+    def _allocate_stem(
+        self,
+        kind: str,
+        proposed: str,
+        digest: str,
+        *,
+        fallback: str = "",
+    ) -> tuple[str, ProjectFile | None]:
         entries = self.entries(kind)
         for entry in entries:
             if entry.meta.get("sha1") == digest:
                 return entry.stem, entry
-        base = safe_stem(proposed, "target" if kind == KIND_TARGET else "ligand")
+        default = "target" if kind == KIND_TARGET else "ligand"
+        # 显示名可能是纯中文，此时用原始文件名生成更易辨识的内部代号。
+        base = safe_stem(proposed, safe_stem(fallback, default) if fallback else default)
+        if base == default and fallback:
+            base = safe_stem(fallback, default)
         existing = {entry.stem for entry in entries}
         if base not in existing:
             return base, None
@@ -321,7 +332,9 @@ class Workspace:
             raise InputError("文件内容为空或过小")
 
         digest = file_sha1(source)
-        stem, duplicate = self._allocate_stem(kind, display_name or source.stem, digest)
+        stem, duplicate = self._allocate_stem(
+            kind, display_name or source.stem, digest, fallback=source.stem
+        )
         if duplicate is not None:
             return duplicate
 
@@ -362,7 +375,10 @@ class Workspace:
         if suffix not in self._extensions_for(kind):
             raise InputError(f"不支持的文件格式：{suffix}")
         digest = bytes_sha1(data)
-        stem, duplicate = self._allocate_stem(kind, display_name or Path(filename).stem, digest)
+        source_stem = Path(filename).stem
+        stem, duplicate = self._allocate_stem(
+            kind, display_name or source_stem, digest, fallback=source_stem
+        )
         if duplicate is not None:
             return duplicate
         folder = self.root / ("inputs/targets" if kind == KIND_TARGET else "inputs/ligands")

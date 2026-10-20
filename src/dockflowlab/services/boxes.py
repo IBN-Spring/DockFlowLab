@@ -103,7 +103,10 @@ def structure_coords(path: str | Path, obabel: OpenBabelAdapter | None = None) -
         raise InputError(f"读取 mmCIF 坐标需要 OpenBabel：{path.name}")
     if fmt in {"pdb", "pdbqt"}:
         atoms = pdbio.parse_pdbqt_atoms(path) if fmt == "pdbqt" else pdbio.parse_atoms(path)
-        return [atom.coord for atom in atoms if not atom.is_hydrogen]
+        coords = [atom.coord for atom in atoms if not atom.is_hydrogen]
+        if not coords:
+            raise InputError(f"文件中没有可用的原子坐标：{path.name}")
+        return coords
     if fmt in {"sdf", "mol", "mol2"}:
         try:
             from rdkit import Chem

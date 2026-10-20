@@ -6,6 +6,7 @@ __pycache__/
 .Python
 build/
 dist/
+release/
 *.egg-info/
 .eggs/
 .venv/
@@ -24,35 +25,34 @@ htmlcov/
 .DS_Store
 Thumbs.db
 
-# ── 项目运行时产物 ──────────────────────────────────────
+# ── 本地测试与临时产物 ──────────────────────────────────
+_testwork/
+_wheelinspect/
+_meeko_tmp/
+_test_*.pdb
 *.log
 logs/
 temp/
 tmp/
-_meeko_tmp/
-_testwork/
-_test_*.pdb
-_wheelinspect/
-release/
+
+# ── 项目/对接运行产物（防止误提交用户数据）──────────────
+project.json
 *.pdbqt
-*.pdb
 *.sdf
 *.mol2
 *.cif
+*.pml
 !tests/data/**/*.pdb
 !tests/data/**/*.sdf
 !tests/data/**/*.mol2
-!src/dockflowlab/resources/**/*.pdb
+!tests/data/**/*.pdbqt
 
-# ── 旧版开发环境 / 二进制（不再纳入版本管理）─────────────
+# ── 旧版目录（防止再次混入）─────────────────────────────
 runtime/
 tools/
 engine/
-_archive/
 openbabel_data/
-vina.exe
-
-# ── 旧版运行输出 ────────────────────────────────────────
+_archive/
 1.原始受体/
 2.原始配体/
 3.受体/
@@ -63,12 +63,10 @@ vina.exe
 8.转换PDB/
 9.PyMOL/
 10.实验报告/
-Ligand_list.txt
-Receptor_list.txt
 license.key
 license_cache.json
 
-# ── 打包 ────────────────────────────────────────────────
+# ── 打包产物 ────────────────────────────────────────────
 *.zip
 *.tar.gz
 *.dmg

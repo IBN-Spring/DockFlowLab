@@ -136,7 +136,7 @@ def infer_element(atom_name: str, resname: str, record: str) -> str:
         return ""
     two = letters[:2].upper()
     # 常见双字母元素（注意蛋白 CA 是 α 碳，不是钙）
-    if two in {"CL", "BR", "FE", "ZN", "MG", "NA", "MN", "CU", "CO", "NI", "CD", "HG", "SE"}:
+    if two in {"CL", "BR", "FE", "ZN", "MG", "NA", "CA", "MN", "CU", "CO", "NI", "CD", "HG", "SE"}:
         if record == "HETATM" and resname not in AMINO_ACIDS:
             return two.title()
         if two in {"FE", "ZN", "MG", "MN", "CU", "CO", "NI", "CD", "HG"}:

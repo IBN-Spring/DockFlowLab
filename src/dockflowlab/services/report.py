@@ -9,7 +9,6 @@ from __future__ import annotations
 import base64
 import html
 from datetime import datetime
-from importlib.metadata import PackageNotFoundError, version as package_version
 from pathlib import Path
 from string import Template
 from typing import Any, Iterable, Sequence
@@ -18,7 +17,7 @@ from ..config import AppSettings
 from ..core.models import DockingResult, Pose
 from ..logging_setup import get_logger
 from ..tools.runtime import resource_path
-from ..version import __app_name__, __version__
+from ..version import __app_name__, __version__, component_version
 from ..workspace import Workspace
 from .analysis import AnalysisBundle, analyze, unique_labels
 from .docking import collect_existing_results
@@ -44,10 +43,7 @@ def _fmt(value: float | None, digits: int = 2) -> str:
 
 
 def _version_of(distribution: str) -> str:
-    try:
-        return package_version(distribution)
-    except (PackageNotFoundError, ValueError):
-        return ""
+    return component_version(distribution)
 
 
 def _software_line() -> str:
