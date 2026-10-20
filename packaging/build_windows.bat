@@ -20,6 +20,9 @@ python -m PyInstaller --clean --noconfirm packaging\dockflowlab.spec || exit /b 
 
 echo [3/3] Creating release archive...
 if not exist release mkdir release
+if exist README.md copy /Y README.md dist\DockFlowLab\README.md >nul
+if exist docs\user-guide.md copy /Y docs\user-guide.md dist\DockFlowLab\USER-GUIDE.md >nul
+if exist LICENSE copy /Y LICENSE dist\DockFlowLab\LICENSE >nul
 powershell -NoProfile -ExecutionPolicy Bypass -Command ^
     "Compress-Archive -Path 'dist\DockFlowLab' -DestinationPath 'release\DockFlowLab-Windows-x64.zip' -CompressionLevel Optimal -Force"
 if errorlevel 1 exit /b 1

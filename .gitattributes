@@ -1,0 +1,11 @@
+# 统一跨平台换行符：Windows 批处理用 CRLF，其余文本用 LF
+* text=auto
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.sh text eol=lf
+*.spec text eol=lf
+*.py text eol=lf
+*.md text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.json text eol=lf

@@ -86,9 +86,11 @@ def read_molecule(path: str | Path, obabel: OpenBabelAdapter | None = None) -> t
             if mols:
                 warnings.append("SDF 结构存在化学价态问题，已按宽松模式读取")
         if mols:
-            mol = max(mols, key=lambda m: m.GetNumAtoms())
+            # 多记录 SDF 按文件顺序取第一条，与界面提示保持一致；需要批量
+            # 筛选时请把记录拆成单独文件后分别导入。
+            mol = mols[0]
             if len(mols) > 1:
-                warnings.append(f"SDF 包含 {len(mols)} 条记录，已选择最大的一条")
+                warnings.append(f"SDF 包含 {len(mols)} 条记录，已选择第一条")
     elif fmt == "mol":
         mol = Chem.MolFromMolFile(str(path), removeHs=False, sanitize=True)
         if mol is None:

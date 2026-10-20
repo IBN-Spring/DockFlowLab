@@ -14,6 +14,15 @@ def _base_dir() -> Path:
     return Path(sys.executable).resolve().parent
 
 
+def _prepend_env(name: str, directory: Path) -> None:
+    if not directory.is_dir():
+        return
+    current = os.environ.get(name, "")
+    parts = current.split(os.pathsep) if current else []
+    if str(directory) not in parts:
+        os.environ[name] = str(directory) + (os.pathsep + current if current else "")
+
+
 def _prepend_path(directory: Path) -> None:
     if not directory.is_dir():
         return
@@ -22,10 +31,7 @@ def _prepend_path(directory: Path) -> None:
             os.add_dll_directory(str(directory))
         except (AttributeError, OSError):
             pass
-    current = os.environ.get("PATH", "")
-    parts = current.split(os.pathsep) if current else []
-    if str(directory) not in parts:
-        os.environ["PATH"] = str(directory) + (os.pathsep + current if current else "")
+    _prepend_env("PATH", directory)
 
 
 _BASE = _base_dir()
@@ -45,6 +51,13 @@ if _OPENMM_PLUGINS.is_dir():
 
 for _directory in (_BASE, _OPENBABEL_BIN):
     _prepend_path(_directory)
+
+# macOS / Linux 的 dylib、so 需要动态加载器路径；BABEL_LIBDIR 本身不参与
+# 依赖解析，内置的 obabel 与 Python 扩展仍要能找到同目录的共享库。
+if os.name != "nt":
+    for _variable in ("DYLD_LIBRARY_PATH", "LD_LIBRARY_PATH"):
+        for _directory in (_BASE, _OPENBABEL_BIN):
+            _prepend_env(_variable, _directory)
 
 # 图表只用于导出 PNG，不依赖 Qt 后端
 os.environ.setdefault("MPLBACKEND", "Agg")

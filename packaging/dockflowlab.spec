@@ -97,6 +97,58 @@ def _openbabel_package_dir() -> Path | None:
     return None
 
 
+def _openbabel_data_dir(share_dir: Path) -> Path | None:
+    """在 share/openbabel 下选出真正的数据目录（通常带版本号）。"""
+    if not share_dir.is_dir():
+        return None
+    candidates = [p for p in share_dir.iterdir() if p.is_dir()]
+    candidates.sort(
+        key=lambda p: [int(x) for x in p.name.split(".") if x.isdigit()],
+        reverse=True,
+    )
+    for candidate in candidates:
+        if (candidate / "element.txt").is_file() or list(candidate.glob("bondtyp.txt")):
+            return candidate
+    if (share_dir / "element.txt").is_file() or list(share_dir.glob("bondtyp.txt")):
+        return share_dir
+    return None
+
+
+def _collect_openbabel_posix() -> None:
+    """收集 conda / Homebrew 在 macOS、Linux 上的 OpenBabel 布局。"""
+    bin_dir = PREFIX / "bin"
+    lib_dir = PREFIX / "lib"
+    share_dir = PREFIX / "share" / "openbabel"
+    dest = "openbabel/bin"
+
+    obabel = bin_dir / "obabel"
+    if obabel.is_file():
+        binaries.append((str(obabel), dest))
+
+    for pattern in (
+        "libopenbabel*.dylib",
+        "libopenbabel*.so*",
+        "libinchi*.dylib",
+        "libinchi*.so*",
+    ):
+        for source in sorted(lib_dir.glob(pattern)):
+            if source.is_file():
+                binaries.append((str(source), dest))
+
+    plugin_root = lib_dir / "openbabel"
+    if plugin_root.is_dir():
+        for source in sorted(plugin_root.rglob("*")):
+            if source.is_file() and source.suffix in (".so", ".dylib", ".obf"):
+                binaries.append((str(source), dest))
+
+    data_dir = _openbabel_data_dir(share_dir)
+    if data_dir is not None:
+        _tree(data_dir, f"{dest}/data")
+        print(f"[spec] OpenBabel：POSIX 布局 {bin_dir} + 数据 {data_dir}")
+    else:
+        print("[spec] 警告：找到 POSIX OpenBabel，但未找到数据目录")
+
+
 def _collect_openbabel() -> None:
     package_dir = _openbabel_package_dir()
 
@@ -107,7 +159,7 @@ def _collect_openbabel() -> None:
         return
 
     if not IS_WINDOWS:
-        # macOS/Linux 通常在系统或 conda 前缀中，运行时按 PATH 查找即可
+        _collect_openbabel_posix()
         return
 
     bin_dir = PREFIX / "Library" / "bin"
@@ -138,14 +190,7 @@ def _collect_openbabel() -> None:
                 continue
             datas.append((str(source), dest))
 
-    data_root: Path | None = None
-    if share_dir.is_dir():
-        candidates = [p for p in share_dir.iterdir() if p.is_dir()]
-        candidates.sort(key=lambda p: [int(x) for x in p.name.split(".") if x.isdigit()], reverse=True)
-        for candidate in candidates:
-            if (candidate / "element.txt").is_file() or list(candidate.glob("bondtyp.txt")):
-                data_root = candidate
-                break
+    data_root = _openbabel_data_dir(share_dir)
     if data_root:
         _tree(data_root, f"{dest}/data")
         print(f"[spec] OpenBabel：{bin_dir} + 数据 {data_root}")
@@ -166,6 +211,36 @@ def _add_if_exists(path: Path, destination: str) -> None:
 
 def _collect_rdkit_and_openmm() -> None:
     if not IS_WINDOWS:
+        # macOS/Linux conda 把共享库直接放在 $PREFIX/lib
+        lib_dir = PREFIX / "lib"
+        if lib_dir.is_dir():
+            for pattern in (
+                "libRDKit*.dylib",
+                "libRDKit*.so*",
+                "libOpenMM*.dylib",
+                "libOpenMM*.so*",
+                "libboost_*.dylib",
+                "libboost_*.so*",
+            ):
+                for library in sorted(lib_dir.glob(pattern)):
+                    if library.is_file():
+                        binaries.append((str(library), "."))
+
+        # OpenMM 插件：conda 放在 lib/plugins，部分布局放在 lib/openmm/plugins
+        plugin_names = (
+            "libOpenMMCPU",
+            "libOpenMMPME",
+            "libOpenMMAmoebaReference",
+            "libOpenMMDrudeReference",
+            "libOpenMMRPMDReference",
+        )
+        for plugin_dir in (lib_dir / "plugins", lib_dir / "openmm" / "plugins"):
+            if not plugin_dir.is_dir():
+                continue
+            for stem in plugin_names:
+                for suffix in (".dylib", ".so"):
+                    for plugin in sorted(plugin_dir.glob(stem + "*" + suffix)):
+                        binaries.append((str(plugin), "openmm_plugins"))
         return
 
     lib_dir = PREFIX / "Library" / "lib"
@@ -185,17 +260,17 @@ def _collect_rdkit_and_openmm() -> None:
     for dll in sorted(bin_dir.glob("boost_*.dll")):
         binaries.append((str(dll), "."))
 
-        plugin_dir = lib_dir / "plugins"
-        if plugin_dir.is_dir():
-            # 只收集 CPU / Reference 系列，避免把 CUDA、OpenCL 运行时塞进安装包
-            for name in (
-                "OpenMMCPU.dll",
-                "OpenMMPME.dll",
-                "OpenMMAmoebaReference.dll",
-                "OpenMMDrudeReference.dll",
-                "OpenMMRPMDReference.dll",
-            ):
-                _add_if_exists(plugin_dir / name, "openmm_plugins")
+    plugin_dir = lib_dir / "plugins"
+    if plugin_dir.is_dir():
+        # 只收集 CPU / Reference 系列，避免把 CUDA、OpenCL 运行时塞进安装包
+        for name in (
+            "OpenMMCPU.dll",
+            "OpenMMPME.dll",
+            "OpenMMAmoebaReference.dll",
+            "OpenMMDrudeReference.dll",
+            "OpenMMRPMDReference.dll",
+        ):
+            _add_if_exists(plugin_dir / name, "openmm_plugins")
 
     # MSVC 运行库（部分精简版 Windows 未预装）
     for dll in sorted(bin_dir.glob("msvcp140*.dll")) + sorted(bin_dir.glob("vcruntime140*.dll")):
@@ -241,11 +316,19 @@ hiddenimports += [
     "meeko.rdkit_mol_create",
 ]
 
-# 让 PyInstaller 的 DLL 依赖分析能看到 conda 的 Library/bin 与 Library/lib
+# 让 PyInstaller 的依赖分析能看到 conda 的库目录
 if IS_WINDOWS:
     for directory in (PREFIX / "Library" / "bin", PREFIX / "Library" / "lib", PREFIX / "DLLs"):
         if directory.is_dir():
             os.environ["PATH"] = str(directory) + os.pathsep + os.environ.get("PATH", "")
+else:
+    lib_path = str(PREFIX / "lib")
+    for directory in (PREFIX / "bin", PREFIX / "lib"):
+        if directory.is_dir():
+            os.environ["PATH"] = str(directory) + os.pathsep + os.environ.get("PATH", "")
+    for variable in ("DYLD_LIBRARY_PATH", "LD_LIBRARY_PATH"):
+        current = os.environ.get(variable, "")
+        os.environ[variable] = lib_path + (os.pathsep + current if current else "")
 
 excludes = [
     "tkinter",

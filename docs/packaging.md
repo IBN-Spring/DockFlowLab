@@ -42,7 +42,8 @@ packaging\build_windows.bat
 
 1. 检查 PyInstaller / PySide6 / RDKit / Meeko / OpenMM / PDBFixer 是否可导入；
 2. 运行 `python -m PyInstaller --clean --noconfirm packaging\dockflowlab.spec`；
-3. 将 `dist\DockFlowLab` 压缩为 `release\DockFlowLab-Windows-x64.zip`。
+3. 把 `README.md`、用户指南与 `LICENSE` 放入应用目录，压缩为
+   `release\DockFlowLab-Windows-x64.zip`。
 
 也可以手动执行：
 
@@ -150,16 +151,18 @@ xcrun stapler staple dist/DockFlowLab.app
 | 依赖 | 收集内容 |
 | --- | --- |
 | DockFlowLab | `src/dockflowlab/resources` 全部资源 |
-| RDKit | `collect_all("rdkit")` + conda `Library/lib/RDKit*.dll` |
-| OpenBabel | wheel 的 `openbabel/bin`；conda 的 DLL、`obabel.exe`、`formats_*.obf`、`plugin_*.obf`、数据目录 |
-| OpenMM | `collect_all("openmm")` + conda 的 `OpenMM*.dll` 与 CPU/Reference 插件 |
+| RDKit | `collect_all("rdkit")`；Windows conda 的 `Library/lib/RDKit*.dll`；macOS/Linux conda 的 `lib/libRDKit*` |
+| OpenBabel | wheel 的 `openbabel/bin`；Windows conda 的 DLL、`obabel.exe`、`formats_*.obf`、`plugin_*.obf`、数据目录；macOS/Linux conda 的 `bin/obabel`、`lib/libopenbabel*`、`lib/openbabel/*` 插件与 `share/openbabel` 数据 |
+| OpenMM | `collect_all("openmm")`；Windows conda 的 `OpenMM*.dll`；macOS/Linux conda 的 `lib/libOpenMM*`；以及 CPU/Reference 插件 |
 | PDBFixer / Meeko | `collect_all` 的 Python 数据文件 |
-| Vina | `resources/vina/windows/vina.exe`；macOS 构建时按需收集 |
+| Vina | `resources/vina/windows/vina.exe`；macOS/Linux 构建时按需收集 |
 | Matplotlib | PyInstaller 官方 hook，图表使用 Agg 后端 |
 
-conda 把 Boost、OpenBabel、OpenMM、MKL 的 DLL 放在 `Library/bin` 或
-`Library/lib`，而不是 Python 包目录，因此 spec 在分析前把这些目录加入 `PATH`，
-让 PyInstaller 能解析依赖闭包。Qt 由 PyInstaller 的 PySide6 hook 处理。
+conda 把 Boost、OpenBabel、OpenMM、MKL 的共享库放在 `Library/bin` / `Library/lib`
+（Windows）或 `lib/`（macOS/Linux），而不是 Python 包目录，因此 spec 在分析前
+把这些目录加入 `PATH`，并在 POSIX 上同时设置 `DYLD_LIBRARY_PATH` /
+`LD_LIBRARY_PATH`，让 PyInstaller 能解析依赖闭包。Qt 由 PyInstaller 的 PySide6
+hook 处理。
 
 conda 版 SciPy 依赖 MKL。Meeko 只需要 `scipy.spatial.cKDTree`，spec 收集
 `mkl_rt.2.dll` 即可满足导入；不需要把数百 MB 的 MKL 内核全部打包。如果未来代码
@@ -172,6 +175,7 @@ conda 版 SciPy 依赖 MKL。Meeko 只需要 `scipy.spatial.cKDTree`，spec 收�
 - 设置 `BABEL_LIBDIR` 与 `BABEL_DATADIR`；
 - 设置 `OPENMM_PLUGIN_DIR`；
 - 在 Windows 上把 `_internal` 与 `openbabel/bin` 加入 DLL 搜索目录和 `PATH`；
+- 在 macOS/Linux 上把同样的目录加入 `DYLD_LIBRARY_PATH` / `LD_LIBRARY_PATH`；
 - 默认 `MPLBACKEND=Agg`，避免图表依赖 Qt 后端。
 
 ## 常见打包问题
@@ -193,8 +197,8 @@ PyInstaller 把入口脚本当作顶层 `__main__`。入口必须用绝对导入
 先清理环境再重建。
 
 **安装包过大**
-onedir 中包含 Qt、RDKit、OpenMM、OpenBabel 与数据文件，通常在 300 MB 左右（压缩后
-更小）。可以通过排除未使用的 Qt 模块/插件进一步缩小，但不要删除
+onedir 中包含 Qt、RDKit、OpenMM、OpenBabel 与数据文件，Windows 版实测约
+450–500 MB，压缩后约 170 MB。可以通过排除未使用的 Qt 模块/插件进一步缩小，但不要删除
 `platforms`、`styles`、`imageformats` 与 `translations`。
 
 ## 发布清单

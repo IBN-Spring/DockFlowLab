@@ -48,10 +48,12 @@ def gui_main(argv: list[str] | None = None) -> int:
     from .tools.runtime import resource_path
     from .ui.main_window import MainWindow
     from .ui.theme import apply_theme
+    from .ui.zh import install_chinese_buttons
 
     setup_logging()
     _install_exception_hook()
     app = QApplication(argv if argv is not None else sys.argv)
+    install_chinese_buttons(app)
     app.setApplicationName(__app_name__)
     app.setApplicationDisplayName(__app_name_zh__)
     app.setApplicationVersion(__version__)
