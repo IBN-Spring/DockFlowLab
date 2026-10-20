@@ -10,6 +10,17 @@ from dockflowlab.cli import main
 from dockflowlab.workspace import Workspace
 
 
+def test_init_command(tmp_path, capsys):
+    root = tmp_path / "新项目"
+    code = main(["init", str(root), "--name", "测试项目"])
+    assert code == 0
+    assert "测试项目" in capsys.readouterr().out
+    workspace = Workspace.open(root)
+    assert workspace.name == "测试项目"
+    assert workspace.targets == []
+    assert workspace.ligands == []
+
+
 def test_info_json(workspace, pdb_path, capsys):
     workspace.import_file("target", pdb_path, display_name="1BCI")
     code = main(["info", str(workspace.root), "--json"])

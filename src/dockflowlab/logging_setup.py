@@ -18,8 +18,14 @@ def get_logger(name: str = "") -> logging.Logger:
     return logging.getLogger(f"{LOGGER_NAME}.{name}" if name else LOGGER_NAME)
 
 
+def _default_log_dir() -> Path:
+    from .config import user_cache_dir
+
+    return user_cache_dir() / "logs"
+
+
 def setup_logging(log_dir: Path | None = None, level: int = logging.INFO) -> logging.Logger:
-    """初始化日志。重复调用会追加新的文件处理器（切换项目时使用）。"""
+    """初始化日志。未指定目录时写入当前平台的用户缓存目录。"""
     global _configured
     logger = logging.getLogger(LOGGER_NAME)
     logger.setLevel(level)
@@ -31,18 +37,17 @@ def setup_logging(log_dir: Path | None = None, level: int = logging.INFO) -> log
         logger.addHandler(console)
         _configured = True
 
-    if log_dir is not None:
-        log_dir = Path(log_dir)
-        log_dir.mkdir(parents=True, exist_ok=True)
-        target = (log_dir / "session.log").resolve()
-        # 避免重复添加同一个文件
-        for handler in logger.handlers:
-            if isinstance(handler, RotatingFileHandler) and Path(handler.baseFilename) == target:
-                break
-        else:
-            file_handler = RotatingFileHandler(
-                target, maxBytes=2_000_000, backupCount=3, encoding="utf-8"
-            )
-            file_handler.setFormatter(logging.Formatter(_FORMAT))
-            logger.addHandler(file_handler)
+    log_dir = Path(log_dir) if log_dir is not None else _default_log_dir()
+    log_dir.mkdir(parents=True, exist_ok=True)
+    target = (log_dir / "session.log").resolve()
+    # 避免重复添加同一个文件
+    for handler in logger.handlers:
+        if isinstance(handler, RotatingFileHandler) and Path(handler.baseFilename) == target:
+            break
+    else:
+        file_handler = RotatingFileHandler(
+            target, maxBytes=2_000_000, backupCount=3, encoding="utf-8"
+        )
+        file_handler.setFormatter(logging.Formatter(_FORMAT))
+        logger.addHandler(file_handler)
     return logger

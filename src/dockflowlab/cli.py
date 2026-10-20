@@ -3,6 +3,7 @@
 命令行与图形界面共用同一套服务层，适合批量任务、服务器环境和自动化测试：
 
     dockflowlab-cli doctor
+    dockflowlab-cli init  D:/projects/demo
     dockflowlab-cli info  D:/projects/demo
     dockflowlab-cli prepare D:/projects/demo
     dockflowlab-cli dock D:/projects/demo --exhaustiveness 8
@@ -66,6 +67,7 @@ def build_parser() -> argparse.ArgumentParser:
         epilog=(
             "示例：\n"
             "  dockflowlab-cli doctor\n"
+            "  dockflowlab-cli init  D:/projects/demo\n"
             "  dockflowlab-cli info  D:/projects/demo\n"
             "  dockflowlab-cli prepare D:/projects/demo\n"
             "  dockflowlab-cli dock D:/projects/demo --exhaustiveness 8\n"
@@ -78,6 +80,10 @@ def build_parser() -> argparse.ArgumentParser:
     doctor = sub.add_parser("doctor", help="检查运行环境与外部程序")
     doctor.add_argument("--json", action="store_true", help="以 JSON 输出")
     doctor.add_argument("--strict", action="store_true", help="缺少可选组件也返回失败")
+
+    init = sub.add_parser("init", help="创建新的工作目录")
+    init.add_argument("project", type=Path, help="工作目录")
+    init.add_argument("--name", default="", help="项目名称（默认使用文件夹名）")
 
     info = sub.add_parser("info", help="查看项目概况")
     info.add_argument("project", type=Path, help="工作目录")
@@ -225,6 +231,14 @@ def command_doctor(args: argparse.Namespace) -> int:
         else:
             print("缺少核心组件：请先解决 Vina / OpenBabel / 临时目录问题。")
     return EXIT_OK if report["ok"] else EXIT_FAILURE
+
+
+def command_init(args: argparse.Namespace) -> int:
+    workspace = Workspace.create(args.project, name=args.name)
+    print(f"项目已就绪：{workspace.name}")
+    print(f"目录：{workspace.root}")
+    print("下一步：用 import 或 fetch 添加靶点蛋白与候选分子。")
+    return EXIT_OK
 
 
 def command_info(args: argparse.Namespace) -> int:
@@ -496,6 +510,7 @@ def command_import(args: argparse.Namespace) -> int:
 
 COMMANDS = {
     "doctor": command_doctor,
+    "init": command_init,
     "info": command_info,
     "prepare": command_prepare,
     "dock": command_dock,

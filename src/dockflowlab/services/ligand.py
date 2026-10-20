@@ -246,7 +246,7 @@ def _meeko_pdbqt(mol: Any) -> str:
     try:
         from meeko import MoleculePreparation, PDBQTWriterLegacy
     except ImportError as exc:
-        raise DependencyError("未安装 Meeko，无法生成配体 PDBQT") from exc
+        raise DependencyError(f"Meeko 导入失败：{exc}") from exc
     preparator = MoleculePreparation()
     setups = preparator.prepare(mol)
     if not setups:

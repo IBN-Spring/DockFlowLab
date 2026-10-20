@@ -42,8 +42,10 @@ def gui_main(argv: list[str] | None = None) -> int:
     """启动图形界面。"""
     multiprocessing.freeze_support()
     from PySide6.QtCore import QLibraryInfo, QLocale, QTranslator
+    from PySide6.QtGui import QIcon
     from PySide6.QtWidgets import QApplication
 
+    from .tools.runtime import resource_path
     from .ui.main_window import MainWindow
     from .ui.theme import apply_theme
 
@@ -54,6 +56,11 @@ def gui_main(argv: list[str] | None = None) -> int:
     app.setApplicationDisplayName(__app_name_zh__)
     app.setApplicationVersion(__version__)
     app.setOrganizationName("DockFlowLab")
+    for icon_name in ("app.icns", "app.ico"):
+        icon_path = resource_path(icon_name)
+        if icon_path.is_file():
+            app.setWindowIcon(QIcon(str(icon_path)))
+            break
     QLocale.setDefault(QLocale(QLocale.Language.Chinese, QLocale.Country.China))
     translator = QTranslator(app)
     translations = QLibraryInfo.path(QLibraryInfo.LibraryPath.TranslationsPath)

@@ -1,0 +1,69 @@
+name: build
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: Test and package
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            platform: windows
+          - os: macos-14
+            platform: macos
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash -el {0}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up conda
+        uses: conda-incubator/setup-miniconda@v3
+        with:
+          python-version: "3.12"
+          channels: conda-forge
+          activate-environment: dockflowlab
+          auto-activate-base: false
+
+      - name: Install chemistry dependencies
+        run: |
+          conda install -y rdkit openbabel openmm pdbfixer
+          if [[ "$RUNNER_OS" == "macOS" ]]; then
+            conda install -y vina
+          fi
+          python -m pip install -e ".[build,dev]" meeko
+
+      - name: Run tests
+        run: python -m pytest
+
+      - name: Build (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          python -m PyInstaller --clean --noconfirm packaging/dockflowlab.spec
+          mkdir -p release
+          powershell -NoProfile -Command "Compress-Archive -Path 'dist/DockFlowLab' -DestinationPath 'release/DockFlowLab-Windows-x64.zip' -Force"
+
+      - name: Build (macOS)
+        if: runner.os == 'macOS'
+        run: bash packaging/build_macos.sh
+
+      - name: Verify bundled chemistry (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          DOCKFLOWLAB_CONSOLE=1 python -m PyInstaller --clean --noconfirm packaging/dockflowlab.spec
+          DOCKFLOWLAB_SELF_CHECK=1 ./dist/DockFlowLabConsole/DockFlowLabConsole.exe
+
+      - name: Upload package
+        uses: actions/upload-artifact@v4
+        with:
+          name: DockFlowLab-${{ matrix.platform }}
+          path: release/*.zip
+          if-no-files-found: error
