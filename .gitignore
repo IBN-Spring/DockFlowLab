@@ -1,80 +1,75 @@
-# Python
+# ── Python ──────────────────────────────────────────────
 __pycache__/
 *.py[cod]
 *$py.class
 *.so
 .Python
-env/
-venv/
-ENV/
 build/
-develop-eggs/
 dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
 *.egg-info/
-.installed.cfg
-*.egg
-
-# Conda
-.conda/
-*.conda
-
-# IDE
-.vscode/
-.idea/
-*.swp
-*.swo
-*~
-.DS_Store
-
-# Jupyter
-.ipynb_checkpoints
-*.ipynb
-
-# 测试
+.eggs/
+.venv/
+venv/
+env/
 .pytest_cache/
 .coverage
 htmlcov/
 .tox/
-*.log
 
-# 项目特定
-data/输出/
-data/临时/
-tools/*.exe
-tools/*.dll
+# ── IDE / OS ────────────────────────────────────────────
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# ── 项目运行时产物 ──────────────────────────────────────
+*.log
+logs/
+temp/
+tmp/
+_meeko_tmp/
+_testwork/
+_test_*.pdb
+_wheelinspect/
+release/
 *.pdbqt
 *.pdb
 *.sdf
 *.mol2
-logs/
-temp/
-tmp/
-outputs/
-*.csv
-*.png
-*.html
-!data/模板/*.html
+*.cif
+!tests/data/**/*.pdb
+!tests/data/**/*.sdf
+!tests/data/**/*.mol2
+!src/dockflowlab/resources/**/*.pdb
 
-# MCP
-mcp_server.log
+# ── 旧版开发环境 / 二进制（不再纳入版本管理）─────────────
+runtime/
+tools/
+engine/
+_archive/
+openbabel_data/
+vina.exe
 
-# 打包
+# ── 旧版运行输出 ────────────────────────────────────────
+1.原始受体/
+2.原始配体/
+3.受体/
+4.配体/
+5.临时文件/
+6.对接结果/
+7.分析结果/
+8.转换PDB/
+9.PyMOL/
+10.实验报告/
+Ligand_list.txt
+Receptor_list.txt
+license.key
+license_cache.json
+
+# ── 打包 ────────────────────────────────────────────────
 *.zip
 *.tar.gz
 *.dmg
-*.deb
-*.rpm
-
-# 敏感信息
-.env
-secrets.json
-config.local.json
+*.app/
