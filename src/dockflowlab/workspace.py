@@ -514,6 +514,10 @@ class Workspace:
     def docking_log(self, target_stem: str, ligand_stem: str) -> Path:
         return self.docking_dir(target_stem) / f"{ligand_stem}.log"
 
+    def docking_meta(self, target_stem: str, ligand_stem: str) -> Path:
+        """对接结果的元数据（耗时、盒子来源、警告），便于重新打开项目后复原。"""
+        return self.docking_dir(target_stem) / f"{ligand_stem}.json"
+
     def complex_dir(self, target_stem: str) -> Path:
         return self.root / "complexes" / target_stem
 

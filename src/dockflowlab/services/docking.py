@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import json
+import os
 import threading
 import time
 import traceback
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
-from typing import Callable, Iterable, Sequence
+from typing import Any, Callable, Iterable, Sequence
 
 from ..config import AppSettings
 from ..core import pdbio
@@ -63,6 +66,35 @@ def _result_paths(workspace: Workspace, target: ProjectFile, ligand: ProjectFile
     complex_path = workspace.complex_path(target.stem, ligand.stem)
     pml_path = workspace.pymol_path(target.stem, ligand.stem)
     return output, log_path, complex_path, pml_path
+
+
+def _read_meta(workspace: Workspace, target_stem: str, ligand_stem: str) -> dict[str, Any]:
+    path = workspace.docking_meta(target_stem, ligand_stem)
+    if not path.is_file():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _write_meta(workspace: Workspace, result: DockingResult) -> None:
+    path = workspace.docking_meta(result.target, result.ligand)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "target": result.target,
+        "ligand": result.ligand,
+        "ok": result.ok,
+        "box_source": result.box_source,
+        "runtime_seconds": round(result.runtime_seconds, 2),
+        "warnings": list(result.warnings),
+        "error": result.error,
+        "finished": datetime.now().astimezone().isoformat(timespec="seconds"),
+    }
+    tmp = path.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    os.replace(tmp, path)
 
 
 def _target_pdb(workspace: Workspace, target: ProjectFile, obabel: OpenBabelAdapter) -> Path:
@@ -175,14 +207,18 @@ def dock_pair(
         poses = pdbio.parse_pdbqt_poses(output)
         valid, _, _ = pdbio.validate_pdbqt(output)
         if valid and poses:
+            meta = _read_meta(workspace, target.stem, ligand.stem)
             result.ok = True
             result.poses = poses
             result.skipped = True
-            result.warnings = warnings
+            result.runtime_seconds = float(meta.get("runtime_seconds") or 0.0)
+            result.box_source = str(meta.get("box_source") or box.source)
+            result.warnings = [str(item) for item in meta.get("warnings") or []] + warnings
             _ensure_complex_and_pymol(
                 workspace, target, ligand, output, complex_path, pml_path,
                 obabel, options, warnings,
             )
+            _write_meta(workspace, result)
             _notify(progress, 1, 1, f"{target.display_name} + {ligand.display_name}：已有结果，跳过")
             return result
 
@@ -239,6 +275,7 @@ def dock_pair(
         workspace, target, ligand, output, complex_path, pml_path,
         obabel, options, warnings,
     )
+    _write_meta(workspace, result)
     _notify(
         progress,
         1,
@@ -351,6 +388,8 @@ def collect_existing_results(workspace: Workspace) -> list[DockingResult]:
             poses = pdbio.parse_pdbqt_poses(output)
             if not poses:
                 continue
+            meta = _read_meta(workspace, target.stem, ligand.stem)
+            box = workspace.load_box(target.stem)
             results.append(
                 DockingResult(
                     target=target.stem,
@@ -364,6 +403,9 @@ def collect_existing_results(workspace: Workspace) -> list[DockingResult]:
                     if workspace.complex_path(target.stem, ligand.stem).is_file() else "",
                     pymol_path=workspace.relative(workspace.pymol_path(target.stem, ligand.stem))
                     if workspace.pymol_path(target.stem, ligand.stem).is_file() else "",
+                    runtime_seconds=float(meta.get("runtime_seconds") or 0.0),
+                    box_source=str(meta.get("box_source") or (box.source if box else "")),
+                    warnings=[str(item) for item in meta.get("warnings") or []],
                 )
             )
     return results
