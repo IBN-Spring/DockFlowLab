@@ -257,11 +257,7 @@ class BoxDialog(QDialog):
         self.auto_warnings: list[str] = []
         self._required_size: tuple[float, float, float] | None = None
         self._auto_pending = False
-        self._auto_scheduled = False
-        # 自动推荐会阻塞界面约一秒；等对话框画完第一帧再算，避免先闪出白窗。
-        self._auto_timer = QTimer(self)
-        self._auto_timer.setSingleShot(True)
-        self._auto_timer.timeout.connect(self._request_auto)
+        self._content_loaded = False
         self.setWindowTitle(f"设置盒子 · {target.display_name}")
         self.setMinimumSize(1000, 720)
         self.resize(1160, 820)
@@ -367,20 +363,26 @@ class BoxDialog(QDialog):
         buttons.addWidget(save)
         layout.addLayout(buttons)
 
-        self._load_structure()
-        self._load_reference_info()
         if self.box is not None:
             self.viewer.set_box(self.box, mark_manual=self.box.source == "manual")
             self.viewer.focus_box()
             self._update_box_fit(self.box)
 
-    def showEvent(self, event) -> None:  # noqa: N802
-        super().showEvent(event)
-        if self._auto_scheduled:
+    def paintEvent(self, event) -> None:  # noqa: N802
+        super().paintEvent(event)
+        if self._content_loaded or not self.isVisible():
             return
-        self._auto_scheduled = True
-        # 留出第一帧绘制的时间，再执行可能较慢的口袋检测。
-        self._auto_timer.start(120)
+        self._content_loaded = True
+        # 等这一轮绘制（含子控件）结束后再读取结构、计算推荐盒子，避免在
+        # 首帧之前阻塞事件循环。
+        QTimer.singleShot(0, self._initialize_content)
+
+    def _initialize_content(self) -> None:
+        if not self.isVisible():
+            return
+        self._load_structure()
+        self._load_reference_info()
+        self._request_auto()
 
     # ------------------------------------------------------------------
     # 结构

@@ -258,6 +258,7 @@ class NglBoxView(QWidget):
 
     box_changed = Signal(object)
     failed = Signal(str)
+    ready = Signal()
 
     READY_TIMEOUT_MS = 20000
 
@@ -316,6 +317,7 @@ class NglBoxView(QWidget):
         pending, self._queue = self._queue, []
         for script in pending:
             self.web_view.page().runJavaScript(script)
+        self.ready.emit()
 
     def _on_failed(self, message: str) -> None:
         if self._failed or self._ready:

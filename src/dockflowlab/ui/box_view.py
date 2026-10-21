@@ -36,6 +36,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QPushButton,
     QSizePolicy,
+    QStackedWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -1574,24 +1575,105 @@ class BoxViewer(QWidget):
         self._syncing = False
         self._structure: ViewStructure | None = None
         self._placeholder: QLabel | None = None
+        self._placeholder_message = ""
+        self._view_started = False
+        self._sites_pdb: tuple[str, str] = ("", "")
+        self._sites_visible = False
+        self._show_atoms = False
+        self._click_to_center = True
+        self._focus_requested = False
 
         self._layout = QHBoxLayout(self)
         self._layout.setContentsMargins(0, 0, 0, 0)
         self._layout.setSpacing(14)
 
-        self.view = self._create_ngl_view()
-        if self.view is None and _HAS_GL:
-            self.view = self._create_gl_view()
-        if self.view is not None:
-            self._layout.addWidget(self.view, 3)
-        else:
-            reason = _NGL_ERROR or _GL_ERROR or "缺少可用的 3D 渲染组件"
-            self._placeholder = self._make_placeholder(reason)
-            self._layout.addWidget(self._placeholder, 3)
-
+        # QtWebEngine 初始化约需半秒。必须在对话框显示前完成：如果等窗口
+        # 可见后再创建 QWebEngineView，Qt 会销毁并重建这个顶层窗口，对话框
+        # 会先消失再出现，主界面也会闪白。
+        # 视图页初始是白底，所以先叠一张深色占位页，等 NGL 就绪后再切换。
+        self.view = None
+        self._view_stack = QStackedWidget()
+        self._placeholder = self._make_loading_placeholder()
+        self._view_stack.addWidget(self._placeholder)
+        self._layout.addWidget(self._view_stack, 3)
         self._layout.addWidget(self._build_panel(), 0)
+        self.start_view()
 
     # -- 视图创建与降级 ---------------------------------------------------
+    @staticmethod
+    def _make_loading_placeholder() -> QLabel:
+        placeholder = QLabel("正在加载 3D 视图…")
+        placeholder.setObjectName("Muted")
+        placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        placeholder.setMinimumWidth(420)
+        placeholder.setStyleSheet(
+            "background:#0b1016; color:#aab4c4; border:1px solid #1d2836;"
+            "border-radius:8px; padding:24px;"
+        )
+        return placeholder
+
+    def start_view(self) -> None:
+        """创建 3D 视图并把已收到的结构、盒子与参考层应用上去。
+
+        由 ``__init__`` 在对话框显示前调用；重复调用无副作用。
+        """
+        if self._view_started:
+            return
+        self._view_started = True
+        view = self._create_ngl_view()
+        if view is None and _HAS_GL:
+            view = self._create_gl_view()
+        if view is None:
+            reason = _NGL_ERROR or _GL_ERROR or "缺少可用的 3D 渲染组件"
+            self._replace_placeholder(self._make_placeholder(reason))
+            return
+
+        self.view = view
+        self._view_stack.addWidget(view)
+        if NglBoxView is not None and isinstance(view, NglBoxView):
+            # 保留深色占位页，直到 NGL 真正完成初始化。
+            view.ready.connect(self._on_view_ready)
+            self._view_stack.setCurrentWidget(self._placeholder)
+        else:
+            self._view_stack.setCurrentWidget(view)
+
+        if self._structure is not None:
+            view.set_structure(self._structure)
+        elif self._placeholder_message:
+            if NglBoxView is not None and isinstance(view, NglBoxView):
+                view.show_placeholder(self._placeholder_message)
+            else:
+                view.set_structure(empty_structure())
+        if self._box is not None:
+            view.set_box(self._box, emit=False)
+        if NglBoxView is not None and isinstance(view, NglBoxView):
+            view.set_site_structures(*self._sites_pdb)
+            view.set_sites_visible(self._sites_visible)
+        view.set_show_atoms(self._show_atoms)
+        view.set_click_to_center(self._click_to_center)
+        if self._focus_requested or self._box is not None:
+            view.focus_box()
+
+    def _on_view_ready(self) -> None:
+        """NGL 初始化完成，换掉占位页。"""
+        if self.view is None:
+            return
+        self._view_stack.setCurrentWidget(self.view)
+        if self._placeholder is not None:
+            placeholder = self._placeholder
+            self._placeholder = None
+            self._view_stack.removeWidget(placeholder)
+            placeholder.deleteLater()
+
+    def _replace_placeholder(self, placeholder: QLabel) -> None:
+        old = self._placeholder
+        self._view_stack.addWidget(placeholder)
+        self._view_stack.setCurrentWidget(placeholder)
+        if old is not None:
+            self._view_stack.removeWidget(old)
+            old.deleteLater()
+        self._placeholder = placeholder
+
     def _create_ngl_view(self):
         if not NGL_AVAILABLE or NglBoxView is None:
             return None
@@ -1638,19 +1720,20 @@ class BoxViewer(QWidget):
         if NglBoxView is None or not isinstance(self.view, NglBoxView):
             return
         old = self.view
-        index = self._layout.indexOf(old)
         self.view = None
         try:
             old.shutdown()
         except Exception:  # pragma: no cover - 关闭阶段信号已断开
             pass
+        self._view_stack.removeWidget(old)
         old.setParent(None)
         old.deleteLater()
 
         fallback = self._create_gl_view()
         if fallback is not None:
             self.view = fallback
-            self._layout.insertWidget(max(0, index), fallback, 3)
+            self._view_stack.addWidget(fallback)
+            self._view_stack.setCurrentWidget(fallback)
             if self._structure is not None:
                 fallback.set_structure(self._structure)
             if self._box is not None:
@@ -1661,8 +1744,7 @@ class BoxViewer(QWidget):
                 fallback.focus_box()
             return
 
-        self._placeholder = self._make_placeholder(message)
-        self._layout.insertWidget(max(0, index), self._placeholder, 3)
+        self._replace_placeholder(self._make_placeholder(message))
 
     # -- panel ----------------------------------------------------------
     def _build_panel(self) -> QWidget:
@@ -1798,12 +1880,17 @@ class BoxViewer(QWidget):
 
     def set_site_structures(self, cocrystal_pdb: str = "", site_pdb: str = "") -> bool:
         """把实验位点作为独立参考层叠加到 3D 视图；仅 NGL 路径支持。"""
+        self._sites_pdb = (cocrystal_pdb, site_pdb)
+        if self.view is None:
+            # 视图尚未创建：先缓存，start_view() 时再应用。
+            return bool(NGL_AVAILABLE)
         if NglBoxView is None or not isinstance(self.view, NglBoxView):
             return False
         self.view.set_site_structures(cocrystal_pdb, site_pdb)
         return True
 
     def set_sites_visible(self, visible: bool) -> None:
+        self._sites_visible = bool(visible)
         if NglBoxView is not None and isinstance(self.view, NglBoxView):
             self.view.set_sites_visible(visible)
 
@@ -1846,6 +1933,7 @@ class BoxViewer(QWidget):
         return self._box is not None
 
     def focus_box(self) -> None:
+        self._focus_requested = True
         if self.view is not None:
             self.view.focus_box()
 
@@ -1854,9 +1942,11 @@ class BoxViewer(QWidget):
             self.view.reset_view()
 
     def show_placeholder(self, message: str) -> None:
+        self._placeholder_message = message
         if self._placeholder is not None:
             self._placeholder.setText(message)
-        elif self.view is not None:
+        if self.view is not None:
+            # NGL 尚未就绪时命令会排队，就绪后仍能显示这条提示。
             if NglBoxView is not None and isinstance(self.view, NglBoxView):
                 self.view.show_placeholder(message)
             else:
@@ -1910,10 +2000,12 @@ class BoxViewer(QWidget):
         self.status_label.setText(text)
 
     def _set_click_to_center(self, enabled: bool) -> None:
+        self._click_to_center = bool(enabled)
         if self.view is not None:
             self.view.set_click_to_center(enabled)
 
     def _set_show_atoms(self, visible: bool) -> None:
+        self._show_atoms = bool(visible)
         if self.view is not None:
             self.view.set_show_atoms(visible)
 
