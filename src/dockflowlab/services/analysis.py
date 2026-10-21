@@ -9,7 +9,7 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterable, Sequence
@@ -43,9 +43,54 @@ BLUE_STEPS = [
     "#cde2fb", "#b7d3f6", "#9ec5f4", "#86b6ef", "#6da7ec", "#5598e7",
     "#3987e5", "#2a78d6", "#256abf", "#1c5cab", "#184f95", "#104281", "#0d366b",
 ]
-# 反向：更负的结合能（更强）映射到更深的蓝色
-BLUE_CMAP = LinearSegmentedColormap.from_list("dockflow_blue", BLUE_STEPS[::-1])
-BLUE_CMAP.set_bad(MISSING_CELL)
+
+# 热图配色都是单一色相由浅到深：越深 = 打分越低（结合越有利）。
+# 不使用彩虹或红蓝色阶，避免读者误以为颜色代表正负两类数值。
+HEATMAP_SCHEMES: dict[str, tuple[str, list[str]]] = {
+    "blue": ("蓝色（默认）", BLUE_STEPS),
+    "green": (
+        "绿色",
+        ["#e3f4e3", "#c8e9c9", "#a8dbaa", "#84c98a",
+         "#5fb56d", "#3f9e55", "#2a8144", "#1d6536", "#14532d"],
+    ),
+    "teal": (
+        "青色",
+        ["#dcf3f2", "#b9e6e5", "#92d7d6", "#67c5c4",
+         "#3fb0b0", "#249798", "#187d7e", "#106365", "#0f4c4c"],
+    ),
+    "orange": (
+        "橙色",
+        ["#fde9d9", "#f9d2b5", "#f4b78c", "#ed9a61",
+         "#e37d3c", "#cf6222", "#b14b16", "#8f3812", "#7c2d12"],
+    ),
+    "purple": (
+        "紫色",
+        ["#ede4fb", "#dccbf6", "#c7adef", "#b08ce6",
+         "#986bdb", "#804dcc", "#6936b5", "#54279a", "#3b0764"],
+    ),
+    "grey": (
+        "灰度",
+        ["#f0f0ef", "#ddddda", "#c6c6c2", "#adada8",
+         "#93938e", "#787874", "#5e5e5a", "#444441", "#27272a"],
+    ),
+}
+DEFAULT_SCHEME = "blue"
+DEFAULT_HEATMAP_TITLE = "结合能热图"
+HEATMAP_FORMATS: dict[str, tuple[str, tuple[str, ...]]] = {
+    "png": ("PNG · 报告与预览", (".png",)),
+    "png+svg": ("PNG + SVG · 矢量可编辑", (".png", ".svg")),
+    "png+pdf": ("PNG + PDF · 打印", (".png", ".pdf")),
+}
+DEFAULT_HEATMAP_FORMAT = "png"
+HEATMAP_CONFIG_NAME = "heatmap_config.json"
+
+
+def heatmap_cmap(scheme: str) -> LinearSegmentedColormap:
+    """按名称取顺序色阶；未知名称回退到默认蓝色。"""
+    _, steps = HEATMAP_SCHEMES.get(scheme, HEATMAP_SCHEMES[DEFAULT_SCHEME])
+    cmap = LinearSegmentedColormap.from_list(f"dockflow_{scheme}", steps[::-1])
+    cmap.set_bad(MISSING_CELL)
+    return cmap
 
 _CJK_FONT_CANDIDATES = [
     "Microsoft YaHei",
@@ -72,6 +117,79 @@ class AnalysisBundle:
     heatmap_path: Path | None = None
     bar_path: Path | None = None
     warnings: list[str] | None = None
+
+
+@dataclass
+class HeatmapConfig:
+    """热图的自定义文字、配色与导出格式，随项目保存。"""
+
+    target_labels: dict[str, str] = field(default_factory=dict)
+    ligand_labels: dict[str, str] = field(default_factory=dict)
+    scheme: str = DEFAULT_SCHEME
+    title: str = DEFAULT_HEATMAP_TITLE
+    subtitle: str = ""
+    format: str = DEFAULT_HEATMAP_FORMAT
+
+
+def heatmap_config_path(workspace: Workspace) -> Path:
+    return workspace.analysis_dir / HEATMAP_CONFIG_NAME
+
+
+def load_heatmap_config(workspace: Workspace) -> HeatmapConfig:
+    """读取项目热图设置；文件缺失或损坏时返回默认值。"""
+    path = heatmap_config_path(workspace)
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError):
+        return HeatmapConfig()
+    if not isinstance(data, dict):
+        return HeatmapConfig()
+
+    def _labels(key: str) -> dict[str, str]:
+        value = data.get(key)
+        if not isinstance(value, dict):
+            return {}
+        return {
+            str(stem): str(label).strip()
+            for stem, label in value.items()
+            if str(stem).strip() and str(label).strip()
+        }
+
+    scheme = str(data.get("scheme") or DEFAULT_SCHEME)
+    if scheme not in HEATMAP_SCHEMES:
+        scheme = DEFAULT_SCHEME
+    fmt = str(data.get("format") or DEFAULT_HEATMAP_FORMAT)
+    if fmt not in HEATMAP_FORMATS:
+        fmt = DEFAULT_HEATMAP_FORMAT
+    title = str(data.get("title") or DEFAULT_HEATMAP_TITLE).strip()
+    return HeatmapConfig(
+        target_labels=_labels("target_labels"),
+        ligand_labels=_labels("ligand_labels"),
+        scheme=scheme,
+        title=title or DEFAULT_HEATMAP_TITLE,
+        subtitle=str(data.get("subtitle") or "").strip(),
+        format=fmt,
+    )
+
+
+def save_heatmap_config(workspace: Workspace, config: HeatmapConfig) -> Path:
+    path = heatmap_config_path(workspace)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "target_labels": config.target_labels,
+        "ligand_labels": config.ligand_labels,
+        "scheme": config.scheme,
+        "title": config.title,
+        "subtitle": config.subtitle,
+        "format": config.format,
+    }
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    return path
+
+
+def heatmap_output_paths(workspace: Workspace, fmt: str) -> list[Path]:
+    suffixes = HEATMAP_FORMATS.get(fmt, HEATMAP_FORMATS[DEFAULT_HEATMAP_FORMAT])[1]
+    return [workspace.analysis_dir / f"heatmap{suffix}" for suffix in suffixes]
 
 
 # ----------------------------------------------------------------------
@@ -122,6 +240,43 @@ def _status_label(result: DockingResult) -> str:
     if not result.mode_supported:
         return "不支持"
     return "失败"
+
+
+def build_binding_matrix(results: Sequence[DockingResult]) -> pd.DataFrame:
+    """成功结果的最佳打分矩阵，行列仍使用内部代号。"""
+    successes = [result for result in results if result.ok and result.poses]
+    best_rows = [
+        {
+            "target": result.target,
+            "ligand": result.ligand,
+            "affinity": result.poses[0].affinity,
+        }
+        for result in successes
+    ]
+    best_df = pd.DataFrame(best_rows)
+    if best_df.empty:
+        return pd.DataFrame()
+    pivot = best_df.pivot_table(
+        index="target", columns="ligand", values="affinity", aggfunc="min"
+    )
+    # 按最佳结合能排序，读者可以立即看到最强/最弱的靶点与配体
+    return pivot.loc[
+        pivot.min(axis=1).sort_values().index,
+        pivot.min(axis=0).sort_values().index,
+    ]
+
+
+def heatmap_data(
+    workspace: Workspace,
+    results: Sequence[DockingResult] | None = None,
+) -> tuple[pd.DataFrame, dict[str, str], dict[str, str]]:
+    """供热图编辑器使用：原始矩阵、默认靶点名、默认候选分子名。"""
+    results = list(results) if results is not None else collect_existing_results(workspace)
+    return (
+        build_binding_matrix(results),
+        unique_labels(workspace.targets),
+        unique_labels(workspace.ligands),
+    )
 
 
 # ----------------------------------------------------------------------
@@ -194,29 +349,22 @@ def analyze(
 
     # 仅成功结果的最佳结合能矩阵
     successes = [result for result in results if result.ok and result.poses]
-    best_rows = [
-        {
-            "target": result.target,
-            "ligand": result.ligand,
-            "affinity": result.poses[0].affinity,
-        }
-        for result in successes
-    ]
-    best_df = pd.DataFrame(best_rows)
-    if best_df.empty:
+    config = load_heatmap_config(workspace)
+    raw_matrix = build_binding_matrix(results)
+    if raw_matrix.empty:
         matrix = pd.DataFrame()
     else:
-        pivot = best_df.pivot_table(
-            index="target", columns="ligand", values="affinity", aggfunc="min"
-        )
-        # 按最佳结合能排序，读者可以立即看到最强/最弱的靶点与配体
-        pivot = pivot.loc[
-            pivot.min(axis=1).sort_values().index,
-            pivot.min(axis=0).sort_values().index,
-        ]
-        matrix = pivot.rename(
-            index={stem: target_labels.get(stem, stem) for stem in pivot.index},
-            columns={stem: ligand_labels.get(stem, stem) for stem in pivot.columns},
+        matrix = raw_matrix.rename(
+            index={
+                stem: config.target_labels.get(stem)
+                or target_labels.get(stem, stem)
+                for stem in raw_matrix.index
+            },
+            columns={
+                stem: config.ligand_labels.get(stem)
+                or ligand_labels.get(stem, stem)
+                for stem in raw_matrix.columns
+            },
         )
 
     workspace.analysis_dir.mkdir(parents=True, exist_ok=True)
@@ -247,7 +395,18 @@ def analyze(
     actual_heatmap: Path | None = None
     if make_heatmap and not matrix.empty and matrix.size >= 2:
         try:
-            _plot_heatmap(matrix, heatmap_path)
+            output_paths = heatmap_output_paths(workspace, config.format)
+            selected = {path.suffix for path in output_paths}
+            for suffix in (".svg", ".pdf"):
+                if suffix not in selected:
+                    (workspace.analysis_dir / f"heatmap{suffix}").unlink(missing_ok=True)
+            plot_heatmap(
+                matrix,
+                output_paths,
+                scheme=config.scheme,
+                title=config.title,
+                subtitle=config.subtitle,
+            )
             actual_heatmap = heatmap_path
         except Exception as exc:
             log.warning("生成热图失败：%s", exc, exc_info=True)
@@ -379,13 +538,25 @@ def _needs_light_text(rgba) -> bool:
     return contrast_white > contrast_black
 
 
-def _plot_heatmap(matrix: pd.DataFrame, output_path: Path) -> None:
+def plot_heatmap(
+    matrix: pd.DataFrame,
+    output_paths: Sequence[Path],
+    *,
+    scheme: str = DEFAULT_SCHEME,
+    title: str = DEFAULT_HEATMAP_TITLE,
+    subtitle: str = "",
+) -> None:
+    """按指定文字、配色与格式绘制热图；同一张图可保存多个格式。"""
+    paths = [Path(path) for path in output_paths]
+    if not paths:
+        raise ValueError("没有指定热图输出路径")
     rows, columns = matrix.shape
     width = min(16.0, max(6.0, 1.15 * columns + 3.4))
     height = min(12.0, max(3.8, 0.62 * rows + 2.2))
     fig, ax = plt.subplots(figsize=(width, height), dpi=200)
     fig.patch.set_facecolor(SURFACE)
     ax.set_facecolor(SURFACE)
+    cmap = heatmap_cmap(scheme)
 
     values = matrix.to_numpy(dtype=float)
     mask = pd.isna(values)
@@ -400,7 +571,7 @@ def _plot_heatmap(matrix: pd.DataFrame, output_path: Path) -> None:
 
     image = ax.imshow(
         values,
-        cmap=BLUE_CMAP,
+        cmap=cmap,
         vmin=vmin,
         vmax=vmax,
         aspect="auto",
@@ -443,18 +614,19 @@ def _plot_heatmap(matrix: pd.DataFrame, output_path: Path) -> None:
                 ax.text(column, row, "—", ha="center", va="center", color=INK_SECONDARY, fontsize=10)
                 continue
             normalized = (value - vmin) / (vmax - vmin) if vmax > vmin else 0.0
-            color = "#ffffff" if _needs_light_text(BLUE_CMAP(normalized)) else INK
+            color = "#ffffff" if _needs_light_text(cmap(normalized)) else INK
             ax.text(column, row, f"{value:.1f}", ha="center", va="center", color=color, fontsize=10, fontweight="semibold")
 
     available = int(matrix.notna().sum().sum())
     total_cells = rows * columns
-    title = "结合能热图"
-    fig.text(0.012, 0.965, title, fontsize=14, fontweight="bold", color=INK, ha="left")
-    subtitle = (
+    title = (title or DEFAULT_HEATMAP_TITLE).strip() or DEFAULT_HEATMAP_TITLE
+    auto_subtitle = (
         f"数值越低表示结合越强 · 单位 kcal/mol · "
         f"{available}/{total_cells} 个组合有结果 · 行列按最佳结合能排序"
     )
-    fig.text(0.012, 0.915, subtitle, fontsize=9.5, color=INK_SECONDARY, ha="left")
+    caption = subtitle.strip() or auto_subtitle
+    fig.text(0.012, 0.965, title, fontsize=14, fontweight="bold", color=INK, ha="left")
+    fig.text(0.012, 0.915, caption, fontsize=9.5, color=INK_SECONDARY, ha="left")
 
     colorbar = fig.colorbar(image, ax=ax, fraction=0.03, pad=0.02)
     colorbar.set_label("结合能 (kcal/mol)", color=INK_SECONDARY, fontsize=9)
@@ -462,7 +634,11 @@ def _plot_heatmap(matrix: pd.DataFrame, output_path: Path) -> None:
     colorbar.ax.tick_params(colors=INK_SECONDARY, labelsize=8, length=0)
 
     fig.subplots_adjust(left=0.16, right=0.93, top=0.84, bottom=0.2)
-    fig.savefig(output_path, facecolor=SURFACE, bbox_inches="tight")
+    # SVG 保留真实文字而不是轮廓路径，便于在 Illustrator / PPT 中继续改字。
+    with matplotlib.rc_context({"svg.fonttype": "none"}):
+        for path in paths:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            fig.savefig(path, facecolor=SURFACE, bbox_inches="tight")
     plt.close(fig)
 
 

@@ -7,7 +7,12 @@ import json
 import pytest
 
 from dockflowlab.core.models import DockingResult, Pose
-from dockflowlab.services.analysis import analyze
+from dockflowlab.services.analysis import (
+    HeatmapConfig,
+    analyze,
+    load_heatmap_config,
+    save_heatmap_config,
+)
 from dockflowlab.services.report import generate_report
 
 
@@ -93,6 +98,71 @@ def test_html_report_is_self_contained(result_workspace):
     assert "<img" in text
     assert "http://" not in text.split("<style")[0]
     assert "-7.50" in text
+
+
+def test_heatmap_custom_text_color_and_svg(result_workspace):
+    workspace, target, first, second = result_workspace
+    results = make_results(target, [first, second])
+    save_heatmap_config(
+        workspace,
+        HeatmapConfig(
+            target_labels={target.stem: "Akt 激酶"},
+            ligand_labels={first.stem: "槲皮素"},
+            scheme="green",
+            title="Akt binding",
+            subtitle="自定义副标题",
+            format="png+svg",
+        ),
+    )
+
+    bundle = analyze(workspace, results)
+
+    assert list(bundle.matrix.index) == ["Akt 激酶"]
+    assert "槲皮素" in bundle.matrix.columns
+    svg = workspace.analysis_dir / "heatmap.svg"
+    assert svg.is_file() and svg.stat().st_size > 0
+    # SVG 保留文字元素，方便后续编辑。
+    assert "Akt binding" in svg.read_text(encoding="utf-8")
+    assert load_heatmap_config(workspace).scheme == "green"
+
+
+def test_report_uses_custom_heatmap_labels(result_workspace):
+    workspace, target, first, second = result_workspace
+    results = make_results(target, [first, second])
+    save_heatmap_config(
+        workspace, HeatmapConfig(target_labels={target.stem: "Akt 激酶"})
+    )
+
+    path = generate_report(workspace, results)
+
+    text = path.read_text(encoding="utf-8")
+    assert "Akt 激酶" in text
+    assert "颜色越深表示" in text
+
+
+def test_heatmap_switching_back_to_png_removes_vector_files(result_workspace):
+    workspace, target, first, second = result_workspace
+    results = make_results(target, [first, second])
+    save_heatmap_config(workspace, HeatmapConfig(format="png+pdf"))
+    analyze(workspace, results)
+    pdf = workspace.analysis_dir / "heatmap.pdf"
+    assert pdf.is_file()
+
+    save_heatmap_config(workspace, HeatmapConfig(format="png"))
+    analyze(workspace, results)
+    assert not pdf.exists()
+
+
+def test_invalid_heatmap_config_falls_back_to_defaults(result_workspace):
+    workspace, *_ = result_workspace
+    workspace.analysis_dir.mkdir(parents=True, exist_ok=True)
+    (workspace.analysis_dir / "heatmap_config.json").write_text(
+        "{not json", encoding="utf-8"
+    )
+    config = load_heatmap_config(workspace)
+    assert config.scheme == "blue"
+    assert config.format == "png"
+    assert config.title == "结合能热图"
 
 
 def test_report_without_results_raises_nothing(result_workspace):

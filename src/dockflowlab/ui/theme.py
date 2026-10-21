@@ -288,7 +288,7 @@ def _qss() -> str:
         padding: 8px;
         color: {SECONDARY};
     }}
-    QLabel#ImagePreview {{
+    QLabel#ImagePreview, QLabel#HeatmapPreview {{
         background: #fbfbf9;
         border: 1px solid {BORDER};
         border-radius: 10px;

@@ -762,6 +762,7 @@ class ResultsPage(Page):
     refresh_requested = Signal()
     open_pymol_requested = Signal(str, str)
     locate_result_requested = Signal(str, str)
+    heatmap_edit_requested = Signal()
     back_requested = Signal()
 
     def __init__(self) -> None:
@@ -843,7 +844,17 @@ class ResultsPage(Page):
         self.chart_card.add(self.chart_label)
         self.chart_hint = QLabel("生成报告后会在这里显示结合能热图或排名图。")
         self.chart_hint.setObjectName("Muted")
+        self.chart_hint.setWordWrap(True)
         self.chart_card.add(self.chart_hint)
+        chart_actions = QHBoxLayout()
+        self.heatmap_button = QPushButton("编辑热图")
+        self.heatmap_button.setObjectName("Small")
+        self.heatmap_button.setToolTip("修改靶点与候选分子的显示名称、标题、配色和导出格式")
+        self.heatmap_button.setVisible(False)
+        self.heatmap_button.clicked.connect(self.heatmap_edit_requested.emit)
+        chart_actions.addWidget(self.heatmap_button)
+        chart_actions.addStretch(1)
+        self.chart_card.add_layout(chart_actions)
         self.chart_card.setVisible(False)
         self.body.addWidget(self.chart_card)
 
@@ -984,14 +995,23 @@ class ResultsPage(Page):
         bars = workspace.analysis_dir / "top_affinities.png"
         path = heatmap if heatmap.is_file() else (bars if bars.is_file() else None)
         if path is None:
+            self.heatmap_button.setVisible(False)
             self.chart_card.setVisible(False)
             return
         pixmap = QPixmap(str(path))
         if pixmap.isNull():
+            self.heatmap_button.setVisible(False)
             self.chart_card.setVisible(False)
             return
         self.chart_label.setPixmap(pixmap.scaledToWidth(860, Qt.TransformationMode.SmoothTransformation))
-        self.chart_hint.setText("图表已生成。完整报告包含评分明细、方法与参数。")
+        self.heatmap_button.setVisible(heatmap.is_file())
+        if heatmap.is_file():
+            self.chart_hint.setText(
+                "图表已生成。可点“编辑热图”修改靶点名称、标题、配色与导出格式；"
+                "应用后会重新生成报告。"
+            )
+        else:
+            self.chart_hint.setText("图表已生成。完整报告包含评分明细、方法与参数。")
         self.chart_card.setVisible(True)
 
     @staticmethod

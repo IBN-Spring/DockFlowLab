@@ -9,6 +9,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QCloseEvent
 from PySide6.QtWidgets import (
     QApplication,
+    QDialog,
     QFileDialog,
     QFrame,
     QHBoxLayout,
@@ -32,6 +33,7 @@ from ..core.models import (
 from ..errors import DockFlowError
 from ..logging_setup import get_logger, setup_logging
 from ..services import modes
+from ..services.analysis import save_heatmap_config
 from ..services.boxes import suggest_box
 from ..services.docking import DockingOptions, collect_existing_results, run_batch
 from ..services.download import DownloadResult
@@ -46,6 +48,7 @@ from ..version import __app_name_zh__, __version__
 from ..workspace import Workspace
 from . import theme
 from .dialogs import BoxDialog, DownloadDialog, SettingsDialog
+from .heatmap_dialog import HeatmapDialog
 from .pages import (
     LIGAND_FILTER,
     TARGET_FILTER,
@@ -270,6 +273,7 @@ class MainWindow(QMainWindow):
 
         self.results_page.cancel_requested.connect(self._request_cancel)
         self.results_page.report_requested.connect(self._make_report)
+        self.results_page.heatmap_edit_requested.connect(self._edit_heatmap)
         self.results_page.open_folder_requested.connect(self._open_workspace_folder)
         self.results_page.refresh_requested.connect(self._refresh_results)
         self.results_page.open_pymol_requested.connect(self._open_pymol)
@@ -871,6 +875,36 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "报告生成失败", message)
 
         self._run_task(job, None, done, failed)
+
+    def _edit_heatmap(self) -> None:
+        if self.workspace is None or self._busy:
+            return
+        workspace = self.workspace
+        results = collect_existing_results(workspace)
+        if not results or not (workspace.analysis_dir / "heatmap.png").is_file():
+            QMessageBox.information(
+                self,
+                "还没有热图",
+                "请先生成一次结果报告。生成热图后才能修改名称、配色与导出格式。",
+            )
+            return
+
+        dialog = HeatmapDialog(workspace, results, self)
+        if dialog.exec() != QDialog.DialogCode.Accepted or dialog.result_config is None:
+            return
+        save_heatmap_config(workspace, dialog.result_config)
+        self._set_busy(True)
+        self.statusBar().showMessage("正在应用热图设置…")
+        try:
+            generate_report(workspace, results, settings=self.settings)
+        except Exception as exc:
+            log.warning("应用热图设置失败：%s", exc, exc_info=True)
+            QMessageBox.critical(self, "热图生成失败", str(exc))
+            return
+        finally:
+            self._set_busy(False)
+        self.results_page.show_results(workspace, results)
+        self.statusBar().showMessage("热图与报告已更新。", 8000)
 
     def _open_workspace_folder(self) -> None:
         if self.workspace is None:

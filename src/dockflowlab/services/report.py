@@ -20,7 +20,7 @@ from ..tools.runtime import resource_path
 from ..version import __app_name__, __version__, component_version
 from ..workspace import Workspace
 from . import modes
-from .analysis import AnalysisBundle, analyze, unique_labels
+from .analysis import AnalysisBundle, analyze, load_heatmap_config, unique_labels
 from .docking import collect_existing_results
 
 log = get_logger("report")
@@ -113,7 +113,7 @@ def _charts(bundle: AnalysisBundle) -> str:
     if bundle.heatmap_path:
         figures.append(
             ('<figure><img alt="结合能热图" src="' + _embed_image(bundle.heatmap_path) + '">'
-             '<figcaption>热图：行为靶点，列为候选分子；越深的蓝色表示 Vina 打分越低（预测结合越有利）。</figcaption></figure>')
+             '<figcaption>热图：行为靶点，列为候选分子；颜色越深表示 Vina 打分越低（预测结合越有利）。</figcaption></figure>')
         )
     if bundle.bar_path:
         figures.append(
@@ -315,6 +315,10 @@ def generate_report(
     title = f"{project_name} · 分子对接结果报告"
     target_labels = unique_labels(workspace.targets)
     ligand_labels = unique_labels(workspace.ligands)
+    # 热图中自定义的显示名称也用于报告表格，避免同一份报告出现两套名称。
+    heatmap_config = load_heatmap_config(workspace)
+    target_labels.update(heatmap_config.target_labels)
+    ligand_labels.update(heatmap_config.ligand_labels)
     payload = {
         "title": _e(title),
         "project": _e(project_name),

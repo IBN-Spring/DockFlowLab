@@ -41,6 +41,9 @@ config.py    用户偏好（与项目无关）
   时禁用渲染按钮并说明原因。用户脚本目录、上次分辨率与标签字号保存在
   `AppSettings`。PyMOL 的标签按固定像素绘制，渲染时按“输出尺寸 / 900 ×
   用户倍数”改写脚本中的 `label_size`，避免高分辨率下残基编号和氢键距离过小。
+- `ui/heatmap_dialog.py`：结果页“编辑热图”对话框。表格中的第三列可直接修改
+  靶点与候选分子的显示名称，另有标题、副标题、配色和输出格式；改动先在临时
+  目录渲染预览，确认后写入项目设置并重新生成热图与 HTML 报告。
 
 ### core
 
@@ -71,7 +74,10 @@ config.py    用户偏好（与项目无关）
   配体与 `SITE` 残基整理为独立原子组，供盒子编辑器叠加参考层；它只读原始
   结构，不参与盒子计算。
 - `docking.py`：批量组合、跳过已有结果、写元数据、生成复合物与 PyMOL 脚本。
-- `analysis.py`：结果表、矩阵、汇总 JSON、图表（matplotlib Agg）。
+- `analysis.py`：结果表、矩阵、汇总 JSON、图表（matplotlib Agg）。热图支持
+  自定义行列名称、标题、单色相配色与 PNG/SVG/PDF 输出；这些设置保存在
+  `analysis/heatmap_config.json`，`analyze()` 每次都会重新应用。SVG 使用
+  `svg.fonttype=none` 保留真实文字，便于后续编辑。
 - `report.py`：自包含 HTML，图片以 base64 内嵌，不依赖网络。
 - `download.py`：PDB / PubChem / AlphaFold / ChEMBL，带缓存与格式回退。
 - `pymol.py`：生成复合物（以及可选的盒子预览）`.pml` 脚本，查找并启动 PyMOL。
