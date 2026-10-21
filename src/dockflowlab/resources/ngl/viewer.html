@@ -101,6 +101,11 @@
   let pendingFocus = false;
   let handleEls = [];
   let handleScreen = [];
+  // 实验位点参考层：共晶配体（品红）与 PDB SITE 残基（青色）。
+  const siteComponents = { cocrystal: null, site: null };
+  const siteTokens = { cocrystal: 0, site: 0 };
+  // 洞察模式默认关闭，保持原有的卡通 + 元素着色显示。
+  let sitesVisible = false;
 
   const messageEl = document.getElementById("message");
   const hintEl = document.getElementById("hint");
@@ -529,6 +534,70 @@
     });
   }
 
+  // ------------------------------------------------------------------
+  // 实验位点参考层
+  // ------------------------------------------------------------------
+  function clearSiteComponents() {
+    ["cocrystal", "site"].forEach(function (kind) {
+      siteTokens[kind] += 1;
+      if (siteComponents[kind]) {
+        stage.removeComponent(siteComponents[kind]);
+        siteComponents[kind] = null;
+      }
+    });
+  }
+
+  function setSiteStructures(cocrystalText, siteText) {
+    loadSiteComponent("cocrystal", String(cocrystalText || ""));
+    loadSiteComponent("site", String(siteText || ""));
+  }
+
+  function loadSiteComponent(kind, text) {
+    const token = ++siteTokens[kind];
+    if (!stage) return;
+    if (siteComponents[kind]) {
+      stage.removeComponent(siteComponents[kind]);
+      siteComponents[kind] = null;
+    }
+    if (!text.trim()) return;
+
+    const blob = new Blob([text], { type: "text/plain" });
+    stage.loadFile(blob, { ext: "pdb", defaultRepresentation: false }).then(function (component) {
+      if (!component) return;
+      if (token !== siteTokens[kind]) {
+        stage.removeComponent(component);
+        return;
+      }
+      siteComponents[kind] = component;
+      if (kind === "cocrystal") {
+        component.addRepresentation("ball+stick", {
+          sele: "*",
+          colorScheme: "uniform",
+          colorValue: 0xe052a0,
+          aspectRatio: 2.0,
+          scale: 1.5
+        });
+      } else {
+        component.addRepresentation("licorice", {
+          sele: "*",
+          colorScheme: "uniform",
+          colorValue: 0x1fb8c8,
+          radius: 0.22
+        });
+      }
+      component.setVisibility(sitesVisible);
+    }).catch(function (error) {
+      post("viewerMessage", { message: "无法显示参考位点：" + String(error) });
+    });
+  }
+
+  function setSitesVisible(value) {
+    sitesVisible = Boolean(value);
+    ["cocrystal", "site"].forEach(function (kind) {
+      if (siteComponents[kind]) siteComponents[kind].setVisibility(sitesVisible);
+    });
+  }
+
   function focusBox() {
     // 结构加载是异步的，加载完成后的 autoView 会覆盖镜头，因此先记下来。
     if (!stage || !structureComp) {
@@ -676,6 +745,12 @@
     setClickToCenter: function (value) {
       clickToCenter = Boolean(value);
     },
+    setSiteStructures: function (cocrystalText, siteText) {
+      setSiteStructures(cocrystalText, siteText);
+    },
+    setSitesVisible: function (value) {
+      setSitesVisible(Boolean(value));
+    },
     showMessage: function (text) {
       if (text) showMessage(String(text)); else hideMessage();
     },
@@ -686,6 +761,7 @@
         structureComp = null;
       }
       atomRep = null;
+      clearSiteComponents();
     }
   };
 

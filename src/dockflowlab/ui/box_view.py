@@ -45,6 +45,10 @@ from ..core.models import MAX_BOX_SIZE, MIN_BOX_SIZE, Box
 
 log = logging.getLogger("box_view")
 
+# 参考层的配色，需与 resources/ngl/viewer.html 中的 colorValue 保持一致。
+COCRYSTAL_COLOR = "#e052a0"  # 共晶配体（品红）
+SITE_COLOR = "#1fb8c8"  # PDB SITE 残基（青色）
+
 # NGL Viewer（QtWebEngine）优先；导入本模块时就会完成 QtWebEngine 的初始化，
 # 这对 PySide6 是必需的（必须在 QApplication 创建之前导入）。
 # 打包损坏、WebGL 不可用或缺少资源时自动回退到下面的 pyqtgraph 渲染。
@@ -1791,6 +1795,17 @@ class BoxViewer(QWidget):
         if self.view is not None:
             self.view.set_structure(structure)
         return True
+
+    def set_site_structures(self, cocrystal_pdb: str = "", site_pdb: str = "") -> bool:
+        """把实验位点作为独立参考层叠加到 3D 视图；仅 NGL 路径支持。"""
+        if NglBoxView is None or not isinstance(self.view, NglBoxView):
+            return False
+        self.view.set_site_structures(cocrystal_pdb, site_pdb)
+        return True
+
+    def set_sites_visible(self, visible: bool) -> None:
+        if NglBoxView is not None and isinstance(self.view, NglBoxView):
+            self.view.set_sites_visible(visible)
 
     def set_box(self, box: Box, *, mark_manual: bool = False) -> None:
         self._box = box

@@ -77,6 +77,31 @@ def test_cocrystal_ligand_has_priority(tmp_path, settings):
     assert box.reference == "LIG"
 
 
+def test_known_site_highlights_include_cocrystal_and_site(tmp_path):
+    path = make_protein_pdb(tmp_path / "complex.pdb", residues=25, ligand=True, site=True)
+    highlights = boxes.known_site_highlights(path)
+
+    kinds = {item.kind for item in highlights}
+    assert kinds == {"cocrystal", "site"}
+
+    cocrystal = next(item for item in highlights if item.kind == "cocrystal")
+    assert "LIG" in cocrystal.label
+    assert len(cocrystal.atoms) == 8
+
+    site = next(item for item in highlights if item.kind == "site")
+    assert "PDB SITE" in site.label
+    # SITE 记录列出 ALA/GLY/SER/LEU 四个残基，每个残基 4 个主链原子。
+    assert len(site.atoms) == 16
+    # 配体本身不重复出现在青色位点层里。
+    assert all(atom.resname != "LIG" for atom in site.atoms)
+
+
+def test_ligand_required_sizes_includes_margin(sdf_path):
+    required = boxes.ligand_required_sizes([sdf_path])
+    assert required is not None
+    assert all(value > 2 * boxes.LIGAND_MARGIN for value in required)
+
+
 def test_small_molecule_target_box(sdf_path, settings):
     box, warnings = boxes.suggest_box(
         target_source=sdf_path,

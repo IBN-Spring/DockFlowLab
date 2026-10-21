@@ -152,7 +152,10 @@ def structure_coords(path: str | Path, obabel: OpenBabelAdapter | None = None) -
     raise InputError(f"无法从文件中读取坐标：{path.name}")
 
 
-def _ligand_required_sizes(ligand_paths: Iterable[str | Path]) -> tuple[float, float, float] | None:
+def ligand_required_sizes(
+    ligand_paths: Iterable[str | Path],
+) -> tuple[float, float, float] | None:
+    """所有候选分子的逐轴最大跨度，再加上两侧各 ``LIGAND_MARGIN`` 的余量。"""
     spans: list[tuple[float, float, float]] = []
     for path in ligand_paths:
         try:
@@ -191,6 +194,103 @@ def _filter_sites(
         allowed = set(chains)
         sites = [site for site in sites if not site.chain or site.chain in allowed]
     return sites
+
+
+@dataclass(frozen=True)
+class KnownSiteHighlight:
+    """盒子编辑器里叠加显示的一处实验位点证据。"""
+
+    kind: str  # cocrystal / site
+    label: str
+    atoms: tuple[pdbio.Atom, ...]
+
+
+MAX_SITE_HIGHLIGHTS = 12
+MAX_SITE_RESIDUES = 24  # 单个 SITE 记录叠加过多残基会遮住主体结构
+
+
+def known_site_highlights(
+    target_source: str | Path,
+    chains: Sequence[str] = (),
+    obabel: OpenBabelAdapter | None = None,
+) -> list[KnownSiteHighlight]:
+    """把共晶配体与 PDB SITE 残基整理成可叠加显示的原子组。
+
+    这些原子始终取自原始结构（准备后的受体通常已移除共晶配体），因此
+    只作为 3D 视图中的参考层，不参与盒子计算本身。
+    """
+    source = Path(target_source)
+    if not source.is_file():
+        return []
+    obabel = obabel or get_openbabel()
+    highlights: list[KnownSiteHighlight] = []
+
+    for site in _co_crystal_sites(source, chains, obabel):
+        atoms = tuple(atom for atom in site.atoms if not atom.is_hydrogen)
+        if atoms:
+            highlights.append(
+                KnownSiteHighlight(kind="cocrystal", label=site.label, atoms=atoms)
+            )
+
+    if pdbio.detect_format(source) != "cif":
+        sites = pdbio.parse_site_records(source)
+        if sites:
+            structure_atoms = pdbio.parse_atoms(source, first_model=True)
+            # SITE 记录有时会把配体本身也列进去；这些原子已经由品红色的
+            # 共晶配体层表示，不再重复叠加青色。
+            ligand_keys = {
+                atom.residue_key
+                for item in highlights
+                if item.kind == "cocrystal"
+                for atom in item.atoms
+            }
+            allowed = set(chains)
+            shown = 0
+            for index, residues in enumerate(sites, 1):
+                if allowed and not any(
+                    not residue.chain or residue.chain in allowed
+                    for residue in residues
+                ):
+                    continue
+                keys = _site_residue_keys(residues[:MAX_SITE_RESIDUES])
+                atoms = tuple(
+                    atom
+                    for atom in structure_atoms
+                    if atom.residue_key in keys
+                    and atom.residue_key not in ligand_keys
+                    and not atom.is_hydrogen
+                )
+                if not atoms:
+                    continue
+                labels = "、".join(
+                    f"{residue.resname} {residue.chain}{residue.resseq}"
+                    for residue in residues[:6]
+                )
+                if len(residues) > 6:
+                    labels += "…"
+                highlights.append(
+                    KnownSiteHighlight(
+                        kind="site",
+                        label=f"PDB SITE {index}（{labels}）",
+                        atoms=atoms,
+                    )
+                )
+                shown += 1
+                if shown >= MAX_SITE_HIGHLIGHTS:
+                    if len(sites) > shown:
+                        log.info(
+                            "SITE 位点较多，盒子编辑器只显示前 %d 处（共 %d 处）",
+                            MAX_SITE_HIGHLIGHTS,
+                            len(sites),
+                        )
+                    break
+    return highlights
+
+
+def _site_residue_keys(
+    residues: Sequence[pdbio.SiteResidue],
+) -> set[tuple[str, int, str, str]]:
+    return {(residue.chain, residue.resseq, residue.icode, residue.resname) for residue in residues}
 
 
 @dataclass
@@ -426,7 +526,7 @@ def suggest_box(
     source = Path(target_source)
     obabel = obabel or get_openbabel()
     warnings: list[str] = []
-    required = _ligand_required_sizes(ligand_paths)
+    required = ligand_required_sizes(ligand_paths)
 
     if manual is not None:
         size = list(manual.size)

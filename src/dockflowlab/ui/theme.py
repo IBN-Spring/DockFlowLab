@@ -186,6 +186,17 @@ def _qss() -> str:
     }}
     QPushButton#Link:hover {{ color: {ACCENT_HOVER}; background: transparent; }}
     QPushButton#Small {{ padding: 4px 10px; font-size: 12px; min-height: 18px; }}
+    QPushButton#Insight {{
+        padding: 4px 10px;
+        font-size: 12px;
+        min-height: 18px;
+    }}
+    QPushButton#Insight:checked {{
+        background: {ACCENT_SOFT};
+        border-color: {ACCENT};
+        color: {ACCENT_DARK};
+        font-weight: 600;
+    }}
 
     /* 输入 */
     QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox {{

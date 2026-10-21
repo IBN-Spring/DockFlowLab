@@ -272,6 +272,7 @@ class NglBoxView(QWidget):
         self._box: Box | None = None
         self._show_atoms = False
         self._click_to_center = True
+        self._sites_visible = False  # 洞察模式默认关闭
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -344,6 +345,14 @@ class NglBoxView(QWidget):
 
     def box(self) -> Box | None:
         return self._box
+
+    def set_site_structures(self, cocrystal_pdb: str, site_pdb: str) -> None:
+        """叠加显示共晶配体与 SITE 残基（独立于主体结构的参考层）。"""
+        self._call("setSiteStructures", cocrystal_pdb or "", site_pdb or "")
+
+    def set_sites_visible(self, visible: bool) -> None:
+        self._sites_visible = bool(visible)
+        self._call("setSitesVisible", bool(visible))
 
     def set_show_atoms(self, visible: bool) -> None:
         self._show_atoms = bool(visible)

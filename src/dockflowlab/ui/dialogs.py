@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import html
 import importlib.util
 from dataclasses import replace
 from pathlib import Path
@@ -31,13 +32,18 @@ from ..core.models import KIND_LIGAND, KIND_TARGET, Box, DownloadResult, Project
 from ..errors import DockFlowError
 from ..logging_setup import get_logger
 from ..services import modes
-from ..services.boxes import suggest_box, validate_manual_box
+from ..services.boxes import (
+    known_site_highlights,
+    ligand_required_sizes,
+    suggest_box,
+    validate_manual_box,
+)
 from ..services.download import DownloadClient
 from ..tools.obabel import OpenBabelAdapter
 from ..tools.vina import VinaAdapter
 from ..workspace import Workspace
 from . import theme
-from .box_view import BoxViewer
+from .box_view import COCRYSTAL_COLOR, SITE_COLOR, BoxViewer, atoms_to_pdb_text
 from .widgets import Card, StatusChip
 from .workers import Task
 
@@ -248,10 +254,11 @@ class BoxDialog(QDialog):
         self.box: Box | None = workspace.load_box(target.stem)
         self.auto_box: Box | None = None
         self.auto_warnings: list[str] = []
+        self._required_size: tuple[float, float, float] | None = None
         self._auto_pending = False
         self.setWindowTitle(f"设置盒子 · {target.display_name}")
-        self.setMinimumSize(1000, 680)
-        self.resize(1160, 780)
+        self.setMinimumSize(1000, 720)
+        self.resize(1160, 820)
         self.setModal(True)
 
         layout = QVBoxLayout(self)
@@ -259,13 +266,23 @@ class BoxDialog(QDialog):
         layout.setSpacing(10)
         title = QLabel(f"搜索盒子 · {target.display_name}")
         title.setStyleSheet("font-size: 20px; font-weight: 700;")
+        self.insight_button = QPushButton("洞察模式")
+        self.insight_button.setObjectName("Insight")
+        self.insight_button.setCheckable(True)
+        self.insight_button.setToolTip(
+            "叠加显示共晶配体与 SITE 位点，并列出候选分子的重原子、柔性键与建议盒子尺寸"
+        )
+        header = QHBoxLayout()
+        header.addWidget(title)
+        header.addStretch(1)
+        header.addWidget(self.insight_button)
         intro = QLabel(
             "盒子越小，搜索越集中、越快；但太小可能错过真实结合位置。"
             "可直接拖动盒子调整，或在右侧精确输入坐标。"
         )
         intro.setObjectName("CardHint")
         intro.setWordWrap(True)
-        layout.addWidget(title)
+        layout.addLayout(header)
         layout.addWidget(intro)
 
         self.auto_card = QFrame()
@@ -297,8 +314,40 @@ class BoxDialog(QDialog):
         auto_layout.addWidget(self.auto_warning)
         layout.addWidget(self.auto_card)
 
+        self.reference_card = QFrame()
+        self.reference_card.setObjectName("Tile")
+        ref_layout = QVBoxLayout(self.reference_card)
+        ref_layout.setContentsMargins(14, 10, 14, 10)
+        ref_layout.setSpacing(5)
+        ref_head = QHBoxLayout()
+        ref_title = QLabel("参考信息")
+        ref_title.setStyleSheet("font-weight: 700;")
+        ref_head.addWidget(ref_title)
+        ref_hint = QLabel("用于判断盒子中心与边长")
+        ref_hint.setObjectName("CardHint")
+        ref_head.addWidget(ref_hint)
+        ref_head.addStretch(1)
+        ref_layout.addLayout(ref_head)
+        self.sites_label = QLabel("正在读取共晶配体与 PDB SITE 记录…")
+        self.sites_label.setObjectName("CardHint")
+        self.sites_label.setWordWrap(True)
+        self.sites_label.setTextFormat(Qt.TextFormat.RichText)
+        ref_layout.addWidget(self.sites_label)
+        self.ligand_label = QLabel("")
+        self.ligand_label.setWordWrap(True)
+        self.ligand_label.setTextFormat(Qt.TextFormat.RichText)
+        ref_layout.addWidget(self.ligand_label)
+        self.fit_label = QLabel("")
+        self.fit_label.setWordWrap(True)
+        self.fit_label.setStyleSheet(f"color:{theme.MUTED}; font-size:12px;")
+        ref_layout.addWidget(self.fit_label)
+        self.reference_card.setVisible(False)  # 洞察模式默认关闭，保持原有 3D 显示
+        layout.addWidget(self.reference_card)
+
         self.viewer = BoxViewer(self)
         self.viewer.auto_requested.connect(self._request_auto)
+        self.viewer.box_edited.connect(self._update_box_fit)
+        self.insight_button.toggled.connect(self._toggle_insight)
         layout.addWidget(self.viewer, 1)
 
         buttons = QHBoxLayout()
@@ -313,9 +362,11 @@ class BoxDialog(QDialog):
         layout.addLayout(buttons)
 
         self._load_structure()
+        self._load_reference_info()
         if self.box is not None:
             self.viewer.set_box(self.box, mark_manual=self.box.source == "manual")
             self.viewer.focus_box()
+            self._update_box_fit(self.box)
         self._request_auto()
 
     # ------------------------------------------------------------------
@@ -345,6 +396,138 @@ class BoxDialog(QDialog):
         except Exception as exc:  # pragma: no cover - 损坏文件的兜底
             log.warning("读取 3D 结构失败：%s", exc)
             self.viewer.show_placeholder(f"无法读取结构：{exc}\n仍可在右侧手动输入盒子参数。")
+
+    # ------------------------------------------------------------------
+    # 参考信息（共晶配体 / SITE / 候选分子柔性）
+    # ------------------------------------------------------------------
+    def _toggle_insight(self, enabled: bool) -> None:
+        """打开/关闭洞察模式：文字参考 + 3D 彩色位点层。"""
+        self.reference_card.setVisible(bool(enabled))
+        self.viewer.set_sites_visible(bool(enabled))
+        self.insight_button.setText("关闭洞察" if enabled else "洞察模式")
+
+    def _load_reference_info(self) -> None:
+        source = self.workspace.absolute(self.target.source)
+        highlights = []
+        if source.is_file():
+            try:
+                highlights = known_site_highlights(
+                    source,
+                    self.target.meta.get("chains", []),
+                    obabel=self.obabel,
+                )
+            except Exception as exc:  # pragma: no cover - 损坏文件的兜底
+                log.warning("读取已知位点失败：%s", exc)
+
+        self.sites_label.setText(self._site_legend(highlights))
+        cocrystal_atoms = [
+            atom for item in highlights if item.kind == "cocrystal" for atom in item.atoms
+        ]
+        site_atoms = [
+            atom for item in highlights if item.kind == "site" for atom in item.atoms
+        ]
+        overlaid = self.viewer.set_site_structures(
+            atoms_to_pdb_text(cocrystal_atoms),
+            atoms_to_pdb_text(site_atoms),
+        )
+        if not overlaid:
+            self.sites_label.setToolTip(
+                "当前 3D 视图为 OpenGL 回退模式，洞察模式只显示文字信息，"
+                "不会叠加彩色位点"
+            )
+
+        entries = [
+            entry
+            for entry in self.workspace.ligands
+            if entry.is_ready
+            and modes.pair_mode(self.target, entry, self.workspace).supported
+        ]
+        self._required_size = ligand_required_sizes(
+            self.workspace.absolute(entry.prepared) for entry in entries
+        )
+        self.ligand_label.setText(self._ligand_summary(entries, self._required_size))
+        if self.viewer.has_box and self.viewer.current_box() is not None:
+            self._update_box_fit(self.viewer.current_box())
+
+    @staticmethod
+    def _site_legend(highlights) -> str:
+        if not highlights:
+            return (
+                f'<span style="color:{theme.MUTED}">未找到共晶配体或 PDB SITE 记录；'
+                "可结合几何口袋与候选分子尺寸设置盒子。</span>"
+            )
+        lines: list[str] = []
+        for kind, prefix, color in (
+            ("cocrystal", "共晶配体 ", COCRYSTAL_COLOR),
+            ("site", "", SITE_COLOR),
+        ):
+            group = [item for item in highlights if item.kind == kind]
+            if not group:
+                continue
+            dot = f'<span style="color:{color}; font-weight:700;">●</span>'
+            for item in group[:3]:
+                lines.append(f"{dot} {prefix}{html.escape(item.label)}")
+            if len(group) > 3:
+                lines.append(f"{dot} 等共 {len(group)} 处")
+        return "<br>".join(lines)
+
+    @staticmethod
+    def _ligand_summary(entries, required) -> str:
+        if not entries:
+            return (
+                f'<span style="color:{theme.MUTED}">尚无已准备且支持对接的候选分子。</span>'
+            )
+        lines: list[str] = []
+        for entry in entries[:3]:
+            details = entry.meta.get("prep_details") or {}
+            parts = [html.escape(entry.display_name)]
+            heavy = details.get("heavy_atoms")
+            if heavy:
+                parts.append(f"{heavy} 个重原子")
+            rotatable = details.get("rotatable_bonds")
+            if rotatable is not None:
+                if rotatable == 0:
+                    parts.append("刚性（无可旋转键）")
+                elif rotatable > 20:
+                    parts.append(
+                        f'<span style="color:{theme.WARNING}; font-weight:600;">'
+                        f"{rotatable} 个可旋转键（柔性键）</span>"
+                    )
+                else:
+                    parts.append(f"{rotatable} 个可旋转键（柔性键）")
+            lines.append("候选分子：" + " · ".join(parts))
+        if len(entries) > 3:
+            lines.append(f"另有 {len(entries) - 3} 个候选分子")
+        if required is not None:
+            size = " × ".join(f"{value:.1f}" for value in required)
+            lines.append(
+                f'<span style="color:{theme.WARNING}; font-weight:600;">'
+                f"建议盒子至少 {size} Å（含两侧各 4 Å 余量）</span>"
+            )
+        return "<br>".join(lines)
+
+    def _update_box_fit(self, box: Box | None) -> None:
+        if box is None or self._required_size is None:
+            self.fit_label.setText("")
+            return
+        required = self._required_size
+        size_text = " × ".join(f"{value:.1f}" for value in required)
+        short = [
+            axis
+            for axis, value, need in zip("XYZ", box.size, required)
+            if value + 1e-6 < need
+        ]
+        if short:
+            self.fit_label.setStyleSheet(
+                f"color:{theme.WARNING}; font-size:12px; font-weight:600;"
+            )
+            self.fit_label.setText(
+                f"当前盒子在 {'、'.join(short)} 方向小于建议的 {size_text} Å，"
+                "可能截断候选分子的构象。"
+            )
+        else:
+            self.fit_label.setStyleSheet(f"color:{theme.MUTED}; font-size:12px;")
+            self.fit_label.setText(f"当前盒子可容纳候选分子（建议最小 {size_text} Å）。")
 
     # ------------------------------------------------------------------
     # 自动推荐
@@ -403,6 +586,7 @@ class BoxDialog(QDialog):
             if not self.viewer.has_box:
                 self.viewer.use_auto(box)
                 self.viewer.focus_box()
+                self._update_box_fit(box)
         finally:
             self._auto_pending = False
             self.recalc_button.setEnabled(True)
@@ -412,6 +596,7 @@ class BoxDialog(QDialog):
             return
         self.viewer.use_auto(self.auto_box)
         self.viewer.focus_box()
+        self._update_box_fit(self.auto_box)
 
     # ------------------------------------------------------------------
     # 保存
