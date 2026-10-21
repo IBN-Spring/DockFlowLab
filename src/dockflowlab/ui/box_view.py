@@ -44,6 +44,7 @@ from PySide6.QtWidgets import (
 
 from ..core import pdbio
 from ..core.models import MAX_BOX_SIZE, MIN_BOX_SIZE, Box
+from . import theme
 
 log = logging.getLogger("box_view")
 
@@ -1803,7 +1804,7 @@ class BoxViewer(QWidget):
         layout.setSpacing(10)
 
         title = QLabel("盒子位置与大小")
-        title.setStyleSheet("font-size: 16px; font-weight: 700;")
+        title.setStyleSheet(f"font-size: {theme.px(16)}; font-weight: 700;")
         layout.addWidget(title)
 
         self.status_label = QLabel("—")

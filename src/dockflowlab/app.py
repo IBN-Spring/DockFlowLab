@@ -78,10 +78,10 @@ def gui_main(argv: list[str] | None = None) -> int:
     translations = QLibraryInfo.path(QLibraryInfo.LibraryPath.TranslationsPath)
     if translator.load("qtbase_zh_CN", translations):
         app.installTranslator(translator)
-    apply_theme(app)
+    scale = apply_theme(app)
     window = MainWindow()
     window.show()
-    log.info("启动 DockFlowLab %s", __version__)
+    log.info("启动 DockFlowLab %s（界面缩放 %.2f×）", __version__, scale)
     return app.exec()
 
 

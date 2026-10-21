@@ -116,7 +116,7 @@ class StatusChip(QLabel):
         self.setText(text or default)
         self.setStyleSheet(
             f"color: {color}; background: {background}; border-radius: 9px;"
-            "padding: 2px 10px; font-size: 12px;"
+            f"padding: 2px 10px; font-size: {theme.px(12)};"
         )
 
 
@@ -129,13 +129,15 @@ class DropZone(QFrame):
         self.setObjectName("DropZone")
         self.setAcceptDrops(True)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.setFixedHeight(124)
+        self.setFixedHeight(round(124 * theme.ui_scale()))
         layout = QVBoxLayout(self)
         layout.setContentsMargins(16, 12, 16, 12)
         layout.setSpacing(4)
         self.title_label = QLabel(title)
         self.title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.title_label.setStyleSheet("font-size: 14px; font-weight: 600;")
+        self.title_label.setStyleSheet(
+            f"font-size: {theme.px(14)}; font-weight: 600;"
+        )
         self.hint_label = QLabel(hint)
         self.hint_label.setObjectName("Muted")
         self.hint_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -193,7 +195,7 @@ class EntityRow(QFrame):
         self.entry = entry
         self.setObjectName("EntityRow")
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
-        self.setMinimumHeight(54)
+        self.setMinimumHeight(round(54 * theme.ui_scale()))
         layout = QHBoxLayout(self)
         layout.setContentsMargins(2, 8, 2, 8)
         layout.setSpacing(10)
@@ -201,7 +203,7 @@ class EntityRow(QFrame):
         text_box = QVBoxLayout()
         text_box.setSpacing(2)
         name = QLabel(entry.display_name)
-        name.setStyleSheet("font-weight: 600; font-size: 14px;")
+        name.setStyleSheet(f"font-weight: 600; font-size: {theme.px(14)};")
         text_box.addWidget(name)
         meta_parts = []
         kind = modes.entry_kind(entry, workspace)
@@ -276,7 +278,9 @@ class EmptyState(QFrame):
         layout.setSpacing(6)
         layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
         title_label = QLabel(title)
-        title_label.setStyleSheet("font-size: 15px; font-weight: 600;")
+        title_label.setStyleSheet(
+            f"font-size: {theme.px(15)}; font-weight: 600;"
+        )
         title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         hint_label = QLabel(hint)
         hint_label.setObjectName("Muted")
@@ -331,7 +335,7 @@ class LogPanel(QWidget):
         self.log.setMaximumBlockCount(800)
         font = QFont("Consolas")
         font.setStyleHint(QFont.StyleHint.Monospace)
-        font.setPointSize(9)
+        font.setPointSizeF(9.0 * theme.ui_scale())
         self.log.setFont(font)
         self.log.setMinimumHeight(120)
         layout.addWidget(self.log)
@@ -367,7 +371,8 @@ class LogPanel(QWidget):
         self.status_label.setText(message)
         self.cancel_button.setVisible(False)
         self.status_label.setStyleSheet(
-            f"color: {theme.SUCCESS if ok else theme.DANGER}; font-size: 12px;"
+            f"color: {theme.SUCCESS if ok else theme.DANGER};"
+            f"font-size: {theme.px(12)};"
         )
         self.toggle_button.setVisible(True)
         self.log.setVisible(False)

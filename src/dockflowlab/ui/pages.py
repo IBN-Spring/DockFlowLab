@@ -126,7 +126,7 @@ class WelcomePage(Page):
         eyebrow = QLabel("DockFlowLab · 分子对接工作台")
         eyebrow.setObjectName("Eyebrow")
         title = QLabel("四步完成一次规范的分子对接")
-        title.setStyleSheet("font-size: 34px; font-weight: 700;")
+        title.setStyleSheet(f"font-size: {theme.px(34)}; font-weight: 700;")
         title.setWordWrap(True)
         subtitle = QLabel(
             "不用记命令，也不用理解文件格式。选择工作文件夹，加入靶点结构（蛋白、核酸或多肽）"
@@ -172,10 +172,12 @@ class WelcomePage(Page):
             tile_layout.setSpacing(4)
             number_label = QLabel(number)
             number_label.setStyleSheet(
-                f"color: {theme.ACCENT}; font-size: 13px; font-weight: 700;"
+                f"color: {theme.ACCENT}; font-size: {theme.px(13)}; font-weight: 700;"
             )
             heading_label = QLabel(heading)
-            heading_label.setStyleSheet("font-size: 14px; font-weight: 600;")
+            heading_label.setStyleSheet(
+                f"font-size: {theme.px(14)}; font-weight: 600;"
+            )
             text_label = QLabel(text)
             text_label.setObjectName("Muted")
             text_label.setWordWrap(True)
@@ -846,7 +848,8 @@ class ResultsPage(Page):
         self.table.setAlternatingRowColors(True)
         self.table.setShowGrid(False)
         self.table.setWordWrap(False)
-        self.table.verticalHeader().setDefaultSectionSize(38)
+        ui_scale = theme.ui_scale()
+        self.table.verticalHeader().setDefaultSectionSize(round(38 * ui_scale))
         self.table.verticalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Fixed)
         header = self.table.horizontalHeader()
         header.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
@@ -855,11 +858,11 @@ class ResultsPage(Page):
         header.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
         header.setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
         header.setSectionResizeMode(5, QHeaderView.ResizeMode.Fixed)
-        self.table.setColumnWidth(5, 92)
+        self.table.setColumnWidth(5, round(92 * ui_scale))
         header.setSectionResizeMode(6, QHeaderView.ResizeMode.Stretch)
         header.setSectionResizeMode(7, QHeaderView.ResizeMode.Fixed)
-        self.table.setColumnWidth(7, 140)
-        self.table.setMinimumHeight(120)
+        self.table.setColumnWidth(7, round(140 * ui_scale))
+        self.table.setMinimumHeight(round(120 * ui_scale))
         self.table.setVisible(False)
         self.table.setToolTip("选中行后按 Ctrl+C 或右键复制，可直接粘贴到 Excel")
         self.table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
@@ -1069,7 +1072,10 @@ class ResultsPage(Page):
     def _fit_table_height(self, rows: int) -> None:
         section = self.table.verticalHeader().defaultSectionSize()
         height = self.table.horizontalHeader().height() + rows * section + 6
-        self.table.setFixedHeight(max(120, min(height, 480)))
+        scale = theme.ui_scale()
+        self.table.setFixedHeight(
+            max(round(120 * scale), min(height, round(480 * scale)))
+        )
 
     def _load_chart(self, workspace: Workspace) -> None:
         heatmap = workspace.analysis_dir / "heatmap.png"

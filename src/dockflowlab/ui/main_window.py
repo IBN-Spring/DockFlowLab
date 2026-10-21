@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import math
 from pathlib import Path
 from typing import Callable
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QSize, Qt
 from PySide6.QtGui import QCloseEvent, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
@@ -50,6 +51,7 @@ from . import theme
 from .dialogs import BoxDialog, DownloadDialog, SettingsDialog
 from .geometry import (
     WINDOW_MINIMUM,
+    WINDOW_PREFERRED,
     apply_screen_minimum,
     center_window_on_screen,
     clamp_window_to_screen,
@@ -89,6 +91,19 @@ class MainWindow(QMainWindow):
         self._vina: VinaAdapter | None = None
         self._screen_connected = False
         self._shortcuts: list[QShortcut] = []
+
+        # 界面字号随屏幕密度放大后，窗口也要同步变大，否则内容会被挤在一起。
+        # 最小尺寸只按 sqrt 放大（小屏幕仍可使用），首选尺寸按完整比例放大，
+        # 实际显示时 fit_window_to_screen 会把它裁剪到屏幕范围内。
+        scale = theme.ui_scale()
+        self._window_minimum = QSize(
+            round(WINDOW_MINIMUM.width() * math.sqrt(scale)),
+            round(WINDOW_MINIMUM.height() * math.sqrt(scale)),
+        )
+        self._window_preferred = QSize(
+            round(WINDOW_PREFERRED.width() * scale),
+            round(WINDOW_PREFERRED.height() * scale),
+        )
 
         self.setWindowTitle(f"{__app_name_zh__} · DockFlowLab")
 
@@ -139,7 +154,8 @@ class MainWindow(QMainWindow):
     def _build_sidebar(self) -> QWidget:
         sidebar = QWidget()
         sidebar.setObjectName("Sidebar")
-        sidebar.setFixedWidth(250)
+        # 字号放大时侧栏略加宽，但按 sqrt 放大以免挤占正文区域。
+        sidebar.setFixedWidth(round(250 * math.sqrt(theme.ui_scale())))
         layout = QVBoxLayout(sidebar)
         layout.setContentsMargins(18, 22, 18, 16)
         layout.setSpacing(8)
@@ -307,7 +323,9 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------
     def _restore_window_state(self) -> None:
         """按当前屏幕限制尺寸，再恢复上次关闭时的位置与最大化状态。"""
-        fit_window_to_screen(self, minimum=WINDOW_MINIMUM)
+        fit_window_to_screen(
+            self, preferred=self._window_preferred, minimum=self._window_minimum
+        )
         restored = restore_window_geometry(self, self.settings.window_geometry)
         if not restored:
             center_window_on_screen(self)
@@ -377,7 +395,7 @@ class MainWindow(QMainWindow):
     def _screen_changed(self, _screen=None) -> None:
         # 拖到更小/更大屏幕时同步最小尺寸，避免窗口被卡在旧屏幕的尺寸上；
         # 若当前大小超出新屏幕，则收缩到可见范围内。
-        apply_screen_minimum(self, WINDOW_MINIMUM)
+        apply_screen_minimum(self, self._window_minimum)
         if not self.isMaximized():
             clamp_window_to_screen(self)
 

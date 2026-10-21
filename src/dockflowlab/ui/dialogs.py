@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import html
 import importlib.util
+import math
 from dataclasses import replace
 from pathlib import Path
 
@@ -96,7 +97,7 @@ class DownloadDialog(QDialog):
         layout.setContentsMargins(22, 20, 22, 18)
         layout.setSpacing(14)
         title = QLabel(f"从公共数据库获取{noun}")
-        title.setStyleSheet("font-size: 20px; font-weight: 700;")
+        title.setStyleSheet(f"font-size: {theme.px(20)}; font-weight: 700;")
         hint = QLabel("下载的文件会保存到当前工作目录，并自动加入项目。")
         hint.setObjectName("CardHint")
         layout.addWidget(title)
@@ -310,7 +311,7 @@ class BoxDialog(ScreenFittedDialog):
         layout.setContentsMargins(20, 16, 20, 14)
         layout.setSpacing(10)
         title = QLabel(f"搜索盒子 · {target.display_name}")
-        title.setStyleSheet("font-size: 20px; font-weight: 700;")
+        title.setStyleSheet(f"font-size: {theme.px(20)}; font-weight: 700;")
         self.insight_button = QPushButton("洞察模式")
         self.insight_button.setObjectName("Insight")
         self.insight_button.setCheckable(True)
@@ -384,7 +385,7 @@ class BoxDialog(ScreenFittedDialog):
         ref_layout.addWidget(self.ligand_label)
         self.fit_label = QLabel("")
         self.fit_label.setWordWrap(True)
-        self.fit_label.setStyleSheet(f"color:{theme.MUTED}; font-size:12px;")
+        self.fit_label.setStyleSheet(f"color:{theme.MUTED}; font-size:{theme.px(12)};")
         ref_layout.addWidget(self.fit_label)
         self.reference_card.setVisible(False)  # 洞察模式默认关闭，保持原有 3D 显示
         layout.addWidget(self.reference_card)
@@ -411,9 +412,14 @@ class BoxDialog(ScreenFittedDialog):
             self.viewer.focus_box()
             self._update_box_fit(self.box)
 
+        scale = theme.ui_scale()
+        minimum = QSize(720, 560) if self._compact else QSize(1000, 720)
         self.fit_to_screen(
-            preferred=QSize(1160, 820),
-            minimum=QSize(720, 560) if self._compact else QSize(1000, 720),
+            preferred=QSize(round(1160 * scale), round(820 * scale)),
+            minimum=QSize(
+                round(minimum.width() * math.sqrt(scale)),
+                round(minimum.height() * math.sqrt(scale)),
+            ),
         )
 
     def paintEvent(self, event) -> None:  # noqa: N802
@@ -582,14 +588,14 @@ class BoxDialog(ScreenFittedDialog):
         ]
         if short:
             self.fit_label.setStyleSheet(
-                f"color:{theme.WARNING}; font-size:12px; font-weight:600;"
+                f"color:{theme.WARNING}; font-size:{theme.px(12)}; font-weight:600;"
             )
             self.fit_label.setText(
                 f"当前盒子在 {'、'.join(short)} 方向小于建议的 {size_text} Å，"
                 "可能截断候选分子的构象。"
             )
         else:
-            self.fit_label.setStyleSheet(f"color:{theme.MUTED}; font-size:12px;")
+            self.fit_label.setStyleSheet(f"color:{theme.MUTED}; font-size:{theme.px(12)};")
             self.fit_label.setText(f"当前盒子可容纳候选分子（建议最小 {size_text} Å）。")
 
     # ------------------------------------------------------------------
@@ -703,7 +709,7 @@ class SettingsDialog(ScreenFittedDialog):
         layout.setContentsMargins(22, 20, 22, 18)
         layout.setSpacing(14)
         title = QLabel("设置与运行环境")
-        title.setStyleSheet("font-size: 20px; font-weight: 700;")
+        title.setStyleSheet(f"font-size: {theme.px(20)}; font-weight: 700;")
         hint = QLabel("这些设置只影响本机，不会写入项目文件夹。")
         hint.setObjectName("CardHint")
         layout.addWidget(title)
@@ -786,9 +792,15 @@ class SettingsDialog(ScreenFittedDialog):
         layout.addWidget(buttons)
         self._check_environment()
         hint = self.sizeHint()
+        scale = theme.ui_scale()
         self.fit_to_screen(
-            preferred=QSize(max(620, hint.width()), hint.height()),
-            minimum=QSize(520, 420),
+            preferred=QSize(
+                max(round(620 * scale), round(hint.width() * scale)),
+                round(hint.height() * scale),
+            ),
+            minimum=QSize(
+                round(520 * math.sqrt(scale)), round(420 * math.sqrt(scale))
+            ),
         )
 
     def _browse_into(self, edit: QLineEdit) -> None:

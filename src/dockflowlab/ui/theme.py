@@ -1,11 +1,29 @@
-"""界面主题：配色、字体与全局样式表。"""
+"""界面主题：配色、字体与全局样式表。
+
+界面的基准字号按“逻辑像素”设计。Qt 已经会按系统缩放放大逻辑像素，
+但在 100% 缩放的高分辨率笔记本上，14px 的文字物理尺寸仍然偏小。
+``apply_theme`` 会根据屏幕的实际像素密度计算一个 1.0–1.3 的附加缩放，
+并作用于全局样式表和内联字号，避免用户在笔记本上看到过小的文字。
+"""
 
 from __future__ import annotations
 
-from PySide6.QtGui import QFont, QFontDatabase
+import math
+import os
+import re
+
+from PySide6.QtGui import QFont, QFontDatabase, QGuiApplication
 from PySide6.QtWidgets import QApplication
 
 from ..tools.runtime import resource_path
+
+# 参考密度：普通 24 英寸 1080p 屏幕约为 92 DPI，常见的舒适区间在
+# 105–120 DPI 之间。只在高于参考值时放大，不主动缩小界面。
+REFERENCE_DPI = 105.0
+MAX_UI_SCALE = 1.3
+MIN_UI_SCALE = 1.0
+
+_ui_scale = 1.0
 
 # 与报告、图表共用同一套色板，避免界面与结果“两种风格”
 BG = "#f4f3ef"
@@ -48,13 +66,75 @@ def choose_font(candidates: tuple[str, ...], fallback: str = "") -> str:
     return fallback
 
 
-def apply_theme(app: QApplication) -> None:
+def _clamp_scale(value: float) -> float:
+    if not math.isfinite(value):
+        return MIN_UI_SCALE
+    return max(MIN_UI_SCALE, min(MAX_UI_SCALE, value))
+
+
+def detect_ui_scale() -> float:
+    """根据主屏的像素密度估算附加缩放。
+
+    ``physicalDotsPerInch()`` 返回的是已经折算过系统缩放的实际密度：
+    1920×1080 的普通显示器约为 92，15 英寸 1080p 笔记本在 100% 缩放下
+    约为 140，在 150% 缩放下约为 94。因此它比单纯看分辨率更可靠。
+
+    可用环境变量 ``DOCKFLOWLAB_UI_SCALE`` 覆盖自动结果，便于排查显示问题。
+    """
+    override = os.environ.get("DOCKFLOWLAB_UI_SCALE", "").strip()
+    if override:
+        try:
+            return _clamp_scale(float(override))
+        except ValueError:
+            pass
+    screen = QGuiApplication.primaryScreen()
+    if screen is None:
+        return MIN_UI_SCALE
+    try:
+        dpi = float(screen.physicalDotsPerInch())
+    except Exception:
+        return MIN_UI_SCALE
+    if not math.isfinite(dpi) or dpi <= 0:
+        return MIN_UI_SCALE
+    return _clamp_scale(dpi / REFERENCE_DPI)
+
+
+def set_ui_scale(scale: float) -> None:
+    global _ui_scale
+    _ui_scale = _clamp_scale(float(scale))
+
+
+def ui_scale() -> float:
+    return _ui_scale
+
+
+def px(value: float) -> str:
+    """把设计稿中的像素值换算成当前界面缩放下的 QSS 值。"""
+    return f"{max(1, round(value * _ui_scale))}px"
+
+
+_FONT_SIZE_RE = re.compile(r"font-size:\s*(\d+(?:\.\d+)?)px")
+
+
+def _scale_qss_fonts(text: str) -> str:
+    if abs(_ui_scale - 1.0) < 1e-6:
+        return text
+    return _FONT_SIZE_RE.sub(
+        lambda match: f"font-size: {max(1, round(float(match.group(1)) * _ui_scale))}px",
+        text,
+    )
+
+
+def apply_theme(app: QApplication, scale: float | None = None) -> float:
+    """应用样式并返回实际使用的界面缩放。"""
+    set_ui_scale(detect_ui_scale() if scale is None else scale)
     app.setStyle("Fusion")
     family = choose_font(CJK_FONTS, "Sans Serif")
     font = QFont(family)
-    font.setPointSize(10)
+    font.setPointSizeF(10.0 * _ui_scale)
     app.setFont(font)
-    app.setStyleSheet(_qss())
+    app.setStyleSheet(_scale_qss_fonts(_qss()))
+    return _ui_scale
 
 
 def _qss() -> str:

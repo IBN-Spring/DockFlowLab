@@ -117,6 +117,44 @@ def test_fit_window_respects_screen(qt_app):
     widget.deleteLater()
 
 
+def test_ui_scale_is_clamped(qt_app):
+    from dockflowlab.ui import theme
+
+    original = theme.ui_scale()
+    try:
+        theme.set_ui_scale(5.0)
+        assert theme.ui_scale() == pytest.approx(theme.MAX_UI_SCALE)
+        assert theme.px(14) == f"{round(14 * theme.MAX_UI_SCALE)}px"
+
+        theme.set_ui_scale(0.2)
+        assert theme.ui_scale() == pytest.approx(theme.MIN_UI_SCALE)
+        assert theme.px(14) == "14px"
+    finally:
+        theme.set_ui_scale(original)
+
+
+def test_ui_scale_env_override(monkeypatch, qt_app):
+    from dockflowlab.ui import theme
+
+    monkeypatch.setenv("DOCKFLOWLAB_UI_SCALE", "1.25")
+    assert theme.detect_ui_scale() == pytest.approx(1.25)
+
+    monkeypatch.setenv("DOCKFLOWLAB_UI_SCALE", "not-a-number")
+    assert theme.MIN_UI_SCALE <= theme.detect_ui_scale() <= theme.MAX_UI_SCALE
+
+
+def test_qss_fonts_follow_ui_scale(qt_app):
+    from dockflowlab.ui import theme
+
+    original = theme.ui_scale()
+    try:
+        theme.set_ui_scale(1.3)
+        scaled = theme._scale_qss_fonts("QLabel#PageTitle { font-size: 20px; }")
+        assert "font-size: 26px" in scaled
+    finally:
+        theme.set_ui_scale(original)
+
+
 def test_window_geometry_roundtrip(qt_app):
     from PySide6.QtWidgets import QWidget
 

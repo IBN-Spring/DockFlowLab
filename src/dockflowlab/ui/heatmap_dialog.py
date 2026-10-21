@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -36,6 +37,7 @@ from ..services.analysis import (
     plot_heatmap,
 )
 from ..workspace import Workspace
+from . import theme
 from .geometry import ScreenFittedDialog
 
 
@@ -195,9 +197,12 @@ class HeatmapDialog(ScreenFittedDialog):
         self._preview_timer.timeout.connect(self._update_preview)
         self._preview_timer.start(60)
 
+        scale = theme.ui_scale()
         self.fit_to_screen(
-            preferred=QSize(1000, 780),
-            minimum=QSize(680, 520),
+            preferred=QSize(round(1000 * scale), round(780 * scale)),
+            minimum=QSize(
+                round(680 * math.sqrt(scale)), round(520 * math.sqrt(scale))
+            ),
         )
 
     # ------------------------------------------------------------------
