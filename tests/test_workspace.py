@@ -64,6 +64,31 @@ def test_box_roundtrip(workspace):
     assert json.loads(path.read_text(encoding="utf-8"))["center"] == [1.5, 2.5, 3.5]
 
 
+def test_reprepare_invalidates_auto_box_but_keeps_manual(workspace, pdb_path):
+    from dockflowlab.services.preparation import _invalidate_auto_box
+
+    entry = workspace.import_file("target", pdb_path, display_name="1BCI")
+    workspace.save_box(
+        entry.stem,
+        Box(center=(1, 2, 3), size=(20, 20, 20), source="pocket"),
+    )
+    workspace.update_entry(entry, box="boxes/pocket.json")
+
+    _invalidate_auto_box(workspace, entry)
+
+    assert workspace.load_box(entry.stem) is None
+    assert entry.box == ""
+
+    workspace.save_box(
+        entry.stem,
+        Box(center=(1, 2, 3), size=(20, 20, 20), source="manual"),
+    )
+
+    _invalidate_auto_box(workspace, entry)
+
+    assert workspace.load_box(entry.stem) is not None
+
+
 def test_remove_entry_purges_inputs_and_prepared(workspace, sdf_path):
     entry = workspace.import_file("ligand", sdf_path)
     prepared = workspace.prepared_dir("ligand", entry.stem)

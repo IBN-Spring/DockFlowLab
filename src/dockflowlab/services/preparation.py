@@ -56,12 +56,29 @@ def _notify(progress: Progress, current: int, total: int, message: str) -> None:
             pass
 
 
+def _invalidate_auto_box(workspace: Workspace, entry: ProjectFile) -> None:
+    """受体重新准备后，旧的自动盒子可能不再适用。
+
+    手动盒子是用户明确指定的，保留；几何口袋/共晶配体/SITE 等自动盒子
+    必须丢弃，否则会继续沿用基于旧受体或旧配体链计算的坐标。
+    """
+    if entry.kind != KIND_TARGET:
+        return
+    box = workspace.load_box(entry.stem)
+    if box is None or box.source == "manual":
+        return
+    workspace.box_path(entry.stem).unlink(missing_ok=True)
+    if entry.box:
+        workspace.update_entry(entry, box="")
+
+
 def _store_outcome(
     workspace: Workspace,
     entry: ProjectFile,
     outcome: PrepOutcome,
     prepared: Path,
 ) -> None:
+    _invalidate_auto_box(workspace, entry)
     workspace.update_entry(
         entry,
         status=STATUS_READY,
