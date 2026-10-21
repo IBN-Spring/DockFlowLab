@@ -170,3 +170,61 @@ def test_report_without_results_raises_nothing(result_workspace):
     path = generate_report(workspace, [])
     assert path.is_file()
     assert "还没有对接结果" in path.read_text(encoding="utf-8")
+
+
+def test_report_uses_recorded_run_parameters(result_workspace):
+    """报告必须引用结果实际使用的参数，而不是生成报告时的当前设置。"""
+    from dockflowlab.config import AppSettings
+
+    workspace, target, first, second = result_workspace
+    results = make_results(target, [first, second])
+    for item in results:
+        item.parameters = {
+            "exhaustiveness": 4,
+            "num_modes": 5,
+            "energy_range": 1.5,
+            "seed": 123,
+            "cpu": 2,
+            "vina_version": "AutoDock Vina 1.2.7",
+        }
+        item.box_center = (1.0, 2.0, 3.0)
+        item.box_size = (20.0, 21.0, 22.0)
+
+    path = generate_report(
+        workspace, results, settings=AppSettings(exhaustiveness=99, seed=999)
+    )
+    text = path.read_text(encoding="utf-8")
+
+    assert "exhaustiveness = 4" in text
+    assert "seed = 123" in text
+    assert "exhaustiveness = 99" not in text
+    assert "AutoDock Vina 1.2.7" in text
+    assert "中心 (1.0, 2.0, 3.0)" in text
+    assert "尺寸 20.0 × 21.0 × 22.0 Å" in text
+
+
+def test_report_lists_prep_warnings_and_ph(result_workspace):
+    workspace, target, *_ = result_workspace
+    workspace.update_entry(
+        target,
+        meta={
+            "prep_warnings": ["补全了 12 个缺失残基，模型可靠性可能下降"],
+            "prep_details": {"ph": 6.5},
+        },
+    )
+
+    text = generate_report(workspace, []).read_text(encoding="utf-8")
+
+    assert "补全了 12 个缺失残基" in text
+    assert "质子化 pH" in text and "6.5" in text
+
+
+def test_analyze_warns_when_parameters_differ(result_workspace):
+    workspace, target, first, second = result_workspace
+    results = make_results(target, [first, second])
+    results[0].parameters = {"exhaustiveness": 8, "seed": 1}
+    results[1].parameters = {"exhaustiveness": 8, "seed": 2}
+
+    bundle = analyze(workspace, results)
+
+    assert any("不同的对接参数" in message for message in bundle.warnings)

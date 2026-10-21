@@ -587,6 +587,7 @@ class MainWindow(QMainWindow):
         def job(progress, cancel, line):
             errors = []
             generated = []
+            box_warnings: dict[str, list[str]] = {}
             cancelled = False
             for index, target in enumerate(targets, start=1):
                 if cancel.is_set():
@@ -594,7 +595,7 @@ class MainWindow(QMainWindow):
                     break
                 progress(index - 1, len(targets), f"正在计算：{target.display_name}")
                 try:
-                    box, _ = suggest_box(
+                    box, notes = suggest_box(
                         target_source=workspace.absolute(target.source),
                         target_prepared_pdb=workspace.prepared_target_pdb(target.stem),
                         ligand_paths=ligands_by_target[target.stem],
@@ -608,11 +609,15 @@ class MainWindow(QMainWindow):
                         target, box=workspace.relative(workspace.box_path(target.stem))
                     )
                     generated.append(target)
+                    cleaned = [str(note).strip() for note in notes if str(note).strip()]
+                    if cleaned:
+                        box_warnings[target.stem] = cleaned
                 except Exception as exc:
                     errors.append(f"{target.display_name}：{exc}")
             return {
                 "errors": errors,
                 "generated": generated,
+                "box_warnings": box_warnings,
                 "total": len(targets),
                 "cancelled": cancelled,
             }
@@ -637,14 +642,21 @@ class MainWindow(QMainWindow):
                     7000,
                 )
                 return
+            sections = []
             if review:
-                QMessageBox.information(
-                    self,
-                    "有盒子需要手动确认",
+                sections.append(
                     "以下靶点无法自动确定可靠的结合位点，盒子只是兜底结果：\n\n"
                     + "\n".join(review[:10])
-                    + "\n\n请在对应行点击“设置盒子”，手动调整中心与边长后再运行对接。",
+                    + "\n\n请在对应行点击“设置盒子”，手动调整中心与边长后再运行对接。"
                 )
+            warning_lines = []
+            for target in generated:
+                for note in payload.get("box_warnings", {}).get(target.stem, []):
+                    warning_lines.append(f"· {target.display_name}：{note}")
+            if warning_lines:
+                sections.append("盒子生成提示：\n\n" + "\n".join(warning_lines[:10]))
+            if sections:
+                QMessageBox.information(self, "自动盒子提示", "\n\n".join(sections))
             elif not errors:
                 self.statusBar().showMessage("已为所有靶点生成并保存盒子。", 7000)
 

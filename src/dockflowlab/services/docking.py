@@ -97,11 +97,48 @@ def _write_meta(workspace: Workspace, result: DockingResult) -> None:
         "mode_key": result.mode_key,
         "mode_label": result.mode_label,
         "mode_supported": result.mode_supported,
+        "parameters": dict(result.parameters),
+        "box_center": list(result.box_center) if result.box_center else None,
+        "box_size": list(result.box_size) if result.box_size else None,
         "finished": datetime.now().astimezone().isoformat(timespec="seconds"),
     }
     tmp = path.with_suffix(".json.tmp")
     tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
     os.replace(tmp, path)
+
+
+def _run_parameters(options: DockingOptions, vina: VinaAdapter) -> dict[str, Any]:
+    """记录实际传给 Vina 的参数，而不是报告生成时的当前设置。"""
+    try:
+        version = str(vina.version or "")
+    except Exception:
+        version = ""
+    return {
+        "exhaustiveness": int(options.exhaustiveness),
+        "num_modes": int(options.num_modes),
+        "energy_range": float(options.energy_range),
+        "seed": int(options.seed),
+        "cpu": int(options.cpu),
+        "vina_version": version,
+    }
+
+
+def _stored_parameters(meta: dict[str, Any]) -> dict[str, Any]:
+    """只取已知字段，避免把旧的/损坏的 JSON 原样带进报告。"""
+    raw = meta.get("parameters")
+    if not isinstance(raw, dict):
+        return {}
+    keys = ("exhaustiveness", "num_modes", "energy_range", "seed", "cpu", "vina_version")
+    return {key: raw[key] for key in keys if raw.get(key) not in (None, "")}
+
+
+def _stored_point(value: Any) -> tuple[float, float, float] | None:
+    if not isinstance(value, (list, tuple)) or len(value) != 3:
+        return None
+    try:
+        return tuple(float(item) for item in value)  # type: ignore[return-value]
+    except (TypeError, ValueError):
+        return None
 
 
 def _target_pdb(workspace: Workspace, target: ProjectFile, obabel: OpenBabelAdapter) -> Path:
@@ -229,7 +266,12 @@ def dock_pair(
             result.skipped = True
             result.runtime_seconds = float(meta.get("runtime_seconds") or 0.0)
             result.box_source = str(meta.get("box_source") or box.source)
-            result.warnings = [str(item) for item in meta.get("warnings") or []] + warnings
+            # 旧结果沿用生成时的参数与盒子，不能用当前设置覆盖。
+            result.parameters = _stored_parameters(meta)
+            result.box_center = _stored_point(meta.get("box_center"))
+            result.box_size = _stored_point(meta.get("box_size"))
+            warnings = [str(item) for item in meta.get("warnings") or []] + warnings
+            result.warnings = warnings
             _ensure_complex_and_pymol(
                 workspace, target, ligand, output, complex_path, pml_path,
                 obabel, options, warnings,
@@ -248,6 +290,9 @@ def dock_pair(
     else:
         line_callback = None
 
+    result.parameters = _run_parameters(options, vina)
+    result.box_center = tuple(float(value) for value in box.center)  # type: ignore[assignment]
+    result.box_size = tuple(float(value) for value in box.size)  # type: ignore[assignment]
     started = time.perf_counter()
     try:
         run = vina.dock(
@@ -452,6 +497,9 @@ def collect_existing_results(workspace: Workspace) -> list[DockingResult]:
                     runtime_seconds=float(meta.get("runtime_seconds") or 0.0),
                     box_source=str(meta.get("box_source") or (box.source if box else "")),
                     warnings=[str(item) for item in meta.get("warnings") or []],
+                    parameters=_stored_parameters(meta),
+                    box_center=_stored_point(meta.get("box_center")),
+                    box_size=_stored_point(meta.get("box_size")),
                 )
             )
     return results

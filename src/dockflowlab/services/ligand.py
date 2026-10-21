@@ -394,6 +394,8 @@ def prepare_ligand(
 
     details = _molecule_details(mol, forcefield, ph_corrected, warnings)
     details["kind"] = kind
+    if options.ph_correction:
+        details["ph"] = float(options.ph)
     if details["rotatable_bonds"] > 20:
         warnings.append(
             f"可旋转键较多（{details['rotatable_bonds']} 个），Vina 的搜索空间与耗时会显著增加；"

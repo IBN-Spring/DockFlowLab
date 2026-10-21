@@ -166,6 +166,11 @@ class DockingResult:
     mode_key: str = ""
     mode_label: str = ""
     mode_supported: bool = True
+    # 本次计算实际使用的参数，用于报告复现与跨结果比较。
+    parameters: dict[str, Any] = field(default_factory=dict)
+    # 本次计算实际使用的搜索盒，便于在报告中核对搜索空间。
+    box_center: tuple[float, float, float] | None = None
+    box_size: tuple[float, float, float] | None = None
 
     @property
     def best_affinity(self) -> float | None:

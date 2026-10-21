@@ -82,11 +82,18 @@ def test_prepare_dock_analyze_and_report(prepared_workspace, tmp_path):
     assert meta["ok"] is True
     assert meta["runtime_seconds"] > 0
     assert meta["box_source"] == box.source
+    assert meta["parameters"]["exhaustiveness"] == 1
+    assert meta["parameters"]["seed"] == 7
+    assert meta["box_center"] == list(box.center)
+    assert meta["box_size"] == list(box.size)
 
     restored = collect_existing_results(prepared_workspace)
     assert len(restored) == 1
     assert restored[0].runtime_seconds > 0
     assert restored[0].box_source == box.source
+    assert restored[0].parameters["seed"] == 7
+    assert restored[0].box_center == box.center
+    assert restored[0].box_size == box.size
 
     bundle = analyze(prepared_workspace, restored)
     assert bundle.csv_path.is_file()

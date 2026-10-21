@@ -76,6 +76,98 @@ def _software_line() -> str:
     return " · ".join(parts)
 
 
+_PARAM_KEYS = ("exhaustiveness", "num_modes", "energy_range", "seed", "cpu", "vina_version")
+
+
+def _run_parameters_text(results: Sequence[DockingResult]) -> str:
+    """列出结果实际使用的参数，而不是报告生成时的当前设置。"""
+    successful = [item for item in results if item.ok and item.poses]
+    if not successful:
+        return "尚无成功结果。"
+    groups: dict[tuple[Any, ...], int] = {}
+    missing = 0
+    for item in successful:
+        parameters = item.parameters or {}
+        if parameters.get("exhaustiveness") in (None, ""):
+            missing += 1
+            continue
+        signature = tuple(parameters.get(key) for key in _PARAM_KEYS)
+        groups[signature] = groups.get(signature, 0) + 1
+    parts: list[str] = []
+    for signature, count in groups.items():
+        exhaustiveness, num_modes, energy_range, seed, cpu, version = signature
+        try:
+            text = (
+                f"exhaustiveness = {int(exhaustiveness)}，"
+                f"num_modes = {int(num_modes)}，"
+                f"energy_range = {float(energy_range):g} kcal/mol，"
+                f"seed = {int(seed)}，cpu = {int(cpu)}"
+                + ("（全部核心）" if int(cpu) == 0 else "")
+            )
+        except (TypeError, ValueError):
+            text = "参数记录不完整"
+        if version:
+            text += f"，{version}"
+        if len(groups) > 1 or count != len(successful):
+            text += f"（{count} 组）"
+        parts.append(text)
+    if missing:
+        parts.append(f"{missing} 组结果未记录运行参数（由旧版本生成）")
+    return "；".join(parts) or "未记录运行参数"
+
+
+def _box_detail(item: DockingResult) -> str:
+    if not item.box_center or not item.box_size:
+        return ""
+    try:
+        cx, cy, cz = (float(value) for value in item.box_center)
+        sx, sy, sz = (float(value) for value in item.box_size)
+    except (TypeError, ValueError):
+        return ""
+    return f"中心 ({cx:.1f}, {cy:.1f}, {cz:.1f}) · 尺寸 {sx:.1f} × {sy:.1f} × {sz:.1f} Å"
+
+
+def _prep_ph(workspace: Workspace) -> str:
+    """准备时实际使用的 pH；旧项目可能没有记录。"""
+    values: set[float] = set()
+    for entry in list(workspace.targets) + list(workspace.ligands):
+        details = entry.meta.get("prep_details")
+        if not isinstance(details, dict) or details.get("ph") is None:
+            continue
+        try:
+            values.add(round(float(details["ph"]), 2))
+        except (TypeError, ValueError):
+            continue
+    return "、".join(f"{value:g}" for value in sorted(values))
+
+
+def _entry_prep_warnings(entry: Any) -> list[str]:
+    raw = entry.meta.get("prep_warnings") or []
+    if isinstance(raw, str):
+        raw = [raw]
+    if not isinstance(raw, (list, tuple)):
+        return []
+    return [str(item).strip() for item in raw if str(item).strip()]
+
+
+def _prep_warnings(workspace: Workspace) -> list[str]:
+    """把准备阶段产生的科学提示汇总到报告，而不是只留在 project.json 里。"""
+    grouped: dict[str, list[str]] = {}
+    for entry in list(workspace.targets) + list(workspace.ligands):
+        for text in _entry_prep_warnings(entry):
+            names = grouped.setdefault(text, [])
+            if entry.display_name not in names:
+                names.append(entry.display_name)
+    messages: list[str] = []
+    for text, names in grouped.items():
+        if len(names) > 3:
+            label = "、".join(names[:3]) + f" 等 {len(names)} 个条目"
+        else:
+            label = "、".join(names)
+        messages.append(f"{label}（准备）：{text}")
+    return messages
+
+
 def _tiles(bundle: AnalysisBundle) -> str:
     results = bundle.results
     success = [item for item in results if item.ok and item.poses]
@@ -156,13 +248,17 @@ def _results_table(
             score = "—"
             runtime = "—"
             note = item.error or "未知错误"
+        box_cell = _e(BOX_LABELS.get(item.box_source, item.box_source or "自动"))
+        box_detail = _box_detail(item)
+        if box_detail:
+            box_cell += f'<br><span class="meta">{_e(box_detail)}</span>'
         rows.append(
             "<tr>"
             f"<td>{_e(target_labels.get(item.target, item.target))}</td>"
             f"<td>{_e(ligand_labels.get(item.ligand, item.ligand))}</td>"
             f"<td>{_e(item.mode_label or '—')}</td>"
             f'<td class="num">{_e(score)}</td>'
-            f"<td>{_e(BOX_LABELS.get(item.box_source, item.box_source or '自动'))}</td>"
+            f"<td>{box_cell}</td>"
             f'<td class="num">{_e(runtime)}</td>'
             f"<td>{status}</td>"
             f"<td>{_e(note)}</td>"
@@ -204,16 +300,20 @@ def _pose_table(
     more = ""
     if len(entries) > limit:
         more = f'<p class="meta">仅列出打分最低的 {limit} 个构象，共 {len(entries)} 个。完整数据见 analysis/binding_energies.csv。</p>'
+    note = (
+        '<p class="meta">RMSD 下限/上限是 Vina 输出的构象相似度估计'
+        "（相对打分最低的构象），不是与实验结构或共晶配体的 RMSD。</p>"
+    )
     return (
         '<div class="table-wrap"><table>'
         "<thead><tr><th>靶点</th><th>候选分子</th><th class='num'>构象</th>"
         "<th class='num'>打分 (kcal/mol)</th><th class='num'>RMSD 下限 (Å)</th>"
         "<th class='num'>RMSD 上限 (Å)</th></tr></thead>"
-        f"<tbody>{''.join(rows)}</tbody></table></div>{more}"
+        f"<tbody>{''.join(rows)}</tbody></table></div>{more}{note}"
     )
 
 
-def _methods(workspace: Workspace, results: Sequence[DockingResult], settings: AppSettings) -> str:
+def _methods(workspace: Workspace, results: Sequence[DockingResult]) -> str:
     box_sources = sorted({BOX_LABELS.get(item.box_source, item.box_source) for item in results if item.box_source})
     target_methods = sorted({
         str(entry.meta.get("prep_method"))
@@ -240,17 +340,24 @@ def _methods(workspace: Workspace, results: Sequence[DockingResult], settings: A
         if not item.mode_supported and item.mode_label
     })
     items = [
-        ("软件版本", _software_line()),
-        ("靶点准备", "；".join(target_methods) or "去除水/离子/添加剂，补全缺失残基与原子，按 pH 7.4 加氢，生成含 Gasteiger 电荷的刚性 PDBQT。"),
-        ("候选分子准备", "；".join(ligand_methods) or "保留最大有机片段，补氢并生成三维构象，能量最小化，按 pH 7.4 校正质子化，输出柔性 PDBQT。"),
-        ("对接类型", "；".join(mode_labels) or "根据结构类型自动识别"),
-        ("对接程序", "AutoDock Vina"),
-        ("搜索参数", f"exhaustiveness = {settings.exhaustiveness}，num_modes = {settings.num_modes}，energy_range = {settings.energy_range:g} kcal/mol，seed = {settings.seed}"),
-        ("盒子来源", "；".join(box_sources) or "自动"),
-        ("评分含义", "Vina 打分是经验评分函数的输出，单位为 kcal/mol；数值越低表示该程序预测的结合越有利。它不等同于实验测得的 ΔG 或 Kd，也不能单独证明结合模式；分数还会随 Vina 版本、评分函数（如 Vinardo）、受体/配体预处理、是否保留水/离子以及盒子范围而变化，因此不宜直接与其他软件的分数比较。小分子片段通常只能得到较小的负值。"),
-        ("类型适用性", "；".join(mode_notes) or "不同对接类型的分数不宜直接横向比较。"),
-        ("可重复性", "在相同软件版本、相同输入与相同参数下，固定 seed 的结果可重复；升级软件后可能出现细微差异。"),
+        ("报告生成环境", _software_line()),
+        ("靶点准备", "；".join(target_methods) or "去除水/离子/添加剂，补全缺失残基与原子，按设定 pH 加氢，生成含 Gasteiger 电荷的刚性 PDBQT。"),
+        ("候选分子准备", "；".join(ligand_methods) or "保留最大有机片段，补氢并生成三维构象，能量最小化，按设定 pH 校正质子化，输出柔性 PDBQT。"),
     ]
+    ph_value = _prep_ph(workspace)
+    if ph_value:
+        items.append(("质子化 pH", f"{ph_value}（准备时用于加氢或质子化校正）"))
+    items.extend(
+        [
+            ("对接类型", "；".join(mode_labels) or "根据结构类型自动识别"),
+            ("对接程序", "AutoDock Vina"),
+            ("对接运行参数", _run_parameters_text(results)),
+            ("盒子来源", "；".join(box_sources) or "自动"),
+            ("评分含义", "Vina 打分是经验评分函数的输出，单位为 kcal/mol；数值越低表示该程序预测的结合越有利。它不等同于实验测得的 ΔG 或 Kd，也不能单独证明结合模式；分数还会随 Vina 版本、评分函数（如 Vinardo）、受体/配体预处理、是否保留水/离子以及盒子范围而变化，因此不宜直接与其他软件的分数比较。同一分子的分数也会随盒子大小、exhaustiveness 与随机种子变化，比较时应确认这些条件一致。小分子片段通常只能得到较小的负值。"),
+            ("类型适用性", "；".join(mode_notes) or "不同对接类型的分数不宜直接横向比较。"),
+            ("可重复性", "在相同软件版本、相同输入与相同参数下，固定 seed 的结果可重复；参数与版本已按每次计算记录在上方。升级软件后可能出现细微差异。"),
+        ]
+    )
     if unsupported:
         items.append(
             (
@@ -264,6 +371,7 @@ def _methods(workspace: Workspace, results: Sequence[DockingResult], settings: A
 def _warnings(bundle: AnalysisBundle, workspace: Workspace) -> str:
     messages: list[str] = []
     messages.extend(bundle.warnings or [])
+    messages.extend(_prep_warnings(workspace))
     for result in bundle.results:
         messages.extend(result.warnings)
         if not result.ok and result.error:
@@ -282,6 +390,8 @@ def _warnings(bundle: AnalysisBundle, workspace: Workspace) -> str:
     extra = (
         "<li>对接结果是计算预测。要判断可靠性与生物学意义，应结合重复实验、"
         "已知共晶结构、阳性对照与文献证据。</li>"
+        "<li>本程序只运行 Vina 的构象搜索与打分，未进行重打分、MM/PBSA 或分子动力学验证。</li>"
+        "<li>结合位点由自动检测或用户指定，不等同于实验证实的结合位点；盒子范围会直接影响打分。</li>"
         "<li>本报告不提供结合自由能的实验换算，也不把打分差异直接解释为某种具体相互作用。</li>"
     )
     return (
@@ -297,8 +407,11 @@ def generate_report(
     output_path: str | Path | None = None,
     settings: AppSettings | None = None,
 ) -> Path:
-    """汇总结果、生成图表并写出单个 HTML 文件。"""
-    settings = settings or AppSettings.load()
+    """汇总结果、生成图表并写出单个 HTML 文件。
+
+    ``settings`` 保留在签名中以兼容调用方；报告中的参数取自结果自身记录，
+    不使用报告生成时的当前设置，避免用户改过设置后报告与实际计算不符。
+    """
     results = list(results) if results is not None else collect_existing_results(workspace)
     bundle = analyze(workspace, results)
 
@@ -327,7 +440,7 @@ def generate_report(
         "charts": _charts(bundle),
         "results": _results_table(bundle.results, target_labels, ligand_labels),
         "poses": _pose_table(bundle.results, target_labels, ligand_labels),
-        "methods": _methods(workspace, bundle.results, settings),
+        "methods": _methods(workspace, bundle.results),
         "warnings": _warnings(bundle, workspace),
         "version": _e(__version__),
         "app_name": _e(__app_name__),

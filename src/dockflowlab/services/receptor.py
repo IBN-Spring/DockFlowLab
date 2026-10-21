@@ -440,6 +440,7 @@ def prepare_receptor(
             outcome.details.setdefault(
                 "kind", kind if kind in {"protein", "peptide", "nucleic_acid"} else "macromolecule"
             )
+            outcome.details.setdefault("ph", options.ph)
             return outcome
 
         _notify(progress, "转换为受体 PDBQT（Gasteiger 电荷）…")

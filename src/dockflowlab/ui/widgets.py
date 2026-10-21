@@ -217,6 +217,21 @@ class EntityRow(QFrame):
         meta.setObjectName("Muted")
         meta.setWordWrap(True)
         text_box.addWidget(meta)
+        raw_warnings = entry.meta.get("prep_warnings") or []
+        if isinstance(raw_warnings, str):
+            raw_warnings = [raw_warnings]
+        if not isinstance(raw_warnings, (list, tuple)):
+            raw_warnings = []
+        prep_warnings = [str(item).strip() for item in raw_warnings if str(item).strip()]
+        if entry.status == "ready" and prep_warnings:
+            note = QLabel(
+                "注意：" + prep_warnings[0]
+                + (f"（另有 {len(prep_warnings) - 1} 条）" if len(prep_warnings) > 1 else "")
+            )
+            note.setObjectName("Warning")
+            note.setWordWrap(True)
+            note.setToolTip("\n".join(f"• {item}" for item in prep_warnings))
+            text_box.addWidget(note)
         layout.addLayout(text_box, 1)
 
         if entry.message and entry.status != "ready":

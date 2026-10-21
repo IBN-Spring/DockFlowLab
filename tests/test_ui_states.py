@@ -75,6 +75,26 @@ def test_dock_page_offers_cancel_while_busy(qt_app):
     assert page.cancel_button.isHidden()
 
 
+def test_entity_row_shows_prep_warnings(qt_app):
+    from PySide6.QtWidgets import QLabel
+
+    from dockflowlab.core.models import ProjectFile
+    from dockflowlab.ui.widgets import EntityRow
+
+    entry = ProjectFile(
+        kind="target",
+        stem="t",
+        display_name="靶点",
+        source="x.pdb",
+        status="ready",
+        meta={"prep_warnings": ["补全了 12 个缺失残基", "未使用 PDBFixer"]},
+    )
+    row = EntityRow(entry, show_actions=False)
+
+    texts = [label.text() for label in row.findChildren(QLabel)]
+    assert any("补全了 12 个缺失残基" in text and "另有 1 条" in text for text in texts)
+
+
 def test_render_abort_clears_busy_state(qt_app):
     from dockflowlab.ui.render_page import RenderPage
 
