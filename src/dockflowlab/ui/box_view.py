@@ -1171,12 +1171,15 @@ if _HAS_GL:
 
         box_changed = Signal(object)
 
-        def __init__(self, parent: QWidget | None = None) -> None:
+        def __init__(self, parent: QWidget | None = None, *, compact: bool = False) -> None:
             super().__init__(parent=parent)
             self.setBackgroundColor(_BACKGROUND)
             self.opts["fov"] = 45
             self.setCameraPosition(distance=120, elevation=22, azimuth=32)
-            self.setMinimumSize(460, 380)
+            if compact:
+                self.setMinimumSize(360, 300)
+            else:
+                self.setMinimumSize(460, 380)
             self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
             self.setMouseTracking(True)
 
@@ -1569,8 +1572,9 @@ class BoxViewer(QWidget):
     auto_requested = Signal()
     box_edited = Signal(object)
 
-    def __init__(self, parent: QWidget | None = None) -> None:
+    def __init__(self, parent: QWidget | None = None, *, compact: bool = False) -> None:
         super().__init__(parent)
+        self._compact = compact
         self._box: Box | None = None
         self._dirty = False
         self._syncing = False
@@ -1615,19 +1619,18 @@ class BoxViewer(QWidget):
         self._panel_scroll.setVerticalScrollBarPolicy(
             Qt.ScrollBarPolicy.ScrollBarAsNeeded
         )
-        self._panel_scroll.setMinimumWidth(310)
-        self._panel_scroll.setMaximumWidth(376)
+        self._panel_scroll.setMinimumWidth(270 if compact else 310)
+        self._panel_scroll.setMaximumWidth(330 if compact else 376)
         self._panel_scroll.setWidget(self._panel)
         self._layout.addWidget(self._panel_scroll, 0)
         self.start_view()
 
     # -- 视图创建与降级 ---------------------------------------------------
-    @staticmethod
-    def _make_loading_placeholder() -> QLabel:
+    def _make_loading_placeholder(self) -> QLabel:
         placeholder = QLabel("正在加载 3D 视图…")
         placeholder.setObjectName("Muted")
         placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        placeholder.setMinimumWidth(420)
+        placeholder.setMinimumWidth(300 if self._compact else 420)
         placeholder.setStyleSheet(
             "background:#0b1016; color:#aab4c4; border:1px solid #1d2836;"
             "border-radius:8px; padding:24px;"
@@ -1721,7 +1724,7 @@ class BoxViewer(QWidget):
         if not NGL_AVAILABLE or NglBoxView is None:
             return None
         try:
-            view = NglBoxView(self)
+            view = NglBoxView(self, compact=self._compact)
         except Exception as exc:  # pragma: no cover - WebEngine 运行时异常
             log.warning("无法创建 NGL 视图：%s", exc)
             return None
@@ -1733,15 +1736,14 @@ class BoxViewer(QWidget):
         if not _HAS_GL:
             return None
         try:
-            view = BoxGLView(self)
+            view = BoxGLView(self, compact=self._compact)
         except Exception as exc:  # pragma: no cover - OpenGL 驱动异常
             log.warning("无法创建 OpenGL 视图：%s", exc)
             return None
         view.box_changed.connect(self._on_view_box_changed)
         return view
 
-    @staticmethod
-    def _make_placeholder(reason: str) -> QLabel:
+    def _make_placeholder(self, reason: str) -> QLabel:
         placeholder = QLabel(
             "3D 视图不可用（NGL / OpenGL 初始化失败）。\n"
             "仍可在右侧输入盒子中心与边长，保存与对接不受影响。\n\n"
@@ -1751,7 +1753,7 @@ class BoxViewer(QWidget):
         placeholder.setWordWrap(True)
         placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
         placeholder.setFrameShape(QFrame.Shape.StyledPanel)
-        placeholder.setMinimumWidth(420)
+        placeholder.setMinimumWidth(300 if self._compact else 420)
         placeholder.setStyleSheet(
             "background:#0b1016; color:#aab4c4; border:1px solid #1d2836;"
             "border-radius:8px; padding:24px;"

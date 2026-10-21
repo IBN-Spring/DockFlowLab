@@ -7,7 +7,7 @@ import importlib.util
 from dataclasses import replace
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import QSize, Qt, QTimer
 from PySide6.QtWidgets import (
     QAbstractSpinBox,
     QComboBox,
@@ -46,6 +46,7 @@ from ..tools.vina import VinaAdapter
 from ..workspace import Workspace
 from . import theme
 from .box_view import COCRYSTAL_COLOR, SITE_COLOR, BoxViewer, atoms_to_pdb_text
+from .geometry import ScreenFittedDialog, available_geometry
 from .widgets import Card, StatusChip
 from .workers import Task
 
@@ -274,7 +275,7 @@ class DownloadDialog(QDialog):
         super().closeEvent(event)
 
 
-class BoxDialog(QDialog):
+class BoxDialog(ScreenFittedDialog):
     """3D 盒子编辑器：自动推荐为默认，拖动或输入可手动微调。"""
 
     def __init__(
@@ -298,9 +299,12 @@ class BoxDialog(QDialog):
         self._auto_pending = False
         self._content_loaded = False
         self.setWindowTitle(f"设置盒子 · {target.display_name}")
-        self.setMinimumSize(1000, 720)
-        self.resize(1160, 820)
         self.setModal(True)
+        # 竖屏或小尺寸屏幕上收紧 3D 视图与右侧面板的最小宽度。
+        area = available_geometry(parent)
+        self._compact = bool(
+            area is not None and (area.width() < 1000 or area.height() < 760)
+        )
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(20, 16, 20, 14)
@@ -385,7 +389,7 @@ class BoxDialog(QDialog):
         self.reference_card.setVisible(False)  # 洞察模式默认关闭，保持原有 3D 显示
         layout.addWidget(self.reference_card)
 
-        self.viewer = BoxViewer(self)
+        self.viewer = BoxViewer(self, compact=self._compact)
         self.viewer.auto_requested.connect(self._request_auto)
         self.viewer.box_edited.connect(self._update_box_fit)
         self.insight_button.toggled.connect(self._toggle_insight)
@@ -406,6 +410,11 @@ class BoxDialog(QDialog):
             self.viewer.set_box(self.box, mark_manual=self.box.source == "manual")
             self.viewer.focus_box()
             self._update_box_fit(self.box)
+
+        self.fit_to_screen(
+            preferred=QSize(1160, 820),
+            minimum=QSize(720, 560) if self._compact else QSize(1000, 720),
+        )
 
     def paintEvent(self, event) -> None:  # noqa: N802
         super().paintEvent(event)
@@ -681,7 +690,7 @@ class BoxDialog(QDialog):
         self.accept()
 
 
-class SettingsDialog(QDialog):
+class SettingsDialog(ScreenFittedDialog):
     def __init__(self, settings: AppSettings, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.original = settings
@@ -777,7 +786,10 @@ class SettingsDialog(QDialog):
         layout.addWidget(buttons)
         self._check_environment()
         hint = self.sizeHint()
-        self.resize(max(self.minimumWidth(), hint.width()), hint.height())
+        self.fit_to_screen(
+            preferred=QSize(max(620, hint.width()), hint.height()),
+            minimum=QSize(520, 420),
+        )
 
     def _browse_into(self, edit: QLineEdit) -> None:
         path, _ = QFileDialog.getOpenFileName(self, "选择可执行文件", edit.text() or str(Path.home()))

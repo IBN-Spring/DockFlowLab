@@ -55,6 +55,25 @@ def test_invalid_numbers_are_normalized():
     assert settings.box_max_size >= settings.box_min_size
 
 
+def test_window_geometry_roundtrip(tmp_path):
+    path = tmp_path / "settings.json"
+    AppSettings(window_geometry="QUJD", window_maximized=True).save(path)
+    loaded = AppSettings.load(path)
+    assert loaded.window_geometry == "QUJD"
+    assert loaded.window_maximized is True
+
+
+def test_invalid_window_geometry_is_dropped(tmp_path):
+    path = tmp_path / "settings.json"
+    path.write_text(
+        json.dumps({"window_geometry": 123, "window_maximized": "yes"}),
+        encoding="utf-8",
+    )
+    loaded = AppSettings.load(path)
+    assert loaded.window_geometry == ""
+    assert loaded.window_maximized is True
+
+
 def test_remember_and_forget_workspace(tmp_path):
     settings_path = tmp_path / "settings.json"
     settings = AppSettings()

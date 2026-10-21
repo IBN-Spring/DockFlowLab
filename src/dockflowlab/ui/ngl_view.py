@@ -268,7 +268,7 @@ class NglBoxView(QWidget):
 
     READY_TIMEOUT_MS = 20000
 
-    def __init__(self, parent: QWidget | None = None) -> None:
+    def __init__(self, parent: QWidget | None = None, *, compact: bool = False) -> None:
         if not NGL_AVAILABLE:  # pragma: no cover - 由调用方提前判断
             raise RuntimeError(NGL_UNAVAILABLE_REASON or "NGL 不可用")
         super().__init__(parent)
@@ -292,7 +292,11 @@ class NglBoxView(QWidget):
         self.web_view.setPage(_ViewerPage(self.web_view))
         self.web_view.page().setBackgroundColor(QColor("#0b0f16"))
         self.web_view.setContextMenuPolicy(Qt.ContextMenuPolicy.NoContextMenu)
-        self.web_view.setMinimumSize(460, 380)
+        # 竖屏/小屏幕下允许 3D 视图进一步收缩，避免撑破盒子对话框。
+        if compact:
+            self.web_view.setMinimumSize(360, 300)
+        else:
+            self.web_view.setMinimumSize(460, 380)
         layout.addWidget(self.web_view)
 
         self._bridge = _Bridge()

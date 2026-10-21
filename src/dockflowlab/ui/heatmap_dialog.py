@@ -6,12 +6,11 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import QSize, Qt, QTimer
 from PySide6.QtGui import QColor, QIcon, QLinearGradient, QPainter, QPixmap, QResizeEvent
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QComboBox,
-    QDialog,
     QFormLayout,
     QHBoxLayout,
     QHeaderView,
@@ -37,6 +36,7 @@ from ..services.analysis import (
     plot_heatmap,
 )
 from ..workspace import Workspace
+from .geometry import ScreenFittedDialog
 
 
 def _scheme_icon(steps: list[str]) -> QIcon:
@@ -86,7 +86,7 @@ class _Preview(QLabel):
         )
 
 
-class HeatmapDialog(QDialog):
+class HeatmapDialog(ScreenFittedDialog):
     """编辑热图文字与外观；接受后由主窗口写入项目设置。"""
 
     def __init__(
@@ -97,7 +97,6 @@ class HeatmapDialog(QDialog):
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle("编辑热图")
-        self.resize(1000, 780)
         self._workspace = workspace
         self._config = load_heatmap_config(workspace)
         self._matrix, self._default_targets, self._default_ligands = heatmap_data(
@@ -195,6 +194,11 @@ class HeatmapDialog(QDialog):
         self._preview_timer.setSingleShot(True)
         self._preview_timer.timeout.connect(self._update_preview)
         self._preview_timer.start(60)
+
+        self.fit_to_screen(
+            preferred=QSize(1000, 780),
+            minimum=QSize(680, 520),
+        )
 
     # ------------------------------------------------------------------
     # 数据

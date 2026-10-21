@@ -95,6 +95,44 @@ def test_entity_row_shows_prep_warnings(qt_app):
     assert any("补全了 12 个缺失残基" in text and "另有 1 条" in text for text in texts)
 
 
+def test_fit_window_respects_screen(qt_app):
+    from PySide6.QtCore import QSize
+    from PySide6.QtWidgets import QWidget
+
+    from dockflowlab.ui.geometry import available_geometry, fit_window_to_screen
+
+    widget = QWidget()
+    area = available_geometry(widget)
+    if area is None:
+        pytest.skip("没有可用的图形屏幕")
+
+    size = fit_window_to_screen(
+        widget, preferred=QSize(6000, 4000), minimum=QSize(3000, 2000)
+    )
+
+    assert size.width() <= area.width()
+    assert size.height() <= area.height()
+    assert widget.minimumWidth() <= area.width()
+    assert widget.minimumHeight() <= area.height()
+    widget.deleteLater()
+
+
+def test_window_geometry_roundtrip(qt_app):
+    from PySide6.QtWidgets import QWidget
+
+    from dockflowlab.ui.geometry import restore_window_geometry, save_window_geometry
+
+    widget = QWidget()
+    widget.resize(640, 480)
+    widget.move(120, 90)
+    saved = save_window_geometry(widget)
+
+    assert saved
+    assert restore_window_geometry(widget, saved) is True
+    assert restore_window_geometry(widget, "%%%") is False
+    widget.deleteLater()
+
+
 def test_render_abort_clears_busy_state(qt_app):
     from dockflowlab.ui.render_page import RenderPage
 

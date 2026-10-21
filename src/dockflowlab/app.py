@@ -46,7 +46,7 @@ def _install_exception_hook() -> None:
 def gui_main(argv: list[str] | None = None) -> int:
     """启动图形界面。"""
     multiprocessing.freeze_support()
-    from PySide6.QtCore import QLibraryInfo, QLocale, QTranslator
+    from PySide6.QtCore import QLibraryInfo, QLocale, Qt, QTranslator
     from PySide6.QtGui import QIcon
     from PySide6.QtWidgets import QApplication
 
@@ -57,6 +57,11 @@ def gui_main(argv: list[str] | None = None) -> int:
 
     setup_logging()
     _install_exception_hook()
+    # 混合 DPI 的多屏环境下保留非整数缩放比例，避免窗口尺寸被取整后
+    # 在竖屏或 125%/150% 缩放的屏幕上显得过大。
+    QApplication.setHighDpiScaleFactorRoundingPolicy(
+        Qt.HighDpiScaleFactorRoundingPolicy.PassThrough
+    )
     app = QApplication(argv if argv is not None else sys.argv)
     install_chinese_buttons(app)
     app.setApplicationName(__app_name__)

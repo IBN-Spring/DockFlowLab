@@ -86,6 +86,9 @@ class AppSettings:
     recent_workspaces: list[str] = field(default_factory=list)
     last_workspace: str = ""
     show_welcome: bool = True
+    # 上次关闭时的窗口位置/大小（saveGeometry 的 Base64 文本）与最大化状态。
+    window_geometry: str = ""
+    window_maximized: bool = False
 
     # 预处理
     keep_ligand_names: bool = True
@@ -125,10 +128,13 @@ class AppSettings:
             settings = cls(**kwargs)
         except TypeError:
             return cls()
-        # 防御损坏的最近项目列表
+        # 防御损坏的最近项目列表与窗口状态
         settings.recent_workspaces = [
             str(p) for p in settings.recent_workspaces if isinstance(p, str)
         ][:10]
+        if not isinstance(settings.window_geometry, str):
+            settings.window_geometry = ""
+        settings.window_maximized = bool(settings.window_maximized)
         return settings
 
     def save(self, path: Path | None = None) -> None:

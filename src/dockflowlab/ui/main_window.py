@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Callable
 
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QCloseEvent
+from PySide6.QtGui import QCloseEvent, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
     QDialog,
@@ -48,6 +48,15 @@ from ..version import __app_name_zh__, __version__
 from ..workspace import Workspace
 from . import theme
 from .dialogs import BoxDialog, DownloadDialog, SettingsDialog
+from .geometry import (
+    WINDOW_MINIMUM,
+    apply_screen_minimum,
+    center_window_on_screen,
+    clamp_window_to_screen,
+    fit_window_to_screen,
+    restore_window_geometry,
+    save_window_geometry,
+)
 from .heatmap_dialog import HeatmapDialog
 from .pages import (
     LIGAND_FILTER,
@@ -78,10 +87,10 @@ class MainWindow(QMainWindow):
         self._busy = False
         self._obabel: OpenBabelAdapter | None = None
         self._vina: VinaAdapter | None = None
+        self._screen_connected = False
+        self._shortcuts: list[QShortcut] = []
 
         self.setWindowTitle(f"{__app_name_zh__} · DockFlowLab")
-        self.resize(1280, 840)
-        self.setMinimumSize(1080, 720)
 
         central = QWidget()
         central.setObjectName("Root")
@@ -109,6 +118,8 @@ class MainWindow(QMainWindow):
         root_layout.addWidget(self.stack, 1)
         self.setCentralWidget(central)
 
+        self._restore_window_state()
+        self._install_shortcuts()
         self._connect_signals()
         self.welcome_page.set_recent(self.settings.recent_workspaces)
         self.prepare_page.ph_spin.setValue(self.settings.add_hydrogens_ph)
@@ -290,6 +301,85 @@ class MainWindow(QMainWindow):
         self.render_page.render_size_changed.connect(self._remember_render_size)
         self.render_page.label_scale_changed.connect(self._remember_label_scale)
         self.render_page.back_requested.connect(lambda: self._navigate(4))
+
+    # ------------------------------------------------------------------
+    # 窗口状态与快捷键
+    # ------------------------------------------------------------------
+    def _restore_window_state(self) -> None:
+        """按当前屏幕限制尺寸，再恢复上次关闭时的位置与最大化状态。"""
+        fit_window_to_screen(self, minimum=WINDOW_MINIMUM)
+        restored = restore_window_geometry(self, self.settings.window_geometry)
+        if not restored:
+            center_window_on_screen(self)
+        if self.settings.window_maximized:
+            self.setWindowState(self.windowState() | Qt.WindowState.WindowMaximized)
+
+    def _install_shortcuts(self) -> None:
+        bindings: list[tuple[str, Callable]] = [
+            ("Ctrl+O", self._choose_workspace),
+            ("Ctrl+,", self._open_settings),
+            ("Ctrl+R", self._refresh_current),
+            ("F5", self._refresh_current),
+            ("Ctrl+Return", self._run_from_shortcut),
+            ("Ctrl+Enter", self._run_from_shortcut),
+        ]
+        for index in range(6):
+            bindings.append((f"Ctrl+{index + 1}", lambda i=index: self._navigate(i)))
+        for sequence, slot in bindings:
+            shortcut = QShortcut(QKeySequence(sequence), self)
+            shortcut.activated.connect(slot)
+            self._shortcuts.append(shortcut)
+
+        self.dock_page.run_button.setToolTip("开始对接（Ctrl+Enter）")
+        self.results_page.refresh_button.setToolTip("重新扫描对接结果（Ctrl+R 或 F5）")
+        self.welcome_page.choose_button.setToolTip("打开工作目录（Ctrl+O）")
+        for index, button in enumerate(self.step_buttons):
+            button.setToolTip(f"{button.text().strip()}（Ctrl+{index + 1}）")
+
+    def _refresh_current(self) -> None:
+        """F5 / Ctrl+R：刷新当前页面看到的数据。"""
+        if self.workspace is None:
+            self.statusBar().showMessage("请先打开一个工作文件夹。", 4000)
+            return
+        if self._busy_notice():
+            return
+        index = self.stack.currentIndex()
+        if index == 4:
+            self._refresh_results()
+        elif index == 5:
+            self._refresh_render_page()
+            self.statusBar().showMessage("已刷新渲染页。", 4000)
+        else:
+            self._refresh_all()
+            self.statusBar().showMessage("已刷新。", 4000)
+
+    def _run_from_shortcut(self) -> None:
+        """Ctrl+Enter：在对接设置页直接开始，等价于点击主按钮。"""
+        if self.stack.currentIndex() != 3:
+            self.statusBar().showMessage("请先进入“设置对接”页面。", 4000)
+            return
+        if self._busy_notice():
+            return
+        if not self.dock_page.run_button.isEnabled():
+            self.statusBar().showMessage("请先准备靶点和候选分子。", 4000)
+            return
+        self.dock_page.run_button.click()
+
+    def showEvent(self, event) -> None:  # noqa: N802
+        super().showEvent(event)
+        if self._screen_connected:
+            return
+        handle = self.windowHandle()
+        if handle is not None:
+            handle.screenChanged.connect(self._screen_changed)
+            self._screen_connected = True
+
+    def _screen_changed(self, _screen=None) -> None:
+        # 拖到更小/更大屏幕时同步最小尺寸，避免窗口被卡在旧屏幕的尺寸上；
+        # 若当前大小超出新屏幕，则收缩到可见范围内。
+        apply_screen_minimum(self, WINDOW_MINIMUM)
+        if not self.isMaximized():
+            clamp_window_to_screen(self)
 
     # ------------------------------------------------------------------
     # 工作目录
@@ -1237,4 +1327,8 @@ class MainWindow(QMainWindow):
             )
             event.ignore()
             return
+        # 记住窗口位置与大小，下次启动时恢复到同一块屏幕。
+        self.settings.window_maximized = self.isMaximized()
+        self.settings.window_geometry = save_window_geometry(self)
+        self.settings.save()
         super().closeEvent(event)

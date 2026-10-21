@@ -5,10 +5,11 @@ from __future__ import annotations
 from pathlib import Path
 
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QPixmap
+from PySide6.QtGui import QKeySequence, QPixmap, QShortcut
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QAbstractSpinBox,
+    QApplication,
     QCheckBox,
     QComboBox,
     QDoubleSpinBox,
@@ -17,6 +18,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QHeaderView,
     QLabel,
+    QMenu,
     QPushButton,
     QScrollArea,
     QSizePolicy,
@@ -138,14 +140,14 @@ class WelcomePage(Page):
 
         buttons = QHBoxLayout()
         buttons.setSpacing(10)
-        choose = QPushButton("选择工作文件夹")
-        choose.setObjectName("Primary")
-        choose.setMinimumWidth(170)
-        choose.clicked.connect(self.choose_requested.emit)
+        self.choose_button = QPushButton("选择工作文件夹")
+        self.choose_button.setObjectName("Primary")
+        self.choose_button.setMinimumWidth(170)
+        self.choose_button.clicked.connect(self.choose_requested.emit)
         create = QPushButton("新建工作文件夹")
         create.setMinimumWidth(150)
         create.clicked.connect(self.create_requested.emit)
-        buttons.addWidget(choose)
+        buttons.addWidget(self.choose_button)
         buttons.addWidget(create)
         buttons.addStretch(1)
         hero_layout.addSpacing(8)
@@ -859,6 +861,12 @@ class ResultsPage(Page):
         self.table.setColumnWidth(7, 140)
         self.table.setMinimumHeight(120)
         self.table.setVisible(False)
+        self.table.setToolTip("选中行后按 Ctrl+C 或右键复制，可直接粘贴到 Excel")
+        self.table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.table.customContextMenuRequested.connect(self._show_table_menu)
+        self._copy_shortcut = QShortcut(QKeySequence.StandardKey.Copy, self.table)
+        self._copy_shortcut.setContext(Qt.ShortcutContext.WidgetShortcut)
+        self._copy_shortcut.activated.connect(self._copy_selected)
         self.table_card.add(self.table)
         self.mode_note = QLabel("")
         self.mode_note.setObjectName("Muted")
@@ -906,6 +914,37 @@ class ResultsPage(Page):
         self.folder_button.setEnabled(not busy)
         self.report_button.setEnabled(not busy and self._has_results)
         self.heatmap_button.setEnabled(not busy)
+
+    # -- 结果表：复制与右键菜单 ----------------------------------------
+    def _copy_selected(self) -> None:
+        """把选中行复制为制表符分隔文本，便于粘贴到 Excel。"""
+        rows = sorted({index.row() for index in self.table.selectedIndexes()})
+        if not rows:
+            return
+        headers = []
+        for column in range(self.table.columnCount() - 1):  # 最后一列是操作按钮
+            item = self.table.horizontalHeaderItem(column)
+            headers.append(item.text() if item is not None else "")
+        lines = ["\t".join(headers)]
+        for row in rows:
+            cells = []
+            for column in range(self.table.columnCount() - 1):
+                item = self.table.item(row, column)
+                cells.append(item.text() if item is not None else "")
+            lines.append("\t".join(cells))
+        QApplication.clipboard().setText("\n".join(lines))
+
+    def _show_table_menu(self, pos) -> None:
+        index = self.table.indexAt(pos)
+        selected_rows = {item.row() for item in self.table.selectedIndexes()}
+        if index.isValid() and index.row() not in selected_rows:
+            self.table.clearSelection()
+            self.table.selectRow(index.row())
+        menu = QMenu(self)
+        copy_action = menu.addAction("复制选中行")
+        copy_action.setEnabled(bool(self.table.selectedIndexes()))
+        copy_action.triggered.connect(self._copy_selected)
+        menu.exec(self.table.viewport().mapToGlobal(pos))
 
     def start_running(self) -> None:
         self.log_panel.setVisible(True)
