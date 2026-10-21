@@ -59,5 +59,8 @@ if os.name != "nt":
         for _directory in (_BASE, _OPENBABEL_BIN):
             _prepend_env(_variable, _directory)
 
+# 3D 盒子视图使用 pyqtgraph；固定 Qt 绑定，避免它探测到未打包的 PyQt5/PyQt6
+os.environ.setdefault("PYQTGRAPH_QT_LIB", "PySide6")
+
 # 图表只用于导出 PNG，不依赖 Qt 后端
 os.environ.setdefault("MPLBACKEND", "Agg")

@@ -3,43 +3,48 @@
 from __future__ import annotations
 
 import importlib.util
+import shutil
 from dataclasses import replace
 from pathlib import Path
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
     QAbstractSpinBox,
     QComboBox,
     QDialog,
     QDialogButtonBox,
-    QDoubleSpinBox,
     QFileDialog,
     QFormLayout,
     QFrame,
-    QGridLayout,
     QHBoxLayout,
     QLabel,
     QLineEdit,
     QMessageBox,
     QPushButton,
-    QRadioButton,
     QSpinBox,
     QVBoxLayout,
     QWidget,
 )
 
 from ..config import AppSettings
+from ..core import pdbio
 from ..core.models import KIND_LIGAND, KIND_TARGET, Box, DownloadResult, ProjectFile
 from ..errors import DockFlowError
+from ..logging_setup import get_logger
 from ..services import modes
 from ..services.boxes import suggest_box, validate_manual_box
 from ..services.download import DownloadClient
+from ..services.pymol import open_in_pymol, write_box_pml
 from ..tools.obabel import OpenBabelAdapter
+from ..tools.runtime import ascii_temp_root
 from ..tools.vina import VinaAdapter
 from ..workspace import Workspace
 from . import theme
+from .box_view import BoxViewer
 from .widgets import Card, StatusChip
 from .workers import Task
+
+log = get_logger("box_dialog")
 
 
 def _plain_number(spin: QAbstractSpinBox) -> QAbstractSpinBox:
@@ -227,6 +232,8 @@ class DownloadDialog(QDialog):
 
 
 class BoxDialog(QDialog):
+    """3D 盒子编辑器：自动推荐为默认，拖动或输入可手动微调。"""
+
     def __init__(
         self,
         workspace: Workspace,
@@ -244,86 +251,66 @@ class BoxDialog(QDialog):
         self.box: Box | None = workspace.load_box(target.stem)
         self.auto_box: Box | None = None
         self.auto_warnings: list[str] = []
+        self._auto_pending = False
         self.setWindowTitle(f"设置盒子 · {target.display_name}")
-        self.setMinimumWidth(600)
+        self.setMinimumSize(1000, 680)
+        self.resize(1160, 780)
         self.setModal(True)
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(22, 20, 22, 18)
-        layout.setSpacing(12)
+        layout.setContentsMargins(20, 16, 20, 14)
+        layout.setSpacing(10)
         title = QLabel(f"搜索盒子 · {target.display_name}")
         title.setStyleSheet("font-size: 20px; font-weight: 700;")
-        intro = QLabel("盒子越小，搜索越集中、越快；但太小可能错过真实结合位置。")
+        intro = QLabel(
+            "盒子越小，搜索越集中、越快；但太小可能错过真实结合位置。"
+            "可直接拖动盒子调整，或在右侧精确输入坐标。"
+        )
         intro.setObjectName("CardHint")
         intro.setWordWrap(True)
         layout.addWidget(title)
         layout.addWidget(intro)
 
-        self.auto_radio = QRadioButton("自动推荐（几何口袋检测，共晶配体 / 已知位点校验兜底）")
-        self.manual_radio = QRadioButton("手动输入中心与边长")
-        group = QVBoxLayout()
-        group.setSpacing(6)
-        group.addWidget(self.auto_radio)
-        group.addWidget(self.manual_radio)
-        layout.addLayout(group)
-
         self.auto_card = QFrame()
         self.auto_card.setObjectName("Tile")
         auto_layout = QVBoxLayout(self.auto_card)
-        auto_layout.setContentsMargins(14, 12, 14, 12)
+        auto_layout.setContentsMargins(14, 10, 14, 10)
+        auto_layout.setSpacing(6)
+        auto_head = QHBoxLayout()
+        auto_title = QLabel("自动推荐")
+        auto_title.setStyleSheet("font-weight: 700;")
+        auto_head.addWidget(auto_title)
+        auto_head.addStretch(1)
+        self.use_auto_button = QPushButton("使用推荐盒子")
+        self.use_auto_button.setObjectName("Small")
+        self.use_auto_button.setEnabled(False)
+        self.use_auto_button.clicked.connect(self._use_auto)
+        self.recalc_button = QPushButton("重新计算")
+        self.recalc_button.setObjectName("Small")
+        self.recalc_button.clicked.connect(self._request_auto)
+        auto_head.addWidget(self.use_auto_button)
+        auto_head.addWidget(self.recalc_button)
+        auto_layout.addLayout(auto_head)
         self.auto_summary = QLabel("正在计算推荐位置…")
         self.auto_summary.setWordWrap(True)
         self.auto_warning = QLabel("")
         self.auto_warning.setObjectName("Muted")
         self.auto_warning.setWordWrap(True)
-        recalc = QPushButton("重新计算推荐")
-        recalc.setObjectName("Small")
-        recalc.clicked.connect(self._compute_auto)
         auto_layout.addWidget(self.auto_summary)
         auto_layout.addWidget(self.auto_warning)
-        auto_layout.addWidget(recalc, alignment=Qt.AlignmentFlag.AlignLeft)
         layout.addWidget(self.auto_card)
 
-        self.manual_card = QFrame()
-        self.manual_card.setObjectName("Tile")
-        manual_layout = QGridLayout(self.manual_card)
-        manual_layout.setContentsMargins(14, 12, 14, 12)
-        manual_layout.setHorizontalSpacing(10)
-        manual_layout.setVerticalSpacing(8)
-        manual_layout.addWidget(QLabel("中心 X / Y / Z (Å)"), 0, 0)
-        center_row = QHBoxLayout()
-        self.center_inputs = []
-        for _ in range(3):
-            spin = QDoubleSpinBox()
-            spin.setRange(-10000, 10000)
-            spin.setDecimals(2)
-            spin.setSingleStep(0.5)
-            spin.setMinimumWidth(86)
-            _plain_number(spin)
-            self.center_inputs.append(spin)
-            center_row.addWidget(spin)
-        manual_layout.addLayout(center_row, 0, 1)
-        manual_layout.addWidget(QLabel("边长 X / Y / Z (Å)"), 1, 0)
-        size_row = QHBoxLayout()
-        self.size_inputs = []
-        for _ in range(3):
-            spin = QDoubleSpinBox()
-            spin.setRange(5, 150)
-            spin.setDecimals(1)
-            spin.setSingleStep(1)
-            spin.setValue(22)
-            spin.setMinimumWidth(86)
-            _plain_number(spin)
-            self.size_inputs.append(spin)
-            size_row.addWidget(spin)
-        manual_layout.addLayout(size_row, 1, 1)
-        layout.addWidget(self.manual_card)
-        self.manual_card.setVisible(False)
-        self.auto_radio.toggled.connect(self._toggle_manual)
-        self.manual_radio.toggled.connect(self._toggle_manual)
-        self.auto_radio.setChecked(True)
+        self.viewer = BoxViewer(self)
+        self.viewer.auto_requested.connect(self._request_auto)
+        layout.addWidget(self.viewer, 1)
 
         buttons = QHBoxLayout()
+        self.pymol_button = QPushButton("在 PyMOL 中查看")
+        self.pymol_button.setToolTip(
+            "生成只含结构与盒子的 PyMOL 脚本，方便在 PyMOL 中旋转、放大检查。"
+        )
+        self.pymol_button.clicked.connect(self._open_pymol)
+        buttons.addWidget(self.pymol_button)
         buttons.addStretch(1)
         cancel = QPushButton("取消")
         cancel.clicked.connect(self.reject)
@@ -334,89 +321,170 @@ class BoxDialog(QDialog):
         buttons.addWidget(save)
         layout.addLayout(buttons)
 
-        if self.box is not None and self.box.source == "manual":
-            self._fill_manual(self.box)
-            self.manual_radio.setChecked(True)
-        self._compute_auto()
-        self._fit()
+        self._load_structure()
+        if self.box is not None:
+            self.viewer.set_box(self.box, mark_manual=self.box.source == "manual")
+            self.viewer.focus_box()
+        self._request_auto()
 
-    def _fit(self) -> None:
-        self.layout().invalidate()
-        self.layout().activate()
-        hint = self.sizeHint()
-        self.resize(max(self.minimumWidth(), hint.width()), hint.height())
+    # ------------------------------------------------------------------
+    # 结构
+    # ------------------------------------------------------------------
+    def _structure_path(self) -> Path | None:
+        prepared = self.workspace.prepared_target_pdb(self.target.stem)
+        if prepared.is_file():
+            return prepared
+        source = self.workspace.absolute(self.target.source)
+        if source.is_file() and pdbio.detect_format(source) in {"pdb", "ent", "pdbqt"}:
+            return source
+        return None
 
-    def _toggle_manual(self) -> None:
-        manual = self.manual_radio.isChecked()
-        self.manual_card.setVisible(manual)
-        self.auto_card.setVisible(not manual)
-        self._fit()
+    def _load_structure(self) -> None:
+        path = self._structure_path()
+        if path is None:
+            self.viewer.show_placeholder(
+                "还没有可显示的 PDB/PDBQT 结构。请先准备靶点，或在右侧手动输入盒子参数。"
+            )
+            return
+        try:
+            if not self.viewer.load_structure(path):
+                self.viewer.show_placeholder(
+                    "结构中没有可用于显示的原子，仍可在右侧手动输入盒子参数。"
+                )
+        except Exception as exc:  # pragma: no cover - 损坏文件的兜底
+            log.warning("读取 3D 结构失败：%s", exc)
+            self.viewer.show_placeholder(f"无法读取结构：{exc}\n仍可在右侧手动输入盒子参数。")
 
-    def _fill_manual(self, box: Box) -> None:
-        for spin, value in zip(self.center_inputs, box.center):
-            spin.setValue(float(value))
-        for spin, value in zip(self.size_inputs, box.size):
-            spin.setValue(float(value))
-
-    def _compute_auto(self) -> None:
+    # ------------------------------------------------------------------
+    # 自动推荐
+    # ------------------------------------------------------------------
+    def _request_auto(self) -> None:
+        if self._auto_pending:
+            return
+        self._auto_pending = True
+        self.recalc_button.setEnabled(False)
+        self.use_auto_button.setEnabled(False)
         self.auto_summary.setText("正在计算推荐位置…")
         self.auto_warning.setText("")
-        ligands = [
-            self.workspace.absolute(entry.prepared)
-            for entry in self.workspace.ligands
-            if entry.is_ready
-            and modes.pair_mode(self.target, entry, self.workspace).supported
-        ]
-        try:
-            box, warnings = suggest_box(
-                target_source=self.workspace.absolute(self.target.source),
-                target_prepared_pdb=self.workspace.prepared_target_pdb(self.target.stem),
-                ligand_paths=ligands,
-                settings=self.settings,
-                target_kind=modes.target_kind_for(self.target, self.workspace),
-                chains=self.target.meta.get("chains", []),
-                obabel=self.obabel,
-            )
-        except Exception as exc:
-            self.auto_summary.setText(f"自动推荐失败：{exc}\n请改用手动输入。")
-            self.auto_warnings = []
-            self.auto_radio.setChecked(False)
-            self.manual_radio.setChecked(True)
-            return
-        self.auto_box = box
-        self.auto_warnings = warnings
-        center = "，".join(f"{value:.2f}" for value in box.center)
-        size = " × ".join(f"{value:.1f}" for value in box.size)
-        summary = (
-            f"来源：{box.source_label}　中心：({center})　尺寸：{size} Å\n"
-            f"体积：{box.volume:,.0f} Å³"
-        )
-        if box.note:
-            summary += f"\n判断依据：{box.note}"
-        self.auto_summary.setText(summary)
-        self.auto_warning.setText("；".join(warnings) if warnings else "")
-        if self.box is None:
-            self._fill_manual(box)
+        # 让对话框先完成绘制，再执行可能较慢的口袋检测。
+        QTimer.singleShot(0, self._compute_auto)
 
+    def _compute_auto(self) -> None:
+        try:
+            ligands = [
+                self.workspace.absolute(entry.prepared)
+                for entry in self.workspace.ligands
+                if entry.is_ready
+                and modes.pair_mode(self.target, entry, self.workspace).supported
+            ]
+            try:
+                box, warnings = suggest_box(
+                    target_source=self.workspace.absolute(self.target.source),
+                    target_prepared_pdb=self.workspace.prepared_target_pdb(self.target.stem),
+                    ligand_paths=ligands,
+                    settings=self.settings,
+                    target_kind=modes.target_kind_for(self.target, self.workspace),
+                    chains=self.target.meta.get("chains", []),
+                    obabel=self.obabel,
+                )
+            except Exception as exc:
+                self.auto_box = None
+                self.auto_warnings = []
+                self.auto_summary.setText(
+                    f"自动推荐失败：{exc}\n请在右侧拖动或输入盒子参数。"
+                )
+                self.use_auto_button.setEnabled(False)
+                return
+
+            self.auto_box = box
+            self.auto_warnings = warnings
+            center = "，".join(f"{value:.2f}" for value in box.center)
+            size = " × ".join(f"{value:.1f}" for value in box.size)
+            summary = (
+                f"来源：{box.source_label}　中心：({center})　尺寸：{size} Å　"
+                f"体积：{box.volume:,.0f} Å³"
+            )
+            if box.note:
+                summary += f"\n判断依据：{box.note}"
+            self.auto_summary.setText(summary)
+            self.auto_warning.setText("；".join(warnings) if warnings else "")
+            self.use_auto_button.setEnabled(True)
+            if not self.viewer.has_box:
+                self.viewer.use_auto(box)
+                self.viewer.focus_box()
+        finally:
+            self._auto_pending = False
+            self.recalc_button.setEnabled(True)
+
+    def _use_auto(self) -> None:
+        if self.auto_box is None:
+            return
+        self.viewer.use_auto(self.auto_box)
+        self.viewer.focus_box()
+
+    # ------------------------------------------------------------------
+    # 保存 / PyMOL
+    # ------------------------------------------------------------------
     def _save(self) -> None:
-        if self.auto_radio.isChecked():
+        box = self.viewer.current_box()
+        if box is None:
             if self.auto_box is None:
-                QMessageBox.warning(self, "无法保存", "自动推荐没有成功，请改用手动输入或重新计算。")
+                QMessageBox.warning(
+                    self,
+                    "尚未设置盒子",
+                    "请等待自动推荐完成，或在右侧输入中心与边长。",
+                )
                 return
             box = self.auto_box
-        else:
+        if self.viewer.is_dirty or box.source == "manual":
             try:
-                box = validate_manual_box(
-                    [spin.value() for spin in self.center_inputs],
-                    [spin.value() for spin in self.size_inputs],
-                )
+                box = validate_manual_box(box.center, box.size)
             except DockFlowError as exc:
                 QMessageBox.warning(self, "盒子参数无效", str(exc))
                 return
         self.workspace.save_box(self.target.stem, box)
-        self.workspace.update_entry(self.target, box=self.workspace.relative(self.workspace.box_path(self.target.stem)))
+        self.workspace.update_entry(
+            self.target,
+            box=self.workspace.relative(self.workspace.box_path(self.target.stem)),
+        )
         self.box = box
         self.accept()
+
+    def _open_pymol(self) -> None:
+        box = self.viewer.current_box() or self.auto_box
+        if box is None:
+            QMessageBox.information(self, "尚未设置盒子", "请先等待自动推荐，或手动设置盒子。")
+            return
+        structure = self._structure_path()
+        if structure is None:
+            QMessageBox.information(
+                self, "无法预览", "还没有可用的 PDB/PDBQT 结构，请先准备靶点。"
+            )
+            return
+        try:
+            temp_dir = ascii_temp_root() / "pymol_preview"
+            temp_dir.mkdir(parents=True, exist_ok=True)
+            suffix = structure.suffix.lower() or ".pdb"
+            temp_structure = temp_dir / f"{self.target.stem}{suffix}"
+            shutil.copy2(structure, temp_structure)
+            pml = temp_dir / f"{self.target.stem}.pml"
+            write_box_pml(
+                temp_structure,
+                pml,
+                box,
+                title=f"{self.target.display_name} 搜索盒子",
+            )
+        except OSError as exc:
+            QMessageBox.warning(self, "无法生成预览", f"写入临时文件失败：{exc}")
+            return
+        ok, message = open_in_pymol(pml)
+        if not ok:
+            hint = (
+                f"{message}\n\n"
+                f"盒子脚本已保存到：\n{pml}\n"
+                "安装 PyMOL 后可直接打开该文件；也可以把可执行文件放到 PATH 中。"
+            )
+            QMessageBox.information(self, "无法打开 PyMOL", hint)
 
 
 class SettingsDialog(QDialog):

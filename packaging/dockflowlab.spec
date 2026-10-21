@@ -47,7 +47,7 @@ hiddenimports = []
 # ----------------------------------------------------------------------
 datas.append((str(RESOURCES), "dockflowlab/resources"))
 
-for package in ("rdkit", "meeko", "openmm", "pdbfixer"):
+for package in ("rdkit", "meeko", "openmm", "pdbfixer", "pyqtgraph", "OpenGL"):
     try:
         package_datas, package_binaries, package_hidden = collect_all(package)
     except Exception as exc:  # pragma: no cover - 构建期诊断
@@ -62,6 +62,8 @@ for distribution in (
     "openmm",
     "pdbfixer",
     "PySide6",
+    "pyqtgraph",
+    "PyOpenGL",
     "matplotlib",
     "pandas",
     "numpy",
@@ -317,6 +319,19 @@ hiddenimports += [
     "meeko.preparation",
     "meeko.writer",
     "meeko.rdkit_mol_create",
+    "pyqtgraph",
+    "pyqtgraph.opengl",
+    "pyqtgraph.opengl.items",
+    "pyqtgraph.opengl.items.GLMeshItem",
+    "pyqtgraph.opengl.items.GLLinePlotItem",
+    "pyqtgraph.opengl.items.GLScatterPlotItem",
+    "pyqtgraph.opengl.MeshData",
+    "OpenGL",
+    "OpenGL.GL",
+    "OpenGL.GLU",
+    "OpenGL.arrays",
+    "OpenGL.arrays.numpymodule",
+    "OpenGL.platform",
 ]
 
 # 让 PyInstaller 的依赖分析能看到 conda 的库目录

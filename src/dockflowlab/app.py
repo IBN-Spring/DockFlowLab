@@ -3,8 +3,13 @@
 from __future__ import annotations
 
 import multiprocessing
+import os
 import sys
 import traceback
+
+# 环境里可能同时装有 PyQt5/PyQt6；pyqtgraph 默认会优先选择它们。
+# 本项目统一使用 PySide6，必须在导入 UI 之前固定 Qt 绑定。
+os.environ.setdefault("PYQTGRAPH_QT_LIB", "PySide6")
 
 from .logging_setup import get_logger, setup_logging
 from .version import __app_name__, __app_name_zh__, __version__

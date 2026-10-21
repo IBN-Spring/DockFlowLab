@@ -158,6 +158,7 @@ xcrun stapler staple dist/DockFlowLab.app
 | PDBFixer / Meeko | `collect_all` 的 Python 数据文件 |
 | Vina | `resources/vina/windows/vina.exe`；macOS/Linux 构建时按需收集 |
 | Matplotlib | PyInstaller 官方 hook，图表使用 Agg 后端 |
+| pyqtgraph / PyOpenGL | `collect_all` + 显式 hidden imports；运行时固定 `PYQTGRAPH_QT_LIB=PySide6`，并排除 PyQt5/PyQt6 |
 
 conda 把 Boost、OpenBabel、OpenMM、MKL 的共享库放在 `Library/bin` / `Library/lib`
 （Windows）或 `lib/`（macOS/Linux），而不是 Python 包目录，因此 spec 在分析前
@@ -177,7 +178,8 @@ conda 版 SciPy 依赖 MKL。Meeko 只需要 `scipy.spatial.cKDTree`，spec 收�
 - 设置 `OPENMM_PLUGIN_DIR`；
 - 在 Windows 上把 `_internal` 与 `openbabel/bin` 加入 DLL 搜索目录和 `PATH`；
 - 在 macOS/Linux 上把同样的目录加入 `DYLD_LIBRARY_PATH` / `LD_LIBRARY_PATH`；
-- 默认 `MPLBACKEND=Agg`，避免图表依赖 Qt 后端。
+- 默认 `MPLBACKEND=Agg`，避免图表依赖 Qt 后端；
+- 设置 `PYQTGRAPH_QT_LIB=PySide6`，确保 3D 盒子视图不会误用 PyQt5/PyQt6。
 
 ## 常见打包问题
 
