@@ -389,6 +389,17 @@ a = Analysis(
     noarchive=False,
 )
 
+if IS_WINDOWS:
+    # PyInstaller 会把 openbabel-3.dll 再复制一份到 _internal 根目录。
+    # 两份同名 DLL 会让 Smina 选中根目录那份，而格式插件在
+    # openbabel/bin 下，于是报 "Unable to find OpenBabel plugins"。
+    # 只保留 openbabel/bin 中的一份，Python 扩展与引擎都从该目录加载。
+    a.binaries = [
+        entry
+        for entry in a.binaries
+        if str(entry[0]).replace("\\", "/").lower() != "openbabel-3.dll"
+    ]
+
 pyz = PYZ(a.pure)
 
 icon = RESOURCES / "app.ico"
@@ -428,8 +439,8 @@ if IS_MACOS:
         info_plist={
             "CFBundleDisplayName": APP_NAME,
             "CFBundleName": APP_NAME,
-            "CFBundleShortVersionString": "2.0.0",
-            "CFBundleVersion": "2.0.0",
+            "CFBundleShortVersionString": "2.1.0",
+            "CFBundleVersion": "2.1.0",
             "NSHighResolutionCapable": True,
             "LSMinimumSystemVersion": "11.0",
             "NSPrincipalClass": "NSApplication",

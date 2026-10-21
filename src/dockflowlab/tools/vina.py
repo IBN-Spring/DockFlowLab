@@ -103,33 +103,53 @@ def engine_env() -> dict[str, str]:
     随包附带的 QuickVina 2 / Smina 依赖 boost、OpenBabel 等 DLL。开发环境
     下它们在 conda 的 ``Library/bin``，打包后由 PyInstaller 放在 ``_MEIPASS``
     或程序根目录；这些目录不一定在用户 PATH 里，因此显式加进去。
+
+    OpenBabel 的插件必须和 ``openbabel-3.dll`` 在同一目录。安装包的
+    ``_MEIPASS`` 根目录另有一份 DLL，若它先被加载，Smina 就会找不到
+    ``openbabel/bin`` 下的格式插件，因此这里把 openbabel/bin 排在前面。
     """
     candidates: list[Path] = []
+
+    def add(path: Path) -> None:
+        if path.is_dir() and path not in candidates:
+            candidates.append(path)
+
+    roots = []
     meipass = getattr(sys, "_MEIPASS", None)
     if meipass:
-        candidates.append(Path(meipass))
-    candidates.append(app_dir())
+        roots.append(Path(meipass))
+    roots.append(app_dir())
+
+    babel_bin: Path | None = None
+    for root in roots:
+        candidate = root / "openbabel" / "bin"
+        if candidate.is_dir():
+            babel_bin = babel_bin or candidate
+            add(candidate)
+        add(root)
     if IS_WINDOWS:
-        candidates.extend(
-            [
-                Path(sys.prefix) / "Library" / "bin",
-                Path(sys.prefix) / "Library" / "lib",
-                Path(sys.executable).resolve().parent,
-            ]
-        )
+        for path in (
+            Path(sys.prefix) / "Library" / "bin",
+            Path(sys.prefix) / "Library" / "lib",
+            Path(sys.executable).resolve().parent,
+        ):
+            add(path)
     else:
-        candidates.extend(
-            [
-                Path(sys.prefix) / "lib",
-                Path(sys.executable).resolve().parent / "lib",
-            ]
-        )
+        for path in (
+            Path(sys.prefix) / "lib",
+            Path(sys.executable).resolve().parent / "lib",
+        ):
+            add(path)
     existing = os.environ.get("PATH", "")
     path = os.pathsep.join(
-        [str(item) for item in candidates if item.is_dir()]
-        + ([existing] if existing else [])
+        [str(item) for item in candidates] + ([existing] if existing else [])
     )
     env = {"PATH": path}
+    if babel_bin is not None:
+        env["BABEL_LIBDIR"] = str(babel_bin)
+        babel_data = babel_bin / "data"
+        if babel_data.is_dir():
+            env["BABEL_DATADIR"] = str(babel_data)
     if not IS_WINDOWS:
         for variable in ("LD_LIBRARY_PATH", "DYLD_LIBRARY_PATH"):
             current = os.environ.get(variable, "")
@@ -137,6 +157,8 @@ def engine_env() -> dict[str, str]:
                 [str(item) for item in candidates if item.is_dir()]
                 + ([current] if current else [])
             )
+    if os.environ.get("DOCKFLOWLAB_DEBUG_ENGINE") == "1":
+        log.info("引擎环境：%s", env)
     return env
 
 

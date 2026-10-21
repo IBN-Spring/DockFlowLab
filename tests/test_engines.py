@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import sys
 import threading
 import time
@@ -20,6 +21,7 @@ from dockflowlab.tools.vina import (
     ENGINE_SMINA,
     ENGINE_VINA,
     VinaRun,
+    engine_env,
     make_engine,
 )
 
@@ -282,3 +284,18 @@ def test_engine_settings_are_normalized(tmp_path):
     assert loaded.engine_fallback is True
     assert loaded.qvina2_path == ""
     assert loaded.smina_path == ""
+
+
+def test_engine_env_finds_openbabel_next_to_plugins(monkeypatch, tmp_path):
+    """安装包根目录也有一份 openbabel-3.dll，PATH 必须让插件目录先命中。"""
+    root = tmp_path / "_internal"
+    babel_bin = root / "openbabel" / "bin"
+    (babel_bin / "data").mkdir(parents=True)
+    monkeypatch.setattr(sys, "_MEIPASS", str(root), raising=False)
+
+    env = engine_env()
+    parts = env["PATH"].split(os.pathsep)
+    assert parts[0] == str(babel_bin)
+    assert parts[1] == str(root)
+    assert env["BABEL_LIBDIR"] == str(babel_bin)
+    assert env["BABEL_DATADIR"] == str(babel_bin / "data")

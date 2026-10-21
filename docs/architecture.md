@@ -204,6 +204,8 @@ OpenBabel DLL/格式插件/数据、Vina 与报告模板。运行时钩子
   网格、结构加载、PDBQT → PDB 文本转换、NGL 桥接参数校验与钳制、QtWebEngine
   路径探测、PyMOL 脚本的 ASCII 与中文路径处理、数值输入与自动推荐的状态同步。
 - `tests/test_analysis_report.py`：结果汇总与自包含报告。
+- `tests/test_engines.py`：三种引擎的命令构建、Smina 输出解析、卡死检测、
+  自动回退与打包环境的 OpenBabel 搜索路径。
 - `tests/test_download.py`：用 mock 网络验证格式回退。
 - `tests/test_cli.py`：命令行参数与失败路径。
 - `tests/test_integration.py`：真实准备 → 盒子 → Vina 对接 → 分析 → 报告（标记 slow）。

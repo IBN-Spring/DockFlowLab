@@ -208,6 +208,12 @@ PyInstaller 把入口脚本当作顶层 `__main__`。入口必须用绝对导入
 用控制台版运行并查看缺失模块；检查 `_internal` 中是否存在对应 DLL。Windows 上优先
 用 `Dumpbin /dependents` 或 `pefile` 查看依赖，再把所在目录加入 spec。
 
+**Smina 报 `Unable to find OpenBabel plugins`**
+确认 `_internal/openbabel/bin` 中同时存在 `openbabel-3.dll`、`formats_*.obf`
+与 `plugin_*.obf`，且 `_internal` 根目录没有第二份 `openbabel-3.dll`。同名
+DLL 会让 Smina 选中根目录那份，从而在错误的目录里找插件；spec 已删除根目录
+的重复副本。运行时钩子也会把 `openbabel/bin` 放在 PATH 与 DLL 搜索目录前面。
+
 **Meeko 导入失败，回退到 OpenBabel**
 确认 `scipy` 未被 `excludes` 排除，且 `mkl_rt.2.dll` 在 `_internal` 中。回退本身
 是可用路径，但会缺少 RDKit 力场优化与 Meeko 的原子类型细节。

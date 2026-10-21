@@ -49,7 +49,9 @@ _OPENMM_PLUGINS = _BASE / "openmm_plugins"
 if _OPENMM_PLUGINS.is_dir():
     os.environ["OPENMM_PLUGIN_DIR"] = str(_OPENMM_PLUGINS)
 
-for _directory in (_BASE, _OPENBABEL_BIN):
+# OpenBabel 的 DLL 与格式插件必须同目录。_BASE 下也有一份 openbabel-3.dll，
+# 若它先于 openbabel/bin 被加载，Smina 会找不到插件。
+for _directory in (_OPENBABEL_BIN, _BASE):
     _prepend_path(_directory)
 
 # macOS / Linux 的 dylib、so 需要动态加载器路径；BABEL_LIBDIR 本身不参与
