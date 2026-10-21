@@ -8,6 +8,7 @@ from typing import Any, Callable
 
 from PySide6.QtCore import QThread, Signal
 
+from ..errors import CancelledError, DownloadCancelled
 from ..logging_setup import get_logger
 
 log = get_logger("ui.worker")
@@ -31,6 +32,10 @@ class Task(QThread):
     def run(self) -> None:  # noqa: D401
         try:
             result = self._fn(self._emit_progress, self.cancel_event, self.line.emit)
+        except (CancelledError, DownloadCancelled) as exc:
+            # 用户主动取消不是故障，不要把堆栈写进日志。
+            log.info("后台任务已取消")
+            self.failed.emit(str(exc) or "已取消")
         except Exception as exc:
             log.exception("后台任务失败：%s", exc)
             self.failed.emit(str(exc) or exc.__class__.__name__)

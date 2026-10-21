@@ -41,6 +41,9 @@ class DockingOptions:
     skip_existing: bool = True
     make_complex: bool = True
     make_pymol: bool = True
+    # 单组对接的兜底超时。正常计算通常只需几分钟；设置上限是为了避免
+    # 外部进程卡死时任务无限期挂起（用户仍然可以随时手动取消）。
+    timeout_seconds: float | None = 6 * 3600.0
 
     @classmethod
     def from_settings(cls, settings: AppSettings) -> "DockingOptions":
@@ -257,6 +260,7 @@ def dock_pair(
             energy_range=options.energy_range,
             seed=options.seed,
             cpu=options.cpu,
+            timeout=options.timeout_seconds,
             log_path=log_path,
             on_line=line_callback,
             cancel=cancel,
@@ -325,7 +329,8 @@ def run_batch(
     for index, (target, ligand) in enumerate(pairs, start=1):
         if cancel is not None and cancel.is_set():
             break
-        _notify(progress, index, total, f"[{index}/{total}] {target.display_name} + {ligand.display_name}")
+        # 只在每组完成后推进进度，避免刚开始就显示 100%。
+        _notify(progress, index - 1, total, f"[{index}/{total}] {target.display_name} + {ligand.display_name}")
         mode = modes.pair_mode(target, ligand, workspace)
         if not mode.supported:
             results.append(

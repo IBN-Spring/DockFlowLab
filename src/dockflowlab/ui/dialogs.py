@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QMessageBox,
+    QProgressBar,
     QPushButton,
     QSpinBox,
     QVBoxLayout,
@@ -83,6 +84,8 @@ class DownloadDialog(QDialog):
         self.settings = settings
         self.result: DownloadResult | None = None
         self._task: Task | None = None
+        self._cancel_requested = False
+        self._closing = False
         noun = "靶点结构" if kind == KIND_TARGET else "候选分子"
         self.setWindowTitle(f"下载{noun}")
         self.setMinimumWidth(560)
@@ -141,6 +144,12 @@ class DownloadDialog(QDialog):
         self.status.setObjectName("Muted")
         self.status.setWordWrap(True)
         layout.addWidget(self.status)
+        # 网络请求期间显示不确定进度条，明确告诉用户程序仍在工作。
+        self.progress = QProgressBar()
+        self.progress.setRange(0, 0)
+        self.progress.setTextVisible(False)
+        self.progress.setVisible(False)
+        layout.addWidget(self.progress)
 
         buttons = QHBoxLayout()
         buttons.addStretch(1)
@@ -184,20 +193,31 @@ class DownloadDialog(QDialog):
             "chembl": client.chembl,
         }[source]
         self.primary_button.setEnabled(False)
-        self.cancel_button.setEnabled(False)
+        # 取消按钮保持可用：网络卡住时用户至少能发出取消请求并得到反馈。
+        self.cancel_button.setEnabled(True)
+        self._cancel_requested = False
+        self._closing = False
         self.status.setText("正在连接数据库并下载…")
         self.preview.setVisible(False)
-        self._task = Task(lambda progress, cancel, line: download(query), self)
+        self.progress.setVisible(True)
+        self._task = Task(
+            lambda progress, cancel, line: download(query, cancel=cancel), self
+        )
         self._task.done.connect(self._download_done)
         self._task.failed.connect(self._download_failed)
         self._task.finished.connect(self._task_finished)
         self._task.start()
 
     def _task_finished(self) -> None:
+        self.progress.setVisible(False)
+        if self._closing:
+            return  # finished 已连接到 reject，窗口随后关闭
         self.primary_button.setEnabled(True)
         self.cancel_button.setEnabled(True)
 
     def _download_done(self, result: DownloadResult) -> None:
+        if self._cancel_requested:
+            return
         self.result = result
         self.status.setText("下载完成。确认无误后点击“添加到项目”。")
         self.preview_title.setText(result.display_name)
@@ -217,19 +237,38 @@ class DownloadDialog(QDialog):
         self._fit()
 
     def _download_failed(self, message: str) -> None:
+        if self._cancel_requested or message.strip() == "已取消下载。":
+            self.status.setText("已取消下载。")
+            self.preview.setVisible(False)
+            return
         self.status.setText(f"下载失败：{message}")
         self.preview.setVisible(False)
 
+    def _request_cancel(self) -> None:
+        """请求取消并给出明确提示；已发出的请求会在返回后自动关闭窗口。"""
+        self._cancel_requested = True
+        if self._task is not None:
+            self._task.request_cancel()
+        self.status.setText("正在取消下载，当前请求返回后窗口会自动关闭…")
+        self.primary_button.setEnabled(False)
+        self.cancel_button.setEnabled(False)
+
+    def _cancel_and_close(self) -> None:
+        self._request_cancel()
+        if self._task is not None and not self._closing:
+            # 后台线程还没结束，等它退出后再关闭，避免销毁仍在运行的页面。
+            self._closing = True
+            self._task.finished.connect(self.reject)
+
     def reject(self) -> None:
         if self._task is not None and self._task.isRunning():
-            self._task.request_cancel()
-            self.status.setText("下载请求已发出，完成后窗口将关闭。")
-            self._task.finished.connect(self.reject)
+            self._cancel_and_close()
             return
         super().reject()
 
     def closeEvent(self, event) -> None:  # noqa: N802
         if self._task is not None and self._task.isRunning():
+            self._cancel_and_close()
             event.ignore()
             return
         super().closeEvent(event)

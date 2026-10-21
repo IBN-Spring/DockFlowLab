@@ -232,9 +232,11 @@ def prepare_all(
         if cancel is not None and cancel.is_set():
             report.cancelled = True
             break
-        _notify(progress, index, report.total, f"[{index}/{report.total}] {entry.display_name}")
+        # 进度条只在条目真正完成后前进，否则单项任务一开始就显示 100%。
+        _notify(progress, index - 1, report.total, f"[{index}/{report.total}] {entry.display_name}")
         if not force and entry.is_ready and workspace.absolute(entry.prepared).is_file():
             report.skipped += 1
+            _notify(progress, index, report.total, "")
             continue
         outcome = prepare_entry(
             workspace,
@@ -242,13 +244,14 @@ def prepare_all(
             settings,
             obabel=obabel,
             force=force,
-            message_callback=lambda message, i=index: _notify(progress, i, report.total, message),
+            message_callback=lambda message, i=index - 1: _notify(progress, i, report.total, message),
         )
         report.outcomes.append((entry, outcome))
         if outcome.ok:
             report.succeeded += 1
         else:
             report.failed += 1
+        _notify(progress, index, report.total, "")
         if cancel is not None and cancel.is_set():
             report.cancelled = True
             break

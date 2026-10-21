@@ -30,5 +30,9 @@ class DownloadError(DockFlowError):
     """在线下载失败。"""
 
 
+class DownloadCancelled(DownloadError):
+    """用户在下载过程中取消。"""
+
+
 class CancelledError(DockFlowError):
     """用户取消了任务。"""

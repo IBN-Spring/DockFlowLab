@@ -267,6 +267,7 @@ class MainWindow(QMainWindow):
 
         self.dock_page.box_requested.connect(self._edit_box)
         self.dock_page.auto_boxes_requested.connect(self._auto_boxes)
+        self.dock_page.cancel_requested.connect(self._request_cancel)
         self.dock_page.run_requested.connect(self._start_docking)
         self.dock_page.back_requested.connect(lambda: self._navigate(2))
         self.dock_page.change_workspace_requested.connect(lambda: self._navigate(0))
@@ -485,7 +486,7 @@ class MainWindow(QMainWindow):
         return self._vina
 
     def _start_prepare(self, force: bool) -> None:
-        if self.workspace is None or self._busy:
+        if self.workspace is None or self._busy_notice():
             return
         self.settings.add_hydrogens_ph = float(self.prepare_page.ph_spin.value())
         self.settings.save()
@@ -530,6 +531,7 @@ class MainWindow(QMainWindow):
 
     def _prepare_failed(self, message: str) -> None:
         self._set_busy(False)
+        self.prepare_page.refresh(self.workspace)
         self.prepare_page.finish_running(f"准备失败：{message}", False)
         QMessageBox.critical(self, "准备失败", message)
 
@@ -537,7 +539,7 @@ class MainWindow(QMainWindow):
     # 盒子
     # ------------------------------------------------------------------
     def _edit_box(self, stem: str) -> None:
-        if self.workspace is None:
+        if self.workspace is None or self._busy_notice():
             return
         target = self.workspace.get(KIND_TARGET, stem)
         if target is None:
@@ -554,7 +556,7 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage(f"盒子已保存：{target.display_name}", 6000)
 
     def _auto_boxes(self) -> None:
-        if self.workspace is None or self._busy:
+        if self.workspace is None or self._busy_notice():
             return
         workspace = self.workspace
         ready_targets = [entry for entry in workspace.targets if entry.status == STATUS_READY]
@@ -584,10 +586,13 @@ class MainWindow(QMainWindow):
 
         def job(progress, cancel, line):
             errors = []
+            generated = []
+            cancelled = False
             for index, target in enumerate(targets, start=1):
                 if cancel.is_set():
+                    cancelled = True
                     break
-                progress(index, len(targets), f"正在计算：{target.display_name}")
+                progress(index - 1, len(targets), f"正在计算：{target.display_name}")
                 try:
                     box, _ = suggest_box(
                         target_source=workspace.absolute(target.source),
@@ -602,21 +607,36 @@ class MainWindow(QMainWindow):
                     workspace.update_entry(
                         target, box=workspace.relative(workspace.box_path(target.stem))
                     )
+                    generated.append(target)
                 except Exception as exc:
                     errors.append(f"{target.display_name}：{exc}")
-            return errors
+            return {
+                "errors": errors,
+                "generated": generated,
+                "total": len(targets),
+                "cancelled": cancelled,
+            }
 
-        def done(errors) -> None:
+        def done(payload) -> None:
             QApplication.restoreOverrideCursor()
             self._set_busy(False)
             self.dock_page.refresh(workspace)
+            errors = payload["errors"]
+            generated = payload["generated"]
+            cancelled = payload["cancelled"]
             review = []
-            for target in targets:
+            for target in generated:
                 saved = workspace.load_box(target.stem)
                 if saved is not None and saved.needs_review:
                     review.append(f"· {target.display_name}（{saved.source_label}）")
             if errors:
                 QMessageBox.warning(self, "部分盒子未生成", "\n".join(errors[:10]))
+            if cancelled:
+                self.statusBar().showMessage(
+                    f"已取消：已为 {len(generated)}/{payload['total']} 个靶点生成盒子。",
+                    7000,
+                )
+                return
             if review:
                 QMessageBox.information(
                     self,
@@ -640,7 +660,7 @@ class MainWindow(QMainWindow):
     # 对接
     # ------------------------------------------------------------------
     def _start_docking(self, params: dict) -> None:
-        if self.workspace is None or self._busy:
+        if self.workspace is None or self._busy_notice():
             return
         workspace = self.workspace
         ready_targets = [entry for entry in workspace.targets if entry.status == STATUS_READY]
@@ -794,14 +814,23 @@ class MainWindow(QMainWindow):
                             mode_supported=mode.supported,
                         )
                     )
+            # 取消时 run_batch 会提前结束；只有确实还有组合没跑完才算取消，
+            # 避免用户在最后一组刚好结束时点取消却得到“已取消”的提示。
+            cancelled = cancel.is_set() and len(results) < len(pairs)
             report_path = ""
             report_error = ""
-            try:
-                report_path = str(generate_report(workspace, results, settings=settings))
-            except Exception as exc:
-                report_error = str(exc)
-                log.warning("自动生成报告失败：%s", exc, exc_info=True)
-            return {"results": results, "report": report_path, "report_error": report_error}
+            if not cancelled:
+                try:
+                    report_path = str(generate_report(workspace, results, settings=settings))
+                except Exception as exc:
+                    report_error = str(exc)
+                    log.warning("自动生成报告失败：%s", exc, exc_info=True)
+            return {
+                "results": results,
+                "report": report_path,
+                "report_error": report_error,
+                "cancelled": cancelled,
+            }
 
         self._run_task(job, self.results_page.log_panel, self._docking_done, self._docking_failed)
 
@@ -809,20 +838,27 @@ class MainWindow(QMainWindow):
         self._set_busy(False)
         workspace = self.workspace
         results = payload.get("results", [])
+        cancelled = bool(payload.get("cancelled"))
         success = [item for item in results if item.ok]
-        failed = len(results) - len(success)
-        message = f"对接完成：成功 {len(success)} 组，失败 {failed} 组。"
-        self.results_page.finish_running(message, failed == 0)
+        # 取消时未完成的组合会被 Vina 标记为“已取消”，不应再提示“部分对接失败”。
+        failed = len([item for item in results if not item.ok and item.error != "已取消"])
+        if cancelled:
+            message = f"对接已取消：完成 {len(success)} 组，其余组合未运行。"
+            self.results_page.finish_running(message, False)
+        else:
+            message = f"对接完成：成功 {len(success)} 组，失败 {failed} 组。"
+            self.results_page.finish_running(message, failed == 0)
         if workspace is not None:
-            self.results_page.show_results(workspace, results)
             self._refresh_all()
             self.results_page.show_results(workspace, results)
         report_path = payload.get("report", "")
-        if report_path:
+        if cancelled:
+            self.statusBar().showMessage(message, 8000)
+        elif report_path:
             self.statusBar().showMessage(f"对接完成，报告已生成：{report_path}", 10000)
         else:
             self.statusBar().showMessage(message, 8000)
-        if failed:
+        if failed and not cancelled:
             QMessageBox.warning(
                 self,
                 "部分对接失败",
@@ -839,14 +875,14 @@ class MainWindow(QMainWindow):
     # 结果与报告
     # ------------------------------------------------------------------
     def _refresh_results(self) -> None:
-        if self.workspace is None or self._busy:
+        if self.workspace is None or self._busy_notice():
             return
         results = collect_existing_results(self.workspace)
         self.results_page.show_results(self.workspace, results)
         self.statusBar().showMessage(f"已刷新：{len(results)} 组结果。", 5000)
 
     def _make_report(self) -> None:
-        if self.workspace is None or self._busy:
+        if self.workspace is None or self._busy_notice():
             return
         workspace = self.workspace
         settings = self.settings
@@ -877,7 +913,7 @@ class MainWindow(QMainWindow):
         self._run_task(job, None, done, failed)
 
     def _edit_heatmap(self) -> None:
-        if self.workspace is None or self._busy:
+        if self.workspace is None or self._busy_notice():
             return
         workspace = self.workspace
         results = collect_existing_results(workspace)
@@ -908,6 +944,7 @@ class MainWindow(QMainWindow):
 
     def _open_workspace_folder(self) -> None:
         if self.workspace is None:
+            self.statusBar().showMessage("请先打开一个工作文件夹。", 4000)
             return
         open_path(self.workspace.root)
 
@@ -1063,7 +1100,7 @@ class MainWindow(QMainWindow):
 
     def _render_failed(self, message: str) -> None:
         self._set_busy(False)
-        self.render_page.log_panel.finish(f"渲染失败：{message}", False)
+        self.render_page.abort(f"渲染失败：{message}")
         QMessageBox.critical(self, "渲染失败", message)
 
     # ------------------------------------------------------------------
@@ -1113,8 +1150,19 @@ class MainWindow(QMainWindow):
     def _set_busy(self, busy: bool) -> None:
         self._busy = busy
         self._update_sidebar()
+        self.dock_page.set_busy(busy)
+        self.results_page.set_busy(busy)
         if busy:
             self.statusBar().showMessage("任务运行中…")
+
+    def _busy_notice(self) -> bool:
+        """任务运行中时给出明确反馈，避免按钮点了没反应。"""
+        if not self._busy:
+            return False
+        self.statusBar().showMessage(
+            "任务运行中，请等待完成；需要中止时点击日志面板中的“取消”。", 5000
+        )
+        return True
 
     def _run_task(
         self,

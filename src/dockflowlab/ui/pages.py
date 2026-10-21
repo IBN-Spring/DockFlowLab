@@ -464,6 +464,7 @@ class PreparePage(Page):
         self.body.addStretch(1)
         self._ready_entries = 0
         self._total_entries = 0
+        self._can_continue = False
         self._update_action_state()
 
     def set_workspace(self, workspace: Workspace) -> None:
@@ -479,6 +480,7 @@ class PreparePage(Page):
             self.prepare_button.setEnabled(False)
             self.next_button.setEnabled(False)
             self._ready_entries = self._total_entries = 0
+            self._can_continue = False
             self._update_action_state()
             return
         targets = workspace.targets
@@ -495,7 +497,8 @@ class PreparePage(Page):
         self.prepare_button.setEnabled(bool(entries))
         ready_targets = [entry for entry in targets if entry.status == STATUS_READY]
         ready_ligands = [entry for entry in ligands if entry.status == STATUS_READY]
-        self.next_button.setEnabled(bool(ready_targets and ready_ligands))
+        self._can_continue = bool(ready_targets and ready_ligands)
+        self.next_button.setEnabled(self._can_continue)
         self._ready_entries = len(ready)
         self._total_entries = len(entries)
         self._update_action_state()
@@ -521,6 +524,8 @@ class PreparePage(Page):
     def finish_running(self, message: str, ok: bool) -> None:
         self.log_panel.finish(message, ok)
         self.prepare_button.setEnabled(True)
+        # 准备失败时工作区状态可能没有变化，但“下一步”不能一直保持禁用。
+        self.next_button.setEnabled(self._can_continue)
         self.ph_spin.setEnabled(True)
         self.force_check.setEnabled(True)
 
@@ -532,11 +537,16 @@ class DockPage(Page):
     box_requested = Signal(str)
     auto_boxes_requested = Signal()
     run_requested = Signal(dict)
+    cancel_requested = Signal()
     back_requested = Signal()
     change_workspace_requested = Signal()
 
     def __init__(self) -> None:
         super().__init__()
+        self._actions_enabled = True
+        self._has_workspace = False
+        self._run_ready = False
+        self._row_buttons: list[QPushButton] = []
         change = QPushButton("更换工作目录")
         change.setObjectName("Link")
         change.clicked.connect(self.change_workspace_requested.emit)
@@ -554,9 +564,14 @@ class DockPage(Page):
 
         self.box_card = Card("每个靶点的搜索盒子")
         box_tools = QHBoxLayout()
-        auto = QPushButton("为所有靶点自动生成盒子")
-        auto.clicked.connect(self.auto_boxes_requested.emit)
-        box_tools.addWidget(auto)
+        self.auto_button = QPushButton("为所有靶点自动生成盒子")
+        self.auto_button.clicked.connect(self.auto_boxes_requested.emit)
+        box_tools.addWidget(self.auto_button)
+        self.cancel_button = QPushButton("取消计算")
+        self.cancel_button.setObjectName("Small")
+        self.cancel_button.setVisible(False)
+        self.cancel_button.clicked.connect(self.cancel_requested.emit)
+        box_tools.addWidget(self.cancel_button)
         box_tools.addStretch(1)
         self.box_card.add_layout(box_tools)
         self.box_rows = QVBoxLayout()
@@ -637,16 +652,31 @@ class DockPage(Page):
             }
         )
 
+    def set_busy(self, busy: bool) -> None:
+        """任务运行期间禁用会启动新计算的按钮，并提供可见的取消入口。"""
+        self._actions_enabled = not busy
+        self.auto_button.setEnabled(not busy and self._has_workspace)
+        self.run_button.setEnabled(not busy and self._run_ready)
+        for button in self._row_buttons:
+            button.setEnabled(not busy)
+        self.cancel_button.setVisible(busy)
+
     def set_workspace(self, workspace: Workspace) -> None:
         self.refresh(workspace)
 
     def refresh(self, workspace: Workspace | None) -> None:
         _clear_layout(self.box_rows)
+        self._row_buttons = []
         if workspace is None:
+            self._has_workspace = False
+            self._run_ready = False
             self.box_empty.setVisible(True)
             self.summary_label.setText("—")
+            self.auto_button.setEnabled(False)
             self.run_button.setEnabled(False)
             return
+        self._has_workspace = True
+        self.auto_button.setEnabled(self._actions_enabled)
         ready_targets = [entry for entry in workspace.targets if entry.status == STATUS_READY]
         ready_ligands = [entry for entry in workspace.ligands if entry.status == STATUS_READY]
         supported = modes.supported_pairs(ready_targets, ready_ligands, workspace)
@@ -699,7 +729,8 @@ class DockPage(Page):
         else:
             text = "还没有可运行的组合。请先在“检查与准备”中准备至少一个靶点和一个候选分子。"
         self.summary_label.setText(text)
-        self.run_button.setEnabled(pair_count > 0)
+        self._run_ready = pair_count > 0
+        self.run_button.setEnabled(self._actions_enabled and self._run_ready)
 
     def _box_row(
         self,
@@ -746,7 +777,9 @@ class DockPage(Page):
         layout.addLayout(text_box, 1)
         edit = QPushButton("设置盒子")
         edit.setObjectName("Small")
+        edit.setEnabled(self._actions_enabled)
         edit.clicked.connect(lambda _=False, stem=target.stem: self.box_requested.emit(stem))
+        self._row_buttons.append(edit)
         layout.addWidget(edit)
         return row
 
@@ -767,10 +800,11 @@ class ResultsPage(Page):
 
     def __init__(self) -> None:
         super().__init__()
-        refresh = QPushButton("刷新结果")
-        refresh.clicked.connect(self.refresh_requested.emit)
-        folder = QPushButton("打开结果文件夹")
-        folder.clicked.connect(self.open_folder_requested.emit)
+        self._has_results = False
+        self.refresh_button = QPushButton("刷新结果")
+        self.refresh_button.clicked.connect(self.refresh_requested.emit)
+        self.folder_button = QPushButton("打开结果文件夹")
+        self.folder_button.clicked.connect(self.open_folder_requested.emit)
         self.report_button = QPushButton("生成结果报告")
         self.report_button.setObjectName("Primary")
         self.report_button.clicked.connect(self.report_requested.emit)
@@ -780,7 +814,7 @@ class ResultsPage(Page):
                 "对接结果",
                 "分数越低，表示该程序预测的结合越有利。不同对接类型的分数不宜直接比较；"
                 "请结合实验或文献证据判断。",
-                [refresh, folder, self.report_button],
+                [self.refresh_button, self.folder_button, self.report_button],
             )
         )
 
@@ -866,6 +900,13 @@ class ResultsPage(Page):
         self.body.addLayout(nav)
         self.body.addStretch(1)
 
+    def set_busy(self, busy: bool) -> None:
+        """任务运行期间禁用会启动新操作的按钮，避免点击后没有任何反应。"""
+        self.refresh_button.setEnabled(not busy)
+        self.folder_button.setEnabled(not busy)
+        self.report_button.setEnabled(not busy and self._has_results)
+        self.heatmap_button.setEnabled(not busy)
+
     def start_running(self) -> None:
         self.log_panel.setVisible(True)
         self.log_panel.start("正在运行对接…")
@@ -886,6 +927,7 @@ class ResultsPage(Page):
         self.show_results(workspace, [])
 
     def show_results(self, workspace: Workspace | None, results: list[DockingResult]) -> None:
+        self._has_results = bool(results)
         self.table.setRowCount(0)
         self.table.setVisible(False)
         if workspace is None:

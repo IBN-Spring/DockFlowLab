@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import threading
+
 import pytest
 
 from dockflowlab.config import AppSettings
 from dockflowlab.core.models import DownloadResult
-from dockflowlab.errors import DownloadError
+from dockflowlab.errors import DownloadCancelled, DownloadError
 from dockflowlab.services.download import DownloadClient, download_file
 
 
@@ -163,12 +165,49 @@ def test_chembl_search_and_download(monkeypatch):
     assert result.data.endswith(b"$$$$\n")
 
 
+def test_cancelled_download_stops_before_request(monkeypatch):
+    """取消后不再发起新的网络请求，并抛出可识别的取消异常。"""
+    client = DownloadClient(AppSettings())
+    cancel = threading.Event()
+    cancel.set()
+    calls = []
+
+    def fake_get(*args, **kwargs):
+        calls.append(args)
+        raise AssertionError("取消后不应再发起请求")
+
+    monkeypatch.setattr(client, "_get", fake_get)
+    with pytest.raises(DownloadCancelled):
+        client.pubchem("aspirin", cancel=cancel)
+    assert calls == []
+
+
+def test_cancel_between_download_stages(monkeypatch):
+    """第一个请求返回后如果已经取消，就不再继续后续请求。"""
+    client = DownloadClient(AppSettings())
+    cancel = threading.Event()
+    calls = []
+
+    def fake_get(url, *, params=None, accept="*/*", timeout=None):
+        calls.append(url)
+        if url.endswith("/cids/JSON"):
+            # 模拟用户在解析 CID 期间点击取消
+            cancel.set()
+            return FakeResponse(payload={"IdentifierList": {"CID": [2244]}})
+        raise AssertionError("取消后不应继续下载")
+
+    monkeypatch.setattr(client, "_get", fake_get)
+    with pytest.raises(DownloadCancelled):
+        client.pubchem("aspirin", cancel=cancel)
+    assert len(calls) == 1
+
+
 def test_download_file_writes(monkeypatch, tmp_path):
     client = DownloadClient(AppSettings())
     monkeypatch.setattr(
         DownloadClient,
         "pdb",
-        lambda self, query: DownloadResult(
+        lambda self, query, **kwargs: DownloadResult(
             data=b"ATOM\n", filename="x.pdb", display_name="X", meta={}
         ),
     )

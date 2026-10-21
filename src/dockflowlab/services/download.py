@@ -13,12 +13,13 @@
 from __future__ import annotations
 
 import re
+import threading
 from pathlib import Path
 from urllib.parse import quote
 
 from ..config import AppSettings
 from ..core.models import DownloadResult
-from ..errors import DownloadError
+from ..errors import DownloadCancelled, DownloadError
 from ..logging_setup import get_logger
 from ..version import __version__
 
@@ -41,6 +42,12 @@ _CID = re.compile(r"^\d+$")
 def _clean_text(value: object, fallback: str = "") -> str:
     text = str(value or "").strip()
     return text or fallback
+
+
+def _raise_if_cancelled(cancel: threading.Event | None) -> None:
+    """在每次网络请求前检查取消；已发出的请求等它自行返回。"""
+    if cancel is not None and cancel.is_set():
+        raise DownloadCancelled("已取消下载。")
 
 
 def _safe_filename(text: str, fallback: str) -> str:
@@ -122,20 +129,28 @@ class DownloadClient:
     # ------------------------------------------------------------------
     # PubChem
     # ------------------------------------------------------------------
-    def pubchem(self, query: str) -> DownloadResult:
+    def pubchem(
+        self, query: str, *, cancel: threading.Event | None = None
+    ) -> DownloadResult:
+        _raise_if_cancelled(cancel)
         query = _clean_text(query)
         if not query:
             raise DownloadError("请输入化合物名称、PubChem CID 或 SMILES。")
 
         cid = self._pubchem_cid(query)
+        _raise_if_cancelled(cancel)
         properties = self._pubchem_properties(cid)
+        _raise_if_cancelled(cancel)
         record_type = "3d"
         try:
             response = self._get(
                 f"{PUBCHEM}/compound/cid/{cid}/record/SDF",
                 params={"record_type": "3d"},
             )
+        except DownloadCancelled:
+            raise
         except DownloadError:
+            _raise_if_cancelled(cancel)
             record_type = "2d"
             response = self._get(
                 f"{PUBCHEM}/compound/cid/{cid}/record/SDF",
@@ -172,6 +187,8 @@ class DownloadClient:
         encoded = quote(query, safe="")
         try:
             response = self._get(f"{PUBCHEM}/compound/{namespace}/{encoded}/cids/JSON")
+        except DownloadCancelled:
+            raise
         except DownloadError as exc:
             if namespace == "smiles":
                 raise DownloadError(f"PubChem 无法识别该 SMILES：{query}") from exc
@@ -205,7 +222,10 @@ class DownloadClient:
     # ------------------------------------------------------------------
     # RCSB PDB
     # ------------------------------------------------------------------
-    def pdb(self, pdb_id: str) -> DownloadResult:
+    def pdb(
+        self, pdb_id: str, *, cancel: threading.Event | None = None
+    ) -> DownloadResult:
+        _raise_if_cancelled(cancel)
         pdb_id = _clean_text(pdb_id).upper()
         if not _PDB_ID.match(pdb_id):
             raise DownloadError("PDB ID 应为 4 位字符，例如 1BCI、6LU7。")
@@ -215,7 +235,10 @@ class DownloadClient:
             response = self._get(f"{RCSB_FILES}/{pdb_id}.pdb")
             data = response.content
             suffix = ".pdb"
+        except DownloadCancelled:
+            raise
         except DownloadError:
+            _raise_if_cancelled(cancel)
             response = self._get(f"{RCSB_FILES}/{pdb_id}.cif")
             data = response.content
             suffix = ".cif"
@@ -226,6 +249,7 @@ class DownloadClient:
         if suffix == ".cif" and b"_atom_site." not in data:
             raise DownloadError("下载的文件不是有效的 mmCIF 结构。")
 
+        _raise_if_cancelled(cancel)
         info = self._rcsb_metadata(pdb_id)
         title = _clean_text(info.get("title"), pdb_id)
         resolution = info.get("resolution")
@@ -259,7 +283,10 @@ class DownloadClient:
     # ------------------------------------------------------------------
     # AlphaFold
     # ------------------------------------------------------------------
-    def alphafold(self, accession: str) -> DownloadResult:
+    def alphafold(
+        self, accession: str, *, cancel: threading.Event | None = None
+    ) -> DownloadResult:
+        _raise_if_cancelled(cancel)
         accession = _clean_text(accession).upper()
         if not _UNIPROT.match(accession):
             raise DownloadError("请输入 UniProt 登录号，例如 P00533。")
@@ -279,14 +306,19 @@ class DownloadClient:
                 "sequence_start": first.get("uniprotStart"),
                 "sequence_end": first.get("uniprotEnd"),
             }
+        except DownloadCancelled:
+            raise
         except (DownloadError, ValueError, TypeError, KeyError, IndexError):
             pass
 
+        _raise_if_cancelled(cancel)
         if not pdb_url:
             pdb_url = f"{ALPHAFOLD_FILES}/AF-{accession}-F1-model_v4.pdb"
         try:
             response = self._get(pdb_url)
             data = response.content
+        except DownloadCancelled:
+            raise
         except DownloadError as exc:
             raise DownloadError(f"AlphaFold 没有与 {accession} 匹配的预测结构。") from exc
         if b"ATOM" not in data:
@@ -311,7 +343,10 @@ class DownloadClient:
     # ------------------------------------------------------------------
     # ChEMBL
     # ------------------------------------------------------------------
-    def chembl(self, query: str) -> DownloadResult:
+    def chembl(
+        self, query: str, *, cancel: threading.Event | None = None
+    ) -> DownloadResult:
+        _raise_if_cancelled(cancel)
         query = _clean_text(query)
         if not query:
             raise DownloadError("请输入 ChEMBL ID 或化合物名称。")
@@ -336,6 +371,7 @@ class DownloadClient:
             except (ValueError, TypeError, KeyError) as exc:
                 raise DownloadError("ChEMBL 搜索返回了无法解析的内容。") from exc
 
+        _raise_if_cancelled(cancel)
         response = self._get(f"{CHEMBL}/molecule/{quote(chembl_id, safe='')}", params={"format": "sdf"})
         data = response.content
         if b"V2000" not in data and b"V3000" not in data:
@@ -361,6 +397,8 @@ def download_file(
     query: str,
     destination: str | Path,
     settings: AppSettings | None = None,
+    *,
+    cancel: threading.Event | None = None,
 ) -> tuple[Path, DownloadResult]:
     """下载并写入目标路径，返回实际路径与下载信息。"""
     source = source.strip().lower()
@@ -374,7 +412,7 @@ def download_file(
     }
     if source not in dispatch:
         raise DownloadError(f"未知的下载来源：{source}")
-    result = dispatch[source](query)
+    result = dispatch[source](query, cancel=cancel)
 
     destination = Path(destination)
     if destination.is_dir():

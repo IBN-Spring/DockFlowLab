@@ -519,6 +519,12 @@ class RenderPage(Page):
         self.log_panel.start(f"正在渲染 {total} 张图片…")
         self._update_controls()
 
+    def abort(self, message: str) -> None:
+        """任务级失败时恢复控件，避免页面停留在永远忙碌的状态。"""
+        self._busy = False
+        self.log_panel.finish(message, False)
+        self._update_controls()
+
     def finish(self, results: list[dict]) -> None:
         self._busy = False
         success = [
