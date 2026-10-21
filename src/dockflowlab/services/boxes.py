@@ -113,7 +113,12 @@ def structure_coords(path: str | Path, obabel: OpenBabelAdapter | None = None) -
                     return [atom.coord for atom in atoms if not atom.is_hydrogen]
         raise InputError(f"读取 mmCIF 坐标需要 OpenBabel：{path.name}")
     if fmt in {"pdb", "pdbqt"}:
-        atoms = pdbio.parse_pdbqt_atoms(path) if fmt == "pdbqt" else pdbio.parse_atoms(path)
+        # 多模型 PDB 与多构象 PDBQT 只取第一个，与准备/对接使用的模型一致。
+        atoms = (
+            pdbio.parse_first_pose_atoms(path)
+            if fmt == "pdbqt"
+            else pdbio.parse_atoms(path, first_model=True)
+        )
         coords = [atom.coord for atom in atoms if not atom.is_hydrogen]
         if not coords:
             raise InputError(f"文件中没有可用的原子坐标：{path.name}")

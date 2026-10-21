@@ -152,7 +152,8 @@ def _prepare_with_pdbfixer(
     if options.keep_cofactors:
         warnings.append("已保留非水小分子辅因子；请确认它们确实应作为受体的一部分")
     elif options.remove_heterogens:
-        for atom in pdbio.parse_atoms(source):
+        # 与 PDBFixer 一致，只统计第一个模型，避免多模型结构重复计数。
+        for atom in pdbio.parse_atoms(source, first_model=True):
             if atom.record == "HETATM":
                 if atom.resname in pdbio.IONS:
                     removed_metals += 1
@@ -545,7 +546,7 @@ def inspect_target(path: str | Path, obabel: OpenBabelAdapter | None = None) -> 
     fmt = pdbio.detect_format(path)
     info: dict[str, Any] = {"path": str(path), "format": fmt, "ok": False}
     if fmt == "pdbqt":
-        atoms = pdbio.parse_pdbqt_atoms(path)
+        atoms = pdbio.parse_first_pose_atoms(path)
         heavy = [a for a in atoms if not a.is_hydrogen]
         kind, detail = pdbio.structure_kind(path)
         info.update(
@@ -595,7 +596,7 @@ def inspect_target(path: str | Path, obabel: OpenBabelAdapter | None = None) -> 
         info.update({"kind": "unknown", "note": f"不支持的格式：{fmt}"})
         return info
 
-    atoms = pdbio.parse_atoms(path)
+    atoms = pdbio.parse_atoms(path, first_model=True)
     heavy = [a for a in atoms if not a.is_hydrogen]
     kind, detail = pdbio.structure_kind(path)
     chains = pdbio.polymer_chains(path)

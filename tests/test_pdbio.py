@@ -62,6 +62,30 @@ def test_synthetic_protein_and_ligand_site(tmp_path):
     assert pdbio.infer_element("CA", "CA", "HETATM") == "Ca"
 
 
+def test_structure_kind_uses_first_model(tmp_path):
+    """多模型 PDB（如 NMR 结构）只按第一个模型统计，不能累加成蛋白质。"""
+    single = make_protein_pdb(tmp_path / "peptide.pdb", residues=10)
+    body = [
+        line
+        for line in single.read_text(encoding="utf-8").splitlines()
+        if line.startswith(("ATOM", "HETATM"))
+    ]
+    lines: list[str] = []
+    for model in (1, 2, 3):
+        lines.append(f"MODEL     {model:>4}")
+        lines.extend(body)
+        lines.append("ENDMDL")
+    lines.append("END")
+    path = tmp_path / "multi_model.pdb"
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    kind, detail = pdbio.structure_kind(path)
+    assert kind == "peptide"
+    assert "10 个氨基酸残基" in detail
+    assert pdbio.polymer_chains(path)[0]["residues"] == 10
+    assert pdbio.protein_chains(path)[0]["residues"] == 10
+
+
 def test_peptide_ligand_chain_is_grouped(tmp_path):
     """标准氨基酸 + 非标准残基组成的肽类配体应作为一个整体识别。"""
     path = make_peptide_ligand_pdb(tmp_path / "peptide_complex.pdb")

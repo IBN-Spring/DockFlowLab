@@ -591,6 +591,10 @@ def inspect_ligand(path: str | Path) -> dict[str, Any]:
             }
         )
     except Exception as exc:
-        atoms = pdbio.parse_pdbqt_atoms(path) if info["format"] == "pdbqt" else pdbio.parse_atoms(path)
+        atoms = (
+            pdbio.parse_first_pose_atoms(path)
+            if info["format"] == "pdbqt"
+            else pdbio.parse_atoms(path, first_model=True)
+        )
         info.update({"ok": False, "error": str(exc), "heavy_atoms": sum(1 for a in atoms if not a.is_hydrogen)})
     return info

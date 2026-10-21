@@ -466,7 +466,7 @@ def distance(a: Sequence[float], b: Sequence[float]) -> float:
 def protein_chains(path: str | Path) -> list[dict[str, object]]:
     counts: dict[str, int] = {}
     residues: dict[str, set[tuple[int, str]]] = {}
-    for atom in parse_atoms(path):
+    for atom in parse_atoms(path, first_model=True):
         if atom.resname not in AMINO_ACIDS:
             continue
         if atom.is_hydrogen:
@@ -483,7 +483,11 @@ def protein_chains(path: str | Path) -> list[dict[str, object]]:
 def polymer_chains(path: str | Path) -> list[dict[str, object]]:
     """返回蛋白/多肽/核酸链摘要，供界面展示与模式判断使用。"""
     fmt = detect_format(path)
-    atoms = parse_pdbqt_atoms(path) if fmt == "pdbqt" else parse_atoms(path)
+    atoms = (
+        parse_first_pose_atoms(path)
+        if fmt == "pdbqt"
+        else parse_atoms(path, first_model=True)
+    )
     chain_atoms: dict[str, int] = {}
     protein_residues: dict[str, set[tuple[int, str, str]]] = {}
     nucleic_residues: dict[str, set[tuple[int, str, str]]] = {}
@@ -574,9 +578,17 @@ def structure_kind(
     peptide_max_residues: int = 20,
     peptide_max_heavy_atoms: int = 500,
 ) -> tuple[str, str]:
-    """返回 (类别, 说明)。类别：protein / peptide / nucleic_acid / small_molecule / unknown。"""
+    """返回 (类别, 说明)。类别：protein / peptide / nucleic_acid / small_molecule / unknown。
+
+    NMR 等结构常含多个 MODEL。准备与对接只使用第一个模型，因此识别类型时
+    也必须只统计第一个模型，否则 20 个残基的多肽会被 38 个模型累加成蛋白质。
+    """
     fmt = detect_format(path)
-    atoms = parse_first_pose_atoms(path) if fmt == "pdbqt" else parse_atoms(path)
+    atoms = (
+        parse_first_pose_atoms(path)
+        if fmt == "pdbqt"
+        else parse_atoms(path, first_model=True)
+    )
     return classify_atoms(
         atoms,
         peptide_max_residues=peptide_max_residues,
@@ -645,7 +657,11 @@ def find_ligand_chains(
     例如 6LU7 的 N3 抑制剂（链 C：02J ALA VAL LEU PJE 010）。如果只按
     单个 HETATM 残基识别，会漏掉整个配体，还会把标准残基留在受体里。
     """
-    atoms = list(atoms) if atoms is not None else parse_atoms(path)
+    atoms = (
+        list(atoms)
+        if atoms is not None
+        else parse_atoms(path, first_model=True)
+    )
     groups = _residue_groups(atoms)
     by_chain: dict[str, list[tuple[int, str, str, list[Atom]]]] = {}
     for (chain, resseq, icode, resname), residue_atoms in groups.items():
@@ -722,7 +738,7 @@ def find_ligand_sites(path: str | Path) -> list[LigandSite]:
 
     既识别单个 HETATM 小分子，也识别由多个残基组成的肽类配体链。
     """
-    atoms = parse_atoms(path)
+    atoms = parse_atoms(path, first_model=True)
     ligand_chains = find_ligand_chains(path, atoms=atoms)
     grouped_chains = {chain.chain for chain in ligand_chains}
 
@@ -891,7 +907,7 @@ def parse_site_records(path: str | Path) -> list[list[SiteResidue]]:
 
 def site_residue_coords(path: str | Path, site: Sequence[SiteResidue]) -> list[tuple[float, float, float]]:
     """把 SITE 残基映射到实际原子坐标（优先 CA 原子）。"""
-    atoms = parse_atoms(path)
+    atoms = parse_atoms(path, first_model=True)
     lookup: dict[tuple[str, int, str, str], list[Atom]] = {}
     for atom in atoms:
         lookup.setdefault(atom.residue_key, []).append(atom)
