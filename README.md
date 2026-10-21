@@ -1,6 +1,20 @@
-# DockFlowLab
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/banner-dark.png">
+    <img src="docs/assets/banner-light.png" alt="DockFlowLab — 分子对接，全流程跑通" width="100%">
+  </picture>
+</p>
 
-面向科研人员的跨平台分子对接桌面工具。无需写代码，按五步向导即可完成
+<p align="center">
+  <img alt="release" src="https://img.shields.io/badge/release-v2.2.0-2A78D6?style=flat-square">
+  <img alt="Windows" src="https://img.shields.io/badge/Windows-10%2F11%20x64-0E2A4D?style=flat-square&logo=windows&logoColor=white">
+  <img alt="macOS" src="https://img.shields.io/badge/macOS-Apple%20Silicon-0E2A4D?style=flat-square&logo=apple&logoColor=white">
+  <img alt="Python" src="https://img.shields.io/badge/Python-3.10--3.12-17A897?style=flat-square&logo=python&logoColor=white">
+  <img alt="license" src="https://img.shields.io/badge/license-MIT-1F6B3A?style=flat-square">
+  <a href="https://github.com/IBN-Spring/DockFlowLab/stargazers"><img alt="stars" src="https://img.shields.io/github/stars/IBN-Spring/DockFlowLab?style=flat-square&color=2A78D6&label=stars"></a>
+</p>
+
+**面向科研人员的跨平台分子对接桌面工具。** 无需写代码，按五步向导即可完成
 **靶点结构 + 候选分子** 的结构准备、结合位点选择、分子对接与结果报告。
 
 - 主流程：小分子与蛋白对接

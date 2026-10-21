@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+<defs>
+<linearGradient id="bg" x1="0" y1="0" x2="1024" y2="1024" gradientUnits="userSpaceOnUse">
+<stop offset="0" stop-color="#07182D"/><stop offset="0.55" stop-color="#0E3560"/><stop offset="1" stop-color="#123F70"/>
+</linearGradient>
+<radialGradient id="glow" cx="0.78" cy="0.18" r="0.75">
+<stop offset="0" stop-color="#2A78D6" stop-opacity="0.42"/><stop offset="0.55" stop-color="#2A78D6" stop-opacity="0.10"/><stop offset="1" stop-color="#2A78D6" stop-opacity="0"/>
+</radialGradient>
+<linearGradient id="d" x1="252" y1="212" x2="788" y2="812" gradientUnits="userSpaceOnUse">
+<stop offset="0" stop-color="#FFFFFF"/><stop offset="0.55" stop-color="#D9ECFF"/><stop offset="1" stop-color="#7CC2FF"/>
+</linearGradient>
+<radialGradient id="ligGlow" cx="50%" cy="50%" r="50%">
+<stop offset="0" stop-color="#5FE3CF" stop-opacity="0.48"/>
+<stop offset="0.45" stop-color="#5FE3CF" stop-opacity="0.14"/>
+<stop offset="1" stop-color="#5FE3CF" stop-opacity="0"/>
+</radialGradient><linearGradient id="lig" x1="408" y1="408" x2="616" y2="616" gradientUnits="userSpaceOnUse">
+<stop offset="0" stop-color="#8AF3E1"/><stop offset="1" stop-color="#12A695"/>
+</linearGradient>
+<clipPath id="clip"><rect width="1024" height="1024" rx="230"/></clipPath>
+</defs>
+<rect width="1024" height="1024" rx="230" fill="url(#bg)"/>
+<g clip-path="url(#clip)">
+<rect width="1024" height="1024" fill="url(#glow)"/>
+<g fill="#A9D2FF" opacity="0.10"><circle cx="80" cy="80" r="3.4"/><circle cx="80" cy="360" r="3.4"/><circle cx="80" cy="640" r="3.4"/><circle cx="80" cy="920" r="3.4"/><circle cx="220" cy="220" r="3.4"/><circle cx="220" cy="500" r="3.4"/><circle cx="220" cy="780" r="3.4"/><circle cx="360" cy="80" r="3.4"/><circle cx="360" cy="360" r="3.4"/><circle cx="360" cy="640" r="3.4"/><circle cx="360" cy="920" r="3.4"/><circle cx="500" cy="220" r="3.4"/><circle cx="500" cy="500" r="3.4"/><circle cx="500" cy="780" r="3.4"/><circle cx="640" cy="80" r="3.4"/><circle cx="640" cy="360" r="3.4"/><circle cx="640" cy="640" r="3.4"/><circle cx="640" cy="920" r="3.4"/><circle cx="780" cy="220" r="3.4"/><circle cx="780" cy="500" r="3.4"/><circle cx="780" cy="780" r="3.4"/><circle cx="920" cy="80" r="3.4"/><circle cx="920" cy="360" r="3.4"/><circle cx="920" cy="640" r="3.4"/><circle cx="920" cy="920" r="3.4"/></g>
+<rect x="12" y="12" width="1000" height="1000" rx="218" fill="none" stroke="#FFFFFF" stroke-opacity="0.12" stroke-width="6"/>
+</g>
+<path fill-rule="evenodd" fill="url(#d)" d="M252 212 H470 C686 212 788 346 788 512 C788 678 686 812 470 812 H252 Z M352 322 H470 C618 322 688 404 688 512 C688 620 618 702 470 702 H352 Z"/>
+<circle cx="512" cy="512" r="208" fill="url(#ligGlow)"/>
+<polygon points="602.1,564.0 512.0,616.0 421.9,564.0 421.9,460.0 512.0,408.0 602.1,460.0" fill="url(#lig)" stroke="#EBFFFB" stroke-width="7" stroke-linejoin="round"/>
+<g fill="#F4FFFC"><circle cx="602.1" cy="564" r="7"/><circle cx="421.9" cy="564" r="7"/><circle cx="512" cy="408" r="7"/></g>
+<circle cx="512" cy="512" r="16" fill="#FFFFFF" fill-opacity="0.92"/>
+</svg>
