@@ -27,7 +27,6 @@ from ..logging_setup import get_logger
 from ..tools import rdkit_io
 from ..tools.obabel import OpenBabelAdapter, get_openbabel
 from ..tools.runtime import work_directory
-from .modes import LIGAND_PEPTIDE_MAX_HEAVY_ATOMS, LIGAND_PEPTIDE_MAX_RESIDUES
 
 log = get_logger("ligand")
 
@@ -42,23 +41,18 @@ def _classify_ligand(path: Path) -> tuple[str, str]:
     """
     fmt = pdbio.detect_format(path)
     if fmt in {"pdb", "pdbqt"}:
-        return pdbio.structure_kind(
-            path,
-            peptide_max_residues=LIGAND_PEPTIDE_MAX_RESIDUES,
-            peptide_max_heavy_atoms=LIGAND_PEPTIDE_MAX_HEAVY_ATOMS,
-        )
+        return pdbio.structure_kind(path)
     if fmt in {"sdf", "mol", "mol2", "smi", "smiles", "inchi"}:
         return "small_molecule", f"{fmt.upper()} 分子文件"
     return "unknown", f"无法识别的格式：{fmt}"
 
 
 def _check_ligand_kind(kind: str, detail: str, warnings: list[str]) -> None:
-    if kind == "protein":
+    if kind in {"protein", "peptide"}:
         raise PreparationError(
-            "该文件包含完整蛋白质，不能放在“候选分子”里。"
-            "本地版本不做蛋白–蛋白对接；如需对接多肽，请确认它是短肽"
-            f"（不超过 {LIGAND_PEPTIDE_MAX_RESIDUES} 个残基）。"
-            "蛋白–蛋白界面请使用 ClusPro、HADDOCK 或 RosettaDock 等专门工具。"
+            f"该文件包含蛋白质或多肽结构（{detail}），不能放在“候选分子”里。"
+            "本地版本暂不支持蛋白–蛋白、蛋白–多肽对接；"
+            "请使用 ClusPro、HADDOCK 或 RosettaDock 等专门工具。"
         )
     if kind == "nucleic_acid":
         raise PreparationError(
@@ -67,13 +61,8 @@ def _check_ligand_kind(kind: str, detail: str, warnings: list[str]) -> None:
         )
     if kind == "unknown":
         raise PreparationError(
-            f"无法识别这个结构的类型（{detail}）。请确认文件包含有效的小分子或多肽，"
+            f"无法识别这个结构的类型（{detail}）。请确认文件包含有效的小分子，"
             "或先转换为 SDF/MOL2 后再导入。"
-        )
-    if kind == "peptide":
-        warnings.append(
-            f"候选分子具有多肽特征（{detail}）。多肽柔性很高，"
-            "Vina 的搜索空间可能不足，建议把结果视为初步筛选。"
         )
 
 
@@ -406,7 +395,10 @@ def prepare_ligand(
     details = _molecule_details(mol, forcefield, ph_corrected, warnings)
     details["kind"] = kind
     if details["rotatable_bonds"] > 20:
-        warnings.append("可旋转键较多，Vina 的搜索可能不够充分；建议提高精细度")
+        warnings.append(
+            f"可旋转键较多（{details['rotatable_bonds']} 个），Vina 的搜索空间与耗时会显著增加；"
+            "结果应视为初步筛选，可缩小盒子或改用多肽/大分子对接工具"
+        )
 
     pdbqt_text: str | None = None
     try:

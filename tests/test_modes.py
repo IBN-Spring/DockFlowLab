@@ -50,7 +50,7 @@ def test_protein_chains_still_only_report_amino_acids(tmp_path):
         ("peptide", "small_molecule", True, "多肽–小分子"),
         ("nucleic_acid", "small_molecule", True, "核酸–小分子"),
         ("small_molecule", "small_molecule", True, "小分子–小分子"),
-        ("protein", "peptide", True, "蛋白–多肽"),
+        ("protein", "peptide", False, "蛋白质–多肽/短肽"),
         ("protein", "protein", False, "蛋白质–蛋白质"),
         ("nucleic_acid", "protein", False, "核酸（DNA/RNA）–蛋白质"),
         ("small_molecule", "protein", False, "小分子–蛋白质"),
@@ -104,15 +104,15 @@ def test_pair_mode_with_workspace_entries(workspace, tmp_path):
     assert "ClusPro" in rejected.guidance
 
 
-def test_ligand_kind_check_rejects_protein_and_accepts_peptide():
+def test_ligand_kind_check_rejects_protein_and_peptide():
     warnings: list[str] = []
     with pytest.raises(PreparationError, match="ClusPro"):
         ligand._check_ligand_kind("protein", "检测到 120 个氨基酸残基", warnings)
+    with pytest.raises(PreparationError, match="多肽"):
+        ligand._check_ligand_kind("peptide", "检测到 12 个氨基酸残基", warnings)
     with pytest.raises(PreparationError, match="核酸"):
         ligand._check_ligand_kind("nucleic_acid", "检测到核酸结构", warnings)
-
-    ligand._check_ligand_kind("peptide", "检测到 12 个氨基酸残基", warnings)
-    assert warnings and "多肽" in warnings[0]
+    assert warnings == []
 
 
 def test_store_outcome_persists_kind_and_failure_clears_it(workspace, tmp_path):

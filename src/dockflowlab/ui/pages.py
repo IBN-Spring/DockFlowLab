@@ -302,7 +302,11 @@ class MoleculesPage(Page):
         return card
 
     def _build_ligand_card(self) -> Card:
-        card = Card("候选分子", "支持 SDF、MOL2、MOL、SMILES、PDB 与 PDBQT。SDF 中含多个分子时，当前只准备第一个。")
+        card = Card(
+            "候选分子",
+            "支持 SDF、MOL2、MOL、SMILES、PDB 与 PDBQT（仅限小分子；"
+            "蛋白或多肽请放在靶点一栏）。SDF 中含多个分子时，当前只准备第一个。",
+        )
 
         zone = DropZone(
             "拖放候选分子到这里",

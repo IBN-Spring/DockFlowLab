@@ -9,11 +9,11 @@
 * 多肽–小分子
 * 核酸（DNA/RNA）–小分子
 * 小分子–小分子（目标分子按刚性受体处理）
-* 蛋白–多肽（多肽作为柔性配体）
 
-本地版本不提供蛋白–蛋白对接：Vina 的评分函数与搜索算法并不适合大分子
-界面，给出一个看似精确的分数反而会误导。此类组合会明确标记为不支持，
-并引导到 ClusPro、HADDOCK、RosettaDock 等专门工具。
+本地版本不提供以蛋白质或多肽作为候选分子的对接（蛋白–蛋白、蛋白–多肽）：
+Vina 的评分函数与搜索算法并不适合这类大分子界面，多肽的扭转自由度也远超
+Vina 能可靠搜索的范围，给出一个看似精确的分数反而会误导。此类组合会明确
+标记为不支持，并引导到 ClusPro、HADDOCK、RosettaDock 等专门工具。
 """
 
 from __future__ import annotations
@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from ..core import pdbio
-from ..core.models import KIND_LIGAND, ProjectFile
+from ..core.models import ProjectFile
 
 KIND_LABELS = {
     "protein": "蛋白质",
@@ -34,11 +34,6 @@ KIND_LABELS = {
     "macromolecule": "大分子",
     "unknown": "未识别结构",
 }
-
-# 配体角色下允许的多肽上限。超过上限按完整蛋白质处理，避免把蛋白–蛋白
-# 对接伪装成“多肽对接”。目标角色仍使用 pdbio 的默认阈值（20 个残基）。
-LIGAND_PEPTIDE_MAX_RESIDUES = 50
-LIGAND_PEPTIDE_MAX_HEAVY_ATOMS = 600
 
 _VALID_KINDS = set(KIND_LABELS)
 _ALIASES = {
@@ -148,28 +143,16 @@ SMALL_MOLECULE_SMALL_MOLECULE = _mode(
     ),
 )
 
-PROTEIN_PEPTIDE = _mode(
-    "protein_peptide",
-    "蛋白–多肽",
-    "protein",
-    "peptide",
-    "将多肽作为柔性配体对接到蛋白质表面。",
-    warnings=(
-        "多肽配体柔性很高，Vina 的搜索空间可能不足，结果应视为初步筛选；"
-        "关键结论建议用 HADDOCK、ClusPro 或实验方法验证。",
-    ),
-)
-
-
 def _unsupported(target_kind: str, ligand_kind: str) -> DockingMode:
     target_label = KIND_LABELS.get(target_kind, target_kind)
     ligand_label = KIND_LABELS.get(ligand_kind, ligand_kind)
     label = f"{target_label}–{ligand_label}"
 
-    if target_kind == "protein" and ligand_kind == "protein":
+    if target_kind in {"protein", "peptide"} and ligand_kind in {"protein", "peptide"}:
         guidance = (
-            "Vina 的评分函数和搜索算法不适用于蛋白–蛋白界面。"
-            "请使用 ClusPro、HADDOCK、RosettaDock 等专门的蛋白对接工具。"
+            "本地版本暂不支持把蛋白质或多肽作为候选分子（蛋白–蛋白、蛋白–多肽对接）。"
+            "Vina 的评分函数与搜索算法不适用于这类大分子界面，"
+            "请使用 ClusPro、HADDOCK、RosettaDock 等专门的对接工具。"
         )
     elif target_kind == "nucleic_acid" and ligand_kind in {"protein", "peptide", "nucleic_acid"}:
         guidance = (
@@ -185,11 +168,6 @@ def _unsupported(target_kind: str, ligand_kind: str) -> DockingMode:
         guidance = (
             "核酸不能作为本流程中的候选分子。"
             "小分子与核酸的对接请把核酸放在“靶点结构”一栏。"
-        )
-    elif target_kind == "peptide" and ligand_kind == "peptide":
-        guidance = (
-            "多肽–多肽对接的搜索空间远大于 Vina 能可靠处理的范围。"
-            "请使用 HADDOCK、RosettaDock 等专门的蛋白/多肽对接工具。"
         )
     elif target_kind == "unknown" or ligand_kind == "unknown":
         guidance = (
@@ -219,7 +197,6 @@ _MODES: dict[tuple[str, str], DockingMode] = {
         PEPTIDE_SMALL_MOLECULE,
         NUCLEIC_ACID_SMALL_MOLECULE,
         SMALL_MOLECULE_SMALL_MOLECULE,
-        PROTEIN_PEPTIDE,
     )
 }
 
@@ -266,21 +243,11 @@ def _format_kind(entry: ProjectFile) -> str:
 
 
 @lru_cache(maxsize=256)
-def _cached_kind(
-    path: str,
-    mtime_ns: int,
-    size: int,
-    peptide_residues: int,
-    peptide_atoms: int,
-) -> str:
+def _cached_kind(path: str, mtime_ns: int, size: int) -> str:
     """按文件时间戳/大小缓存结构识别结果，避免界面重复解析大结构。"""
     del mtime_ns, size  # 仅用于缓存键
     try:
-        kind, _ = pdbio.structure_kind(
-            path,
-            peptide_max_residues=peptide_residues,
-            peptide_max_heavy_atoms=peptide_atoms,
-        )
+        kind, _ = pdbio.structure_kind(path)
     except Exception:
         return "unknown"
     return normalize_kind(kind)
@@ -292,9 +259,6 @@ def entry_kind(entry: ProjectFile, workspace: Any | None = None) -> str:
     if stored and stored not in {"macromolecule", "unknown"}:
         return stored
 
-    is_ligand = entry.kind == KIND_LIGAND
-    peptide_residues = LIGAND_PEPTIDE_MAX_RESIDUES if is_ligand else 20
-    peptide_atoms = LIGAND_PEPTIDE_MAX_HEAVY_ATOMS if is_ligand else 500
     for path in _candidate_paths(entry, workspace):
         try:
             stat = path.stat()
@@ -306,8 +270,6 @@ def entry_kind(entry: ProjectFile, workspace: Any | None = None) -> str:
             str(path.resolve()),
             stat.st_mtime_ns,
             stat.st_size,
-            peptide_residues,
-            peptide_atoms,
         )
         if normalized and normalized != "unknown":
             if normalized == "macromolecule":

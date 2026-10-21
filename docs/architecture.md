@@ -127,12 +127,11 @@ logs/session.log
 | `peptide_small_molecule` | 多肽 | 小分子 | 靶点柔性较高 |
 | `nucleic_acid_small_molecule` | DNA/RNA | 小分子 | 评分仅宜做相对排序 |
 | `small_molecule_small_molecule` | 小分子 | 小分子 | 靶点按刚性受体处理 |
-| `protein_peptide` | 蛋白质 | 多肽 | 配体柔性高，搜索可能不足 |
 
-不支持的组合由 `_unsupported()` 生成明确的 `guidance`（例如蛋白–蛋白指向
-ClusPro / HADDOCK / RosettaDock），而不是返回空分数。结构分类阈值：
-靶点角色以 20 个残基 / 500 个重原子区分蛋白与多肽；配体角色放宽到
-50 个残基 / 600 个重原子，避免把蛋白–蛋白伪装成多肽对接。
+不支持的组合由 `_unsupported()` 生成明确的 `guidance`（例如蛋白–蛋白、
+蛋白–多肽指向 ClusPro / HADDOCK / RosettaDock），而不是返回空分数。
+以蛋白质或多肽作为候选分子的组合暂不支持：多肽的扭转自由度远超 Vina
+能可靠搜索的范围。结构分类以 20 个残基 / 500 个重原子区分蛋白与多肽。
 
 ## 线程与取消
 

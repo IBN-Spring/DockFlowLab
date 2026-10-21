@@ -27,7 +27,6 @@ from ..logging_setup import get_logger
 from ..tools.obabel import OpenBabelAdapter, get_openbabel
 from ..workspace import Workspace
 from .ligand import LigandPrepOptions, prepare_ligand
-from .modes import LIGAND_PEPTIDE_MAX_HEAVY_ATOMS, LIGAND_PEPTIDE_MAX_RESIDUES
 from .receptor import ReceptorPrepOptions, prepare_target
 
 log = get_logger("preparation")
@@ -160,16 +159,12 @@ def prepare_entry(
 
         if entry.kind == KIND_LIGAND:
             if pdbio.detect_format(source) in {"pdb", "pdbqt"}:
-                kind, detail = pdbio.structure_kind(
-                    source,
-                    peptide_max_residues=LIGAND_PEPTIDE_MAX_RESIDUES,
-                    peptide_max_heavy_atoms=LIGAND_PEPTIDE_MAX_HEAVY_ATOMS,
-                )
-                if kind == "protein":
+                kind, detail = pdbio.structure_kind(source)
+                if kind in {"protein", "peptide"}:
                     raise PreparationError(
-                        "这个文件包含完整蛋白质，不能放在“候选分子”里。"
-                        "本地版本不做蛋白–蛋白对接；多肽请控制在 50 个残基以内。"
-                        "蛋白–蛋白界面请使用 ClusPro、HADDOCK 或 RosettaDock。"
+                        f"这个文件包含蛋白质或多肽结构（{detail}），不能放在“候选分子”里。"
+                        "本地版本暂不支持蛋白–蛋白、蛋白–多肽对接；"
+                        "请使用 ClusPro、HADDOCK 或 RosettaDock 等专门工具。"
                     )
                 if kind == "nucleic_acid":
                     raise PreparationError(

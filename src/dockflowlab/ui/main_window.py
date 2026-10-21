@@ -915,9 +915,9 @@ class MainWindow(QMainWindow):
             self,
             f"关于 {__app_name_zh__}",
             f"<b>DockFlowLab {__version__}</b><br><br>"
-            "支持蛋白–小分子、多肽–小分子、核酸–小分子、小分子–小分子与蛋白–多肽对接。<br>"
-            "程序会根据结构类型自动选择模式；蛋白–蛋白等大分子对接不在本地实现，"
-            "请使用 ClusPro、HADDOCK 或 RosettaDock 等专门工具。<br>"
+            "支持蛋白–小分子、多肽–小分子、核酸–小分子与小分子–小分子对接。<br>"
+            "程序会根据结构类型自动选择模式；蛋白–蛋白、蛋白–多肽等大分子对接"
+            "不在本地实现，请使用 ClusPro、HADDOCK 或 RosettaDock 等专门工具。<br>"
             "计算由 AutoDock Vina 完成；结构准备使用 RDKit、Meeko、PDBFixer 与 OpenBabel。<br><br>"
             "结果仅用于科研参考，需结合实验验证。",
         )
