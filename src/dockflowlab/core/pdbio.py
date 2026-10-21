@@ -1023,10 +1023,18 @@ _VINA_RESULT_RE = re.compile(
     r"^REMARK\s+VINA\s+RESULT:\s+(-?\d+(?:\.\d+)?)\s+(-?\d+(?:\.\d+)?)\s+(-?\d+(?:\.\d+)?)",
     re.IGNORECASE,
 )
+# Smina 直接写 minimizedAffinity，不提供每个构象的 RMSD。
+_SMINA_AFFINITY_RE = re.compile(
+    r"^REMARK\s+minimizedAffinity\s+(-?\d+(?:\.\d+)?)", re.IGNORECASE
+)
 
 
 def parse_pdbqt_poses(path: str | Path) -> list[Pose]:  # noqa: F821 - Pose 在下方延迟导入避免循环
-    """解析 PDBQT 中的 VINA RESULT 备注，按出现顺序返回。"""
+    """解析 PDBQT 中的结合能备注，按出现顺序返回。
+
+    兼容 Vina / QuickVina 的 ``REMARK VINA RESULT`` 与 Smina 的
+    ``REMARK minimizedAffinity``；后者没有 RMSD 信息，按 0 记录。
+    """
     from .models import Pose
 
     poses: list[Pose] = []
@@ -1043,6 +1051,17 @@ def parse_pdbqt_poses(path: str | Path) -> list[Pose]:  # noqa: F821 - Pose 在�
                     affinity=float(match.group(1)),
                     rmsd_lb=float(match.group(2)),
                     rmsd_ub=float(match.group(3)),
+                )
+            )
+            continue
+        match = _SMINA_AFFINITY_RE.match(line)
+        if match:
+            poses.append(
+                Pose(
+                    rank=len(poses) + 1,
+                    affinity=float(match.group(1)),
+                    rmsd_lb=0.0,
+                    rmsd_ub=0.0,
                 )
             )
     return poses

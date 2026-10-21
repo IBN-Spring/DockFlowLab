@@ -107,6 +107,17 @@ def build_parser() -> argparse.ArgumentParser:
     dock.add_argument("--energy-range", type=float, default=None, help="构象能量范围 kcal/mol")
     dock.add_argument("--seed", type=int, default=None, help="随机种子")
     dock.add_argument("--cpu", type=int, default=None, help="CPU 核心数，0 表示全部")
+    dock.add_argument(
+        "--engine",
+        choices=("vina", "qvina2", "smina"),
+        default=None,
+        help="对接引擎（默认读取设置）：vina、qvina2 或 smina",
+    )
+    dock.add_argument(
+        "--no-fallback",
+        action="store_true",
+        help="首选引擎失败时不自动改用其他可用引擎",
+    )
     dock.add_argument("--force", action="store_true", help="已有结果也重新对接")
     dock.add_argument("--center", type=_triplet, default=None, metavar="X,Y,Z", help="手动盒子中心（Å）")
     dock.add_argument("--size", type=_triplet, default=None, metavar="X,Y,Z", help="手动盒子边长（Å）")
@@ -194,9 +205,10 @@ def _print_progress(current: int, total: int, message: str) -> None:
 def command_doctor(args: argparse.Namespace) -> int:
     from .tools.obabel import get_openbabel
     from .tools.runtime import ascii_temp_root
-    from .tools.vina import VinaAdapter
+    from .tools.vina import ENGINE_ORDER, engine_from_settings
 
-    vina = VinaAdapter()
+    settings = AppSettings.load()
+    engines = [engine_from_settings(settings, key) for key in ENGINE_ORDER]
     obabel = get_openbabel()
     packages = {
         "rdkit": _version_of("rdkit"),
@@ -220,7 +232,10 @@ def command_doctor(args: argparse.Namespace) -> int:
         "python": sys.version.split()[0],
         "platform": sys.platform,
         "executable": sys.executable,
-        "vina": vina.doctor(),
+        "engine": settings.docking_engine,
+        "engines": {engine.key: engine.doctor() for engine in engines},
+        # 保留旧字段，便于已有的脚本继续读取 Vina 的状态。
+        "vina": engines[0].doctor(),
         "openbabel": obabel.doctor(),
         "packages": packages,
         "pocket_backend": pocket_backend,
@@ -232,7 +247,7 @@ def command_doctor(args: argparse.Namespace) -> int:
         and bool(obabel.available)
         and bool(pocket_backend["ok"])
     )
-    core_ok = bool(vina.available) and bool(obabel.available) and temp_ok
+    core_ok = any(engine.available for engine in engines) and bool(obabel.available) and temp_ok
     report["ok"] = core_ok and (optional_ok if args.strict else True)
 
     if args.json:
@@ -243,8 +258,11 @@ def command_doctor(args: argparse.Namespace) -> int:
         print(f"配置目录：{user_config_dir()}")
         print(f"临时目录：{temp_root}（{'可写' if temp_ok else '不可写'}）")
         print()
-        print(f"AutoDock Vina：{vina.version or '未找到'}")
-        print(f"  路径：{vina.executable or '—'}")
+        print(f"对接引擎（默认 {settings.docking_engine}）：")
+        for engine in engines:
+            mark = "✓" if engine.available else "✗"
+            print(f"  {mark} {engine.label}：{engine.version or '未找到'}")
+            print(f"    路径：{engine.executable or '—'}")
         print(f"OpenBabel：{obabel.version_string or '未找到'}")
         print(f"  Python API：{'可用' if obabel.has_python_api else '不可用'}")
         print(f"  路径：{obabel.executable or '—'}")
@@ -257,7 +275,7 @@ def command_doctor(args: argparse.Namespace) -> int:
         if core_ok:
             print("核心环境检查通过，可以开始对接。")
         else:
-            print("缺少核心组件：请先解决 Vina / OpenBabel / 临时目录问题。")
+            print("缺少核心组件：请先解决对接引擎 / OpenBabel / 临时目录问题。")
     return EXIT_OK if report["ok"] else EXIT_FAILURE
 
 
@@ -436,6 +454,29 @@ def command_dock(args: argparse.Namespace) -> int:
     options.skip_existing = not args.force
 
     from .tools.obabel import get_openbabel
+    from .tools.vina import available_engines, engine_from_settings
+
+    engine_key = args.engine or settings.docking_engine
+    engine = engine_from_settings(settings, engine_key)
+    if not engine.available:
+        print(
+            f"未找到 {engine.label}。请先在设置中指定它的可执行文件，"
+            f"或改用 --engine 选择其他已安装的引擎。",
+            file=sys.stderr,
+        )
+        return EXIT_USAGE
+    fallback_engines = []
+    if not args.no_fallback and settings.engine_fallback:
+        fallback_engines = [
+            item for item in available_engines(settings) if item.key != engine.key
+        ]
+    options.engine = engine.key
+    options.fallback = bool(fallback_engines)
+    print(f"对接引擎：{engine.label}" + (
+        "（失败时自动改用 " + "、".join(item.label for item in fallback_engines) + "）"
+        if fallback_engines
+        else ""
+    ))
 
     obabel = get_openbabel()
     boxes: dict[str, Box] = {}
@@ -471,6 +512,8 @@ def command_dock(args: argparse.Namespace) -> int:
         boxes,
         options=options,
         settings=settings,
+        vina=engine,
+        fallback_engines=fallback_engines,
         obabel=obabel,
         progress=_print_progress,
     )

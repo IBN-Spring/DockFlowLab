@@ -75,6 +75,32 @@ def test_dock_page_offers_cancel_while_busy(qt_app):
     assert page.cancel_button.isHidden()
 
 
+def test_dock_page_engine_choices_and_run_payload(qt_app):
+    from PySide6.QtCore import Qt
+
+    from dockflowlab.ui.pages import DockPage
+
+    page = DockPage()
+    page.set_engine_choices(
+        [
+            ("vina", "AutoDock Vina", True, "标准引擎"),
+            ("qvina2", "QuickVina 2", False, "加速版"),
+        ],
+        selected="qvina2",
+    )
+
+    assert page.engine.count() == 2
+    assert page.engine.currentData() == "qvina2"
+    assert "未找到" in page.engine.itemText(1)
+    assert page.engine.itemData(1) == "qvina2"
+    assert "加速版" in page.engine.itemData(1, Qt.ItemDataRole.ToolTipRole)
+
+    emitted: list[dict] = []
+    page.run_requested.connect(emitted.append)
+    page._emit_run()
+    assert emitted[0]["engine"] == "qvina2"
+
+
 def test_entity_row_shows_prep_warnings(qt_app):
     from PySide6.QtWidgets import QLabel
 

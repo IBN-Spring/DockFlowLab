@@ -14,8 +14,9 @@
 * OpenBabel 的格式插件、数据目录与 DLL 会被放到 ``openbabel/bin``，由运行时
   钩子设置 BABEL_DATADIR / BABEL_LIBDIR。
 * OpenMM 插件放到 ``openmm_plugins``，由运行时钩子设置 OPENMM_PLUGIN_DIR。
-* 若构建机上能通过 PATH 找到 vina，会一并收进 macOS/Linux 安装包；Windows
-  直接使用仓库内置的 1.2.7 官方二进制。
+* Windows 直接使用仓库内置的 AutoDock Vina / QuickVina 2 / Smina 二进制；
+  macOS/Linux 若构建机 PATH 上有对应引擎（或用 DOCKFLOWLAB_VINA /
+  DOCKFLOWLAB_QVINA2 / DOCKFLOWLAB_SMINA 指定），会一并收进安装包。
 """
 
 from __future__ import annotations
@@ -284,18 +285,29 @@ _collect_rdkit_and_openmm()
 
 
 # ----------------------------------------------------------------------
-# Vina：Windows 使用内置二进制；macOS/Linux 若构建机已安装则一并打包
+# 对接引擎：Windows 使用内置二进制；macOS/Linux 若构建机已安装则一并打包
 # ----------------------------------------------------------------------
 if IS_WINDOWS:
-    pass  # resources/vina/windows/vina.exe 已随 resources 目录收集
+    # resources/{vina,qvina2,smina}/windows/*.exe 已随 resources 目录收集。
+    pass
 else:
-    vina_source = os.environ.get("DOCKFLOWLAB_VINA") or shutil.which("vina")
-    if vina_source and Path(vina_source).is_file():
-        platform_dir = "macos" if IS_MACOS else "linux"
-        binaries.append((vina_source, f"dockflowlab/resources/vina/{platform_dir}"))
-        print(f"[spec] 打包 Vina：{vina_source}")
-    else:
-        print("[spec] 提示：构建机未找到 vina，macOS/Linux 安装包需用户自行安装 Vina")
+    platform_dir = "macos" if IS_MACOS else "linux"
+    for engine, env_name, names in (
+        ("vina", "DOCKFLOWLAB_VINA", ("vina",)),
+        ("qvina2", "DOCKFLOWLAB_QVINA2", ("qvina2", "qvina02")),
+        ("smina", "DOCKFLOWLAB_SMINA", ("smina",)),
+    ):
+        source = os.environ.get(env_name)
+        if not source:
+            for name in names:
+                source = shutil.which(name)
+                if source:
+                    break
+        if source and Path(source).is_file():
+            binaries.append((source, f"dockflowlab/resources/{engine}/{platform_dir}"))
+            print(f"[spec] 打包 {engine}：{source}")
+        else:
+            print(f"[spec] 提示：构建机未找到 {engine}，macOS/Linux 安装包需用户自行安装")
 
 
 # ----------------------------------------------------------------------

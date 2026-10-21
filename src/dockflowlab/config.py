@@ -57,8 +57,15 @@ class AppSettings:
 
     # 外部程序（留空表示自动查找）
     vina_path: str = ""
+    qvina2_path: str = ""
+    smina_path: str = ""
     obabel_path: str = ""
     pymol_path: str = ""  # 无界面渲染用的 PyMOL 可执行文件
+
+    # 对接引擎："vina" / "qvina2" / "smina"。
+    docking_engine: str = "vina"
+    # 首选引擎卡死或失败时，自动改用其他已安装的引擎重试。
+    engine_fallback: bool = True
 
     # 网络
     proxy: str = ""
@@ -135,6 +142,12 @@ class AppSettings:
         if not isinstance(settings.window_geometry, str):
             settings.window_geometry = ""
         settings.window_maximized = bool(settings.window_maximized)
+        if settings.docking_engine not in {"vina", "qvina2", "smina"}:
+            settings.docking_engine = "vina"
+        settings.engine_fallback = bool(settings.engine_fallback)
+        for attribute in ("vina_path", "qvina2_path", "smina_path", "obabel_path", "pymol_path"):
+            if not isinstance(getattr(settings, attribute), str):
+                setattr(settings, attribute, "")
         return settings
 
     def save(self, path: Path | None = None) -> None:

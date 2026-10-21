@@ -1,6 +1,6 @@
 """生成自包含的 HTML 对接报告。
 
-报告只呈现可核实的计算结果：Vina 打分、构象排名、参数与文件来源。
+报告只呈现可核实的计算结果：对接打分、构象排名、参数与文件来源。
 不把打分换算成 ΔG / Kd，也不从打分反推氢键数量等相互作用结论。
 """
 
@@ -48,18 +48,29 @@ def _version_of(distribution: str) -> str:
     return component_version(distribution)
 
 
-def _software_line() -> str:
+def _software_line(settings: AppSettings | None = None) -> str:
     from ..tools.obabel import get_openbabel
-    from ..tools.vina import VinaAdapter
+    from ..tools.vina import ENGINE_ORDER, engine_from_settings, make_engine
 
     parts = []
-    try:
-        vina = VinaAdapter().version
-    except Exception:
-        vina = ""
-    if vina:
-        parts.append(vina if vina.lower().startswith("vina") else f"AutoDock Vina {vina}")
-    else:
+    for key in ENGINE_ORDER:
+        try:
+            engine = (
+                engine_from_settings(settings, key)
+                if settings is not None
+                else make_engine(key)
+            )
+        except Exception:
+            continue
+        if not engine.available:
+            continue
+        version = engine.version or engine.label
+        if key == "vina" and not version.lower().startswith(("vina", "autodock")):
+            version = f"AutoDock Vina {version}"
+        if key != "vina" and not version.lower().startswith(engine.label.lower()):
+            version = f"{engine.label} {version}"
+        parts.append(version)
+    if not parts:
         parts.append("AutoDock Vina（未检测到可执行文件）")
 
     try:
@@ -76,7 +87,42 @@ def _software_line() -> str:
     return " · ".join(parts)
 
 
-_PARAM_KEYS = ("exhaustiveness", "num_modes", "energy_range", "seed", "cpu", "vina_version")
+_PARAM_KEYS = (
+    "exhaustiveness",
+    "num_modes",
+    "energy_range",
+    "seed",
+    "cpu",
+    "engine",
+    "engine_label",
+    "engine_version",
+    "vina_version",
+)
+
+
+def _engine_text(parameters: dict[str, Any]) -> str:
+    """返回“引擎 + 版本”；兼容只有 vina_version 的旧结果。"""
+    label = str(parameters.get("engine_label") or "").strip()
+    version = str(parameters.get("engine_version") or "").strip()
+    if not version:
+        version = str(parameters.get("vina_version") or "").strip()
+    if not label:
+        label = "AutoDock Vina" if version or parameters.get("engine") in (None, "", "vina") else ""
+    if version and label and label.lower() not in version.lower():
+        return f"{label} {version}"
+    return version or label
+
+
+def _engine_summary(results: Sequence[DockingResult]) -> str:
+    """列出本次结果实际使用的引擎；不同引擎的结果会并列呈现。"""
+    names: list[str] = []
+    for item in results:
+        if not item.ok:
+            continue
+        text = _engine_text(item.parameters or {}) or "AutoDock Vina"
+        if text not in names:
+            names.append(text)
+    return "；".join(names) or "AutoDock Vina"
 
 
 def _run_parameters_text(results: Sequence[DockingResult]) -> str:
@@ -95,7 +141,8 @@ def _run_parameters_text(results: Sequence[DockingResult]) -> str:
         groups[signature] = groups.get(signature, 0) + 1
     parts: list[str] = []
     for signature, count in groups.items():
-        exhaustiveness, num_modes, energy_range, seed, cpu, version = signature
+        (exhaustiveness, num_modes, energy_range, seed, cpu, engine,
+         engine_label, engine_version, vina_version) = signature
         try:
             text = (
                 f"exhaustiveness = {int(exhaustiveness)}，"
@@ -106,8 +153,16 @@ def _run_parameters_text(results: Sequence[DockingResult]) -> str:
             )
         except (TypeError, ValueError):
             text = "参数记录不完整"
-        if version:
-            text += f"，{version}"
+        engine_text = _engine_text(
+            {
+                "engine": engine,
+                "engine_label": engine_label,
+                "engine_version": engine_version,
+                "vina_version": vina_version,
+            }
+        )
+        if engine_text:
+            text += f"，{engine_text}"
         if len(groups) > 1 or count != len(successful):
             text += f"（{count} 组）"
         parts.append(text)
@@ -350,10 +405,10 @@ def _methods(workspace: Workspace, results: Sequence[DockingResult]) -> str:
     items.extend(
         [
             ("对接类型", "；".join(mode_labels) or "根据结构类型自动识别"),
-            ("对接程序", "AutoDock Vina"),
+            ("对接程序", _engine_summary(results)),
             ("对接运行参数", _run_parameters_text(results)),
             ("盒子来源", "；".join(box_sources) or "自动"),
-            ("评分含义", "Vina 打分是经验评分函数的输出，单位为 kcal/mol；数值越低表示该程序预测的结合越有利。它不等同于实验测得的 ΔG 或 Kd，也不能单独证明结合模式；分数还会随 Vina 版本、评分函数（如 Vinardo）、受体/配体预处理、是否保留水/离子以及盒子范围而变化，因此不宜直接与其他软件的分数比较。同一分子的分数也会随盒子大小、exhaustiveness 与随机种子变化，比较时应确认这些条件一致。小分子片段通常只能得到较小的负值。"),
+            ("评分含义", "对接打分是经验评分函数的输出，单位为 kcal/mol；数值越低表示该程序预测的结合越有利。它不等同于实验测得的 ΔG 或 Kd，也不能单独证明结合模式；分数还会随引擎与版本、评分函数（如 Vinardo）、受体/配体预处理、是否保留水/离子以及盒子范围而变化，因此不宜直接与其他软件或不同引擎（AutoDock Vina / QuickVina 2 / Smina）的分数比较。同一分子的分数也会随盒子大小、exhaustiveness 与随机种子变化，比较时应确认这些条件一致。小分子片段通常只能得到较小的负值。"),
             ("类型适用性", "；".join(mode_notes) or "不同对接类型的分数不宜直接横向比较。"),
             ("可重复性", "在相同软件版本、相同输入与相同参数下，固定 seed 的结果可重复；参数与版本已按每次计算记录在上方。升级软件后可能出现细微差异。"),
         ]
@@ -362,7 +417,7 @@ def _methods(workspace: Workspace, results: Sequence[DockingResult]) -> str:
         items.append(
             (
                 "未支持的组合",
-                "；".join(unsupported) + " 未执行 Vina 计算。蛋白–蛋白等大分子对接请使用 ClusPro、HADDOCK 或 RosettaDock 等专门工具。",
+                "；".join(unsupported) + " 未执行对接计算。蛋白–蛋白等大分子对接请使用 ClusPro、HADDOCK 或 RosettaDock 等专门工具。",
             )
         )
     return "".join(f"<dt>{_e(key)}</dt><dd>{_e(value)}</dd>" for key, value in items)
@@ -390,7 +445,7 @@ def _warnings(bundle: AnalysisBundle, workspace: Workspace) -> str:
     extra = (
         "<li>对接结果是计算预测。要判断可靠性与生物学意义，应结合重复实验、"
         "已知共晶结构、阳性对照与文献证据。</li>"
-        "<li>本程序只运行 Vina 的构象搜索与打分，未进行重打分、MM/PBSA 或分子动力学验证。</li>"
+        "<li>本程序只运行所选对接引擎的构象搜索与打分，未进行重打分、MM/PBSA 或分子动力学验证。</li>"
         "<li>结合位点由自动检测或用户指定，不等同于实验证实的结合位点；盒子范围会直接影响打分。</li>"
         "<li>本报告不提供结合自由能的实验换算，也不把打分差异直接解释为某种具体相互作用。</li>"
     )

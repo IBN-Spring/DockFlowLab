@@ -11,6 +11,7 @@ from pathlib import Path
 from PySide6.QtCore import QSize, Qt, QTimer
 from PySide6.QtWidgets import (
     QAbstractSpinBox,
+    QCheckBox,
     QComboBox,
     QDialog,
     QDialogButtonBox,
@@ -23,6 +24,8 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QProgressBar,
     QPushButton,
+    QScrollArea,
+    QSizePolicy,
     QSpinBox,
     QVBoxLayout,
     QWidget,
@@ -43,7 +46,15 @@ from ..services.boxes import (
 from ..services.download import DownloadClient
 from ..services.pymol_render import find_renderer
 from ..tools.obabel import OpenBabelAdapter
-from ..tools.vina import VinaAdapter
+from ..tools.vina import (
+    ENGINE_DESCRIPTIONS,
+    ENGINE_LABELS,
+    ENGINE_ORDER,
+    ENGINE_VINA,
+    engine_path_setting,
+    make_engine,
+    set_engine_path,
+)
 from ..workspace import Workspace
 from . import theme
 from .box_view import COCRYSTAL_COLOR, SITE_COLOR, BoxViewer, atoms_to_pdb_text
@@ -715,18 +726,56 @@ class SettingsDialog(ScreenFittedDialog):
         layout.addWidget(title)
         layout.addWidget(hint)
 
+        # 设置项较多（三种引擎 + 路径 + 环境检查），放进滚动区，
+        # 免得在字号放大后超出屏幕高度、底部按钮被裁掉。
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        content = QWidget()
+        content_layout = QVBoxLayout(content)
+        content_layout.setContentsMargins(0, 0, 0, 0)
+        content_layout.setSpacing(14)
+
         form = QFormLayout()
         form.setSpacing(10)
-        self.vina_edit = QLineEdit(self.settings.vina_path)
-        self.vina_edit.setPlaceholderText("留空自动查找（PATH、程序目录或 resources/vina）")
-        vina_row = QWidget()
-        vina_layout = QHBoxLayout(vina_row)
-        vina_layout.setContentsMargins(0, 0, 0, 0)
-        vina_layout.addWidget(self.vina_edit, 1)
-        vina_browse = QPushButton("浏览")
-        vina_browse.clicked.connect(lambda: self._browse_into(self.vina_edit))
-        vina_layout.addWidget(vina_browse)
-        form.addRow("Vina 可执行文件", vina_row)
+        # 小屏幕或字号放大后，宁可把标签换到输入框上方，也不要把“浏览”
+        # 按钮挤出对话框。
+        form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
+
+        self.engine_combo = QComboBox()
+        for key in ENGINE_ORDER:
+            self.engine_combo.addItem(ENGINE_LABELS[key], key)
+            self.engine_combo.setItemData(
+                self.engine_combo.count() - 1,
+                ENGINE_DESCRIPTIONS[key],
+                Qt.ItemDataRole.ToolTipRole,
+            )
+        engine_index = self.engine_combo.findData(self.settings.docking_engine)
+        self.engine_combo.setCurrentIndex(engine_index if engine_index >= 0 else 0)
+        form.addRow("默认对接引擎", self.engine_combo)
+
+        self.engine_path_edits: dict[str, QLineEdit] = {}
+        for key, label, placeholder in (
+            (ENGINE_VINA, "Vina 可执行文件", "留空自动查找（PATH、程序目录或 resources/vina）"),
+            ("qvina2", "QuickVina 2 可执行文件", "留空自动使用程序目录中的 qvina2"),
+            ("smina", "Smina 可执行文件", "留空自动使用程序目录中的 smina"),
+        ):
+            edit = QLineEdit(engine_path_setting(self.settings, key))
+            edit.setPlaceholderText(placeholder)
+            row = QWidget()
+            row_layout = QHBoxLayout(row)
+            row_layout.setContentsMargins(0, 0, 0, 0)
+            row_layout.addWidget(edit, 1)
+            browse = QPushButton("浏览")
+            browse.clicked.connect(lambda _checked=False, target=edit: self._browse_into(target))
+            row_layout.addWidget(browse)
+            form.addRow(label, row)
+            self.engine_path_edits[key] = edit
+
+        self.fallback_check = QCheckBox("首选引擎卡死或失败时，自动改用其他可用引擎重试")
+        self.fallback_check.setChecked(bool(self.settings.engine_fallback))
+        form.addRow("引擎回退", self.fallback_check)
 
         self.obabel_edit = QLineEdit(self.settings.obabel_path)
         self.obabel_edit.setPlaceholderText("留空自动查找；通常无需修改")
@@ -769,19 +818,28 @@ class SettingsDialog(ScreenFittedDialog):
         _plain_number(self.cpu)
         self.cpu.setMaximumWidth(140)
         form.addRow("默认 CPU 核心", self.cpu)
-        layout.addLayout(form)
+        content_layout.addLayout(form)
 
         env_card = Card("运行环境")
         self.env_label = QLabel("点击下方按钮检查。")
         self.env_label.setObjectName("CardHint")
         self.env_label.setWordWrap(True)
         self.env_label.setTextFormat(Qt.TextFormat.RichText)
+        # RichText + 自动换行时，QLabel 的 minimumSizeHint 仍可能按整行计算，
+        # 导致滚动区被横向撑开；忽略水平最小宽度，让文字按视口换行。
+        self.env_label.setSizePolicy(
+            QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred
+        )
+        self.env_label.setMinimumWidth(0)
         check = QPushButton("检查运行环境")
         check.setMaximumWidth(160)
         check.clicked.connect(self._check_environment)
         env_card.add(self.env_label)
         env_card.add(check)
-        layout.addWidget(env_card)
+        content_layout.addWidget(env_card)
+        content_layout.addStretch(1)
+        scroll.setWidget(content)
+        layout.addWidget(scroll, 1)
 
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
         buttons.button(QDialogButtonBox.StandardButton.Save).setText("保存")
@@ -809,21 +867,27 @@ class SettingsDialog(ScreenFittedDialog):
             edit.setText(path)
 
     def _check_environment(self) -> None:
-        try:
-            vina = VinaAdapter(self.vina_edit.text().strip())
-        except Exception:
-            vina = VinaAdapter()
+        rows = []
+        for key in ENGINE_ORDER:
+            try:
+                engine = make_engine(key, self.engine_path_edits[key].text().strip())
+            except Exception:
+                engine = None
+            label = ENGINE_LABELS[key]
+            if engine is not None and engine.available:
+                version = (engine.version or "").strip()
+                text = label
+                if version and version.lower() not in label.lower():
+                    text = f"{label}：{version}"
+                rows.append(
+                    f"<span style='color:{theme.SUCCESS}'>✓</span> {html.escape(text)}"
+                )
+            else:
+                rows.append(f"<span style='color:{theme.DANGER}'>✗</span> 未找到 {label}")
         try:
             obabel = OpenBabelAdapter(self.obabel_edit.text().strip())
         except Exception:
             obabel = None
-        rows = []
-        if vina.available:
-            version = vina.version or ""
-            label = version if "vina" in version.lower() else f"AutoDock Vina {version}".strip()
-            rows.append(f"<span style='color:{theme.SUCCESS}'>✓</span> {label}")
-        else:
-            rows.append(f"<span style='color:{theme.DANGER}'>✗</span> 未找到 AutoDock Vina")
         if obabel is not None and obabel.available:
             version = obabel.version_string or ""
             label = version if "openbabel" in version.lower() else f"OpenBabel {version}".strip()
@@ -849,10 +913,15 @@ class SettingsDialog(ScreenFittedDialog):
         self.env_label.setText("<br>".join(rows))
 
     def _save(self) -> None:
-        vina_path = self.vina_edit.text().strip()
-        if vina_path and not Path(vina_path).is_file():
-            QMessageBox.warning(self, "路径无效", "Vina 可执行文件不存在，请重新选择。")
-            return
+        for key in ENGINE_ORDER:
+            path = self.engine_path_edits[key].text().strip()
+            if path and not Path(path).is_file():
+                QMessageBox.warning(
+                    self,
+                    "路径无效",
+                    f"{ENGINE_LABELS[key]} 可执行文件不存在，请重新选择。",
+                )
+                return
         obabel_path = self.obabel_edit.text().strip()
         if obabel_path and not Path(obabel_path).is_file():
             QMessageBox.warning(self, "路径无效", "OpenBabel 可执行文件不存在，请重新选择。")
@@ -861,7 +930,10 @@ class SettingsDialog(ScreenFittedDialog):
         if pymol_path and not Path(pymol_path).is_file():
             QMessageBox.warning(self, "路径无效", "PyMOL 可执行文件不存在，请重新选择。")
             return
-        self.settings.vina_path = vina_path
+        for key in ENGINE_ORDER:
+            set_engine_path(self.settings, key, self.engine_path_edits[key].text().strip())
+        self.settings.docking_engine = str(self.engine_combo.currentData() or ENGINE_VINA)
+        self.settings.engine_fallback = bool(self.fallback_check.isChecked())
         self.settings.obabel_path = obabel_path
         self.settings.pymol_path = pymol_path
         self.settings.proxy = self.proxy_edit.text().strip()

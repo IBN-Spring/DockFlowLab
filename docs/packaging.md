@@ -58,13 +58,17 @@ dist/DockFlowLab/
   DockFlowLab.exe
   _internal/
     dockflowlab/resources/vina/windows/vina.exe
+    dockflowlab/resources/qvina2/windows/qvina2.exe
+    dockflowlab/resources/smina/windows/smina.exe
     openbabel/bin/{openbabel-3.dll, obabel.exe, formats_*.obf, data/}
     openmm_plugins/OpenMMCPU.dll ...
     RDKit*.dll, boost_*.dll, Qt6*.dll ...
 ```
 
-内置 Vina 为 AutoDock Vina 1.2.7 官方 Windows 二进制，路径由
-`tools/runtime.resource_path()` 在源码与打包环境中统一解析。
+内置引擎为 AutoDock Vina 1.2.7、QuickVina 2.1 与 Smina 2020.12.10 的
+Windows 二进制，路径由 `tools/runtime.resource_path()` 在源码与打包环境中统一
+解析。QuickVina 2 / Smina 依赖的 boost 与 OpenBabel DLL 由 spec 收集到
+`_internal/`，运行时由 `tools/vina.engine_env()` 加入子进程的 DLL 搜索路径。
 
 ### 构建诊断版（带控制台）
 
@@ -87,8 +91,9 @@ set DOCKFLOWLAB_SELF_CHECK=1
 dist\DockFlowLabConsole\DockFlowLabConsole.exe
 ```
 
-应返回 `"ok": true`，并显示 Vina、OpenBabel、RDKit、Meeko、OpenMM、PDBFixer、
-NumPy、SciPy 的版本。`pocket_backend` 会实际调用 SciPy 的 `cKDTree` 与
+应返回 `"ok": true`，并显示 AutoDock Vina、QuickVina 2、Smina、OpenBabel、
+RDKit、Meeko、OpenMM、PDBFixer、NumPy、SciPy 的版本。三个引擎至少有一个可用
+即可通过核心检查；建议三个都显示 `✓`。`pocket_backend` 会实际调用 SciPy 的 `cKDTree` 与
 `distance_transform_edt`，验证几何口袋检测所需的编译扩展在打包环境中可用。
 
 还可以临时把控制台版当命令行使用：
@@ -110,10 +115,14 @@ bash packaging/build_macos.sh
 ```
 
 脚本会构建 `dist/DockFlowLab.app` 并压缩为 `release/DockFlowLab-macOS-<arch>.zip`。
-如果构建机的 `PATH` 中有 `vina`，会自动收进应用包；也可以通过环境变量指定：
+如果构建机的 `PATH` 中有 `vina` / `qvina2` / `smina`，会自动收进应用包；
+也可以通过环境变量分别指定：
 
 ```bash
-DOCKFLOWLAB_VINA=/opt/homebrew/bin/vina bash packaging/build_macos.sh
+DOCKFLOWLAB_VINA=/opt/homebrew/bin/vina \
+DOCKFLOWLAB_QVINA2=/opt/homebrew/bin/qvina2 \
+DOCKFLOWLAB_SMINA=/opt/homebrew/bin/smina \
+bash packaging/build_macos.sh
 ```
 
 ### 图标
@@ -156,7 +165,7 @@ xcrun stapler staple dist/DockFlowLab.app
 | OpenBabel | wheel 的 `openbabel/bin`；Windows conda 的 DLL、`obabel.exe`、`formats_*.obf`、`plugin_*.obf`、数据目录；macOS/Linux conda 的 `bin/obabel`、`lib/libopenbabel*`、`lib/openbabel/*` 插件与 `share/openbabel` 数据 |
 | OpenMM | `collect_all("openmm")`；Windows conda 的 `OpenMM*.dll`；macOS/Linux conda 的 `lib/libOpenMM*`；以及 CPU/Reference 插件 |
 | PDBFixer / Meeko | `collect_all` 的 Python 数据文件 |
-| Vina | `resources/vina/windows/vina.exe`；macOS/Linux 构建时按需收集 |
+| 对接引擎 | `resources/{vina,qvina2,smina}/windows/*.exe`；macOS/Linux 构建时按 `PATH` 或 `DOCKFLOWLAB_VINA` / `DOCKFLOWLAB_QVINA2` / `DOCKFLOWLAB_SMINA` 收集 |
 | Matplotlib | PyInstaller 官方 hook，图表使用 Agg 后端 |
 | pyqtgraph / PyOpenGL | `collect_all` + 显式 hidden imports；运行时固定 `PYQTGRAPH_QT_LIB=PySide6`，并排除 PyQt5/PyQt6 |
 | QtWebEngine / NGL | PyInstaller 的 `hook-PySide6.QtWebEngineCore` 收集渲染进程、`resources/` 与语言包；`ngl_view.py` 在冻结包中从 `_internal/PySide6` 定位这些文件 |
@@ -227,7 +236,8 @@ ICU、`resources/` 与语言包）约占 280 MB。可以通过排除未使用的
 - [ ] `python -m pytest` 全部通过
 - [ ] `DOCKFLOWLAB_SELF_CHECK=1` 返回 `ok: true`
 - [ ] 用真实结构跑通导入、准备、对接、报告
-- [ ] 检查 `dist/DockFlowLab/_internal/dockflowlab/resources/vina/...`
+- [ ] 检查 `dist/DockFlowLab/_internal/dockflowlab/resources/{vina,qvina2,smina}/...`
+- [ ] 在干净机器上分别用 vina / qvina2 / smina 各跑一次对接，确认 boost 等 DLL 可加载
 - [ ] 在未安装 Python 与 conda 的干净机器上启动测试
 - [ ] 压缩包命名包含平台与架构，并附带 README/使用指南
 - [ ] macOS 应用完成签名/公证（正式发布时）

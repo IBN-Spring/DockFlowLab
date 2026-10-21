@@ -1,9 +1,11 @@
 # DockFlowLab
 
 面向科研人员的跨平台分子对接桌面工具。无需写代码，按五步向导即可完成
-**靶点结构 + 候选分子** 的结构准备、结合位点选择、AutoDock Vina 对接与结果报告。
+**靶点结构 + 候选分子** 的结构准备、结合位点选择、分子对接与结果报告。
 
 - 主流程：小分子与蛋白对接
+- 内置 AutoDock Vina、QuickVina 2 与 Smina 三种对接引擎，可在界面或命令行
+  按任务切换；首选引擎卡死或失败时自动改用其他可用引擎重试
 - 自动识别每一组靶点与候选分子的结构类型，选择对应的对接方式
 - 支持导入 PDB / mmCIF / PDBQT / MOL2 / SDF / MOL 等结构
 - 自动修复缺失原子、按生理 pH 加氢、生成 PDBQT
@@ -46,8 +48,9 @@
 2. 双击文件夹里的 `DockFlowLab.exe`。
 3. 首次启动被 SmartScreen 拦截时，点击“更多信息 → 仍要运行”。
 
-安装包已内置 AutoDock Vina 1.2.7，无需另装。程序不写注册表，删除文件夹即可卸载；
-用户设置与日志位于 `%APPDATA%\DockFlowLab` 与 `%LOCALAPPDATA%\DockFlowLab`。
+安装包已内置 AutoDock Vina 1.2.7、QuickVina 2.1 与 Smina 2020.12.10，无需另装。
+程序不写注册表，删除文件夹即可卸载；用户设置与日志位于
+`%APPDATA%\DockFlowLab` 与 `%LOCALAPPDATA%\DockFlowLab`。
 
 ### macOS
 
@@ -60,7 +63,8 @@
    # 或：conda install -c conda-forge vina
    ```
 
-   也可以在程序“设置”中手动指定 `vina` 可执行文件。
+   也可以在程序“设置”中手动指定 `vina` 可执行文件。QuickVina 2 与 Smina
+   同理，可在设置中指定，或用 `conda install -c conda-forge qvina smina` 安装。
 
 ## 五步使用流程与可选出图
 
@@ -83,7 +87,7 @@
 图形界面和命令行共用同一套服务层，便于批处理与服务器使用：
 
 ```bash
-# 查看环境（Vina、OpenBabel、RDKit、Meeko、OpenMM 等）
+# 查看环境（对接引擎、OpenBabel、RDKit、Meeko、OpenMM 等）
 dockflowlab-cli doctor
 
 # 新建项目
@@ -96,6 +100,8 @@ dockflowlab-cli import D:/docking/demo aspirin.sdf --kind ligand --name 阿司�
 # 准备、对接、报告
 dockflowlab-cli prepare D:/docking/demo
 dockflowlab-cli dock D:/docking/demo --exhaustiveness 8
+# Vina 在某个复合物上卡死时，可换成 QuickVina 2 或 Smina
+dockflowlab-cli dock D:/docking/demo --engine qvina2
 dockflowlab-cli report D:/docking/demo
 ```
 
@@ -159,9 +165,9 @@ src/dockflowlab/
   workspace.py      工作目录与项目文件
   core/             结构解析、数据模型等纯计算基础
   services/         准备、盒子、对接、分析、报告、下载
-  tools/            Vina / OpenBabel / 运行时适配
+  tools/            对接引擎 / OpenBabel / 运行时适配
   ui/               PySide6 五步向导界面
-  resources/        图标、报告模板、内置 Vina
+  resources/        图标、报告模板、内置对接引擎
 packaging/          PyInstaller 配置与构建脚本
 tests/              单元测试与端到端集成测试
 docs/               用户、架构与打包文档
@@ -172,9 +178,12 @@ docs/               用户、架构与打包文档
 
 ## 许可
 
-本项目使用 MIT License。内置的 AutoDock Vina 1.2.7 由 The Scripps Research
-Institute 以 Apache License 2.0 发布，许可见
-[src/dockflowlab/resources/vina/LICENSE](src/dockflowlab/resources/vina/LICENSE)。
+本项目使用 MIT License。内置的 AutoDock Vina 1.2.7、QuickVina 2.1 与
+Smina 2020.12.10 均由 The Scripps Research Institute 以 Apache License 2.0
+发布，许可分别见
+[src/dockflowlab/resources/vina/LICENSE](src/dockflowlab/resources/vina/LICENSE)、
+[src/dockflowlab/resources/qvina2/LICENSE](src/dockflowlab/resources/qvina2/LICENSE)、
+[src/dockflowlab/resources/smina/LICENSE](src/dockflowlab/resources/smina/LICENSE)。
 3D 盒子视图使用 NGL Viewer 2.5.0（MIT），许可见
 [src/dockflowlab/resources/ngl/LICENSE](src/dockflowlab/resources/ngl/LICENSE)。
 完整的第三方依赖列表见 [LICENSE](LICENSE)。

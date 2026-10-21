@@ -93,7 +93,7 @@ def test_html_report_is_self_contained(result_workspace):
     text = path.read_text(encoding="utf-8")
     assert "阿司匹林" in text
     assert "data:image/png;base64," in text
-    assert "Vina 打分是经验评分函数的输出" in text
+    assert "对接打分是经验评分函数的输出" in text
     assert "不等同于实验测得的" in text
     assert "<img" in text
     assert "http://" not in text.split("<style")[0]

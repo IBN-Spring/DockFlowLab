@@ -19,7 +19,7 @@ from ..errors import DockingError, InputError
 from ..logging_setup import get_logger
 from ..tools.obabel import OpenBabelAdapter, get_openbabel
 from ..tools.runtime import open_path
-from ..tools.vina import VinaAdapter
+from ..tools.vina import EngineAdapter, make_engine
 from ..workspace import Workspace
 from . import boxes as box_service
 from . import modes
@@ -38,12 +38,18 @@ class DockingOptions:
     energy_range: float = 3.0
     seed: int = 42
     cpu: int = 0
+    engine: str = "vina"
+    # 首选引擎卡死/失败时，自动换用其他已安装引擎重试一次。
+    fallback: bool = True
     skip_existing: bool = True
     make_complex: bool = True
     make_pymol: bool = True
     # 单组对接的兜底超时。正常计算通常只需几分钟；设置上限是为了避免
     # 外部进程卡死时任务无限期挂起（用户仍然可以随时手动取消）。
     timeout_seconds: float | None = 6 * 3600.0
+    # 对接引擎持续无输出超过该时长即判定为卡死并终止。Vina 系引擎会
+    # 定期打印搜索进度，20 分钟无任何输出基本可以确认已经停滞。
+    stall_timeout_seconds: float | None = 20 * 60.0
 
     @classmethod
     def from_settings(cls, settings: AppSettings) -> "DockingOptions":
@@ -53,6 +59,8 @@ class DockingOptions:
             energy_range=settings.energy_range,
             seed=settings.seed,
             cpu=settings.cpu,
+            engine=settings.docking_engine,
+            fallback=settings.engine_fallback,
         )
 
 
@@ -107,10 +115,10 @@ def _write_meta(workspace: Workspace, result: DockingResult) -> None:
     os.replace(tmp, path)
 
 
-def _run_parameters(options: DockingOptions, vina: VinaAdapter) -> dict[str, Any]:
-    """记录实际传给 Vina 的参数，而不是报告生成时的当前设置。"""
+def _run_parameters(options: DockingOptions, engine: EngineAdapter) -> dict[str, Any]:
+    """记录实际传给对接引擎的参数，而不是报告生成时的当前设置。"""
     try:
-        version = str(vina.version or "")
+        version = str(engine.version or "")
     except Exception:
         version = ""
     return {
@@ -119,8 +127,25 @@ def _run_parameters(options: DockingOptions, vina: VinaAdapter) -> dict[str, Any
         "energy_range": float(options.energy_range),
         "seed": int(options.seed),
         "cpu": int(options.cpu),
-        "vina_version": version,
+        "engine": engine.key,
+        "engine_label": engine.label,
+        "engine_version": version,
+        # 旧版本只记录 vina_version；保留它以便报告与旧结果继续兼容。
+        "vina_version": version if engine.key == "vina" else "",
     }
+
+
+_PARAMETER_KEYS = (
+    "exhaustiveness",
+    "num_modes",
+    "energy_range",
+    "seed",
+    "cpu",
+    "engine",
+    "engine_label",
+    "engine_version",
+    "vina_version",
+)
 
 
 def _stored_parameters(meta: dict[str, Any]) -> dict[str, Any]:
@@ -128,8 +153,7 @@ def _stored_parameters(meta: dict[str, Any]) -> dict[str, Any]:
     raw = meta.get("parameters")
     if not isinstance(raw, dict):
         return {}
-    keys = ("exhaustiveness", "num_modes", "energy_range", "seed", "cpu", "vina_version")
-    return {key: raw[key] for key in keys if raw.get(key) not in (None, "")}
+    return {key: raw[key] for key in _PARAMETER_KEYS if raw.get(key) not in (None, "")}
 
 
 def _stored_point(value: Any) -> tuple[float, float, float] | None:
@@ -207,14 +231,15 @@ def dock_pair(
     box: Box,
     *,
     options: DockingOptions | None = None,
-    vina: VinaAdapter | None = None,
+    vina: EngineAdapter | None = None,
+    fallback_engines: Sequence[EngineAdapter] = (),
     obabel: OpenBabelAdapter | None = None,
     progress: Progress = None,
     cancel: threading.Event | None = None,
     on_line: LineCallback = None,
 ) -> DockingResult:
     options = options or DockingOptions()
-    vina = vina or VinaAdapter()
+    vina = vina or make_engine(options.engine)
     obabel = obabel or get_openbabel()
     mode = modes.pair_mode(target, ligand, workspace)
     warnings: list[str] = list(mode.warnings)
@@ -290,39 +315,69 @@ def dock_pair(
     else:
         line_callback = None
 
-    result.parameters = _run_parameters(options, vina)
+    # 首选引擎在前；仅在它失败（卡死、崩溃、结果无效）时才尝试其他引擎。
+    # 输入错误不会触发回退，因为换引擎也无法解决文件本身的问题。
+    engines: list[EngineAdapter] = [vina]
+    if options.fallback:
+        for candidate in fallback_engines:
+            if candidate is None or candidate.key in {item.key for item in engines}:
+                continue
+            if getattr(candidate, "available", False):
+                engines.append(candidate)
+
     result.box_center = tuple(float(value) for value in box.center)  # type: ignore[assignment]
     result.box_size = tuple(float(value) for value in box.size)  # type: ignore[assignment]
     started = time.perf_counter()
-    try:
-        run = vina.dock(
-            receptor_pdbqt,
-            ligand_pdbqt,
-            box,
-            output,
-            exhaustiveness=options.exhaustiveness,
-            num_modes=options.num_modes,
-            energy_range=options.energy_range,
-            seed=options.seed,
-            cpu=options.cpu,
-            timeout=options.timeout_seconds,
-            log_path=log_path,
-            on_line=line_callback,
-            cancel=cancel,
-        )
-    except (InputError, DockingError) as exc:
-        result.error = str(exc)
-        return result
-    except Exception as exc:
-        log.exception("Vina 对接异常")
-        result.error = str(exc)
-        return result
-    result.runtime_seconds = time.perf_counter() - started
+    run = None
+    for index, engine in enumerate(engines):
+        result.parameters = _run_parameters(options, engine)
+        try:
+            run = engine.dock(
+                receptor_pdbqt,
+                ligand_pdbqt,
+                box,
+                output,
+                exhaustiveness=options.exhaustiveness,
+                num_modes=options.num_modes,
+                energy_range=options.energy_range,
+                seed=options.seed,
+                cpu=options.cpu,
+                timeout=options.timeout_seconds,
+                stall_timeout=options.stall_timeout_seconds,
+                log_path=log_path,
+                on_line=line_callback,
+                cancel=cancel,
+            )
+        except (InputError, DockingError) as exc:
+            result.error = str(exc)
+            return result
+        except Exception as exc:
+            log.exception("%s 对接异常", engine.label)
+            result.error = str(exc)
+            return result
+        result.runtime_seconds = time.perf_counter() - started
+        if run.ok:
+            break
 
-    if not run.ok:
         result.error = run.error or "对接失败"
         if not log_path.is_file():
             log_path.write_text(f"[DockFlowLab] {result.error}\n{run.log_text}", encoding="utf-8")
+        if cancel is not None and cancel.is_set():
+            return result
+        next_engine = engines[index + 1] if index + 1 < len(engines) else None
+        if next_engine is None:
+            return result
+        message = (
+            f"{engine.label} 未能完成（{result.error}），"
+            f"已自动改用 {next_engine.label} 重试"
+        )
+        log.warning("%s + %s：%s", target.stem, ligand.stem, message)
+        warnings.append(message)
+        result.warnings = list(warnings)
+        _notify(progress, 0, 1, message)
+
+    if run is None or not run.ok:
+        result.error = result.error or "对接失败"
         return result
 
     valid, message, _ = pdbio.validate_pdbqt(output)
@@ -355,7 +410,8 @@ def run_batch(
     *,
     options: DockingOptions | None = None,
     settings: AppSettings | None = None,
-    vina: VinaAdapter | None = None,
+    vina: EngineAdapter | None = None,
+    fallback_engines: Sequence[EngineAdapter] = (),
     obabel: OpenBabelAdapter | None = None,
     progress: Progress = None,
     cancel: threading.Event | None = None,
@@ -364,7 +420,7 @@ def run_batch(
     """依次执行若干 (靶点, 配体) 对接。单个失败不会中断其余任务。"""
     options = options or DockingOptions()
     settings = settings or AppSettings()
-    vina = vina or VinaAdapter()
+    vina = vina or make_engine(options.engine)
     obabel = obabel or get_openbabel()
     total = len(pairs)
     results: list[DockingResult] = []
@@ -426,6 +482,7 @@ def run_batch(
                 box,
                 options=options,
                 vina=vina,
+                fallback_engines=fallback_engines,
                 obabel=obabel,
                 progress=None,
                 cancel=cancel,

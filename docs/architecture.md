@@ -95,7 +95,10 @@ config.py    用户偏好（与项目无关）
 
 ### tools
 
-- `vina.py`：查找 Vina、在 ASCII 临时目录运行、解析 PDBQT 姿态。
+- `vina.py`：对接引擎适配层（AutoDock Vina / QuickVina 2 / Smina）。统一查找
+  可执行文件、补充 DLL 搜索路径、在 ASCII 临时目录运行、解析 PDBQT 姿态；
+  Vina 用 `--config`，两个 Vina 1.1.2 风格引擎用命令行参数。Smina 输出的
+  `minimizedAffinity` 会改写为标准 `VINA RESULT` 备注，供后续统一解析。
 - `obabel.py`：优先 Python API，失败时 CLI 回退；兼容 conda、wheel、系统安装与
   PyInstaller 内置布局。
 - `runtime.py`：`resource_path`、临时目录、子进程封装、平台判断。

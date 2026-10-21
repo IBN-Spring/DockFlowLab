@@ -586,11 +586,23 @@ class DockPage(Page):
         self.box_card.add(self.box_empty)
         self.body.addWidget(self.box_card)
 
-        params = Card("搜索设置", "标准设置适合多数蛋白–小分子对接。提高精细度会增加耗时。")
+        params = Card(
+            "搜索设置",
+            "标准设置适合多数蛋白–小分子对接。提高精细度会增加耗时。"
+            "不同对接引擎的评分函数可能不同，分数不宜跨引擎直接比较。",
+        )
         grid = QGridLayout()
         grid.setHorizontalSpacing(14)
         grid.setVerticalSpacing(10)
-        grid.addWidget(QLabel("精细度"), 0, 0)
+        grid.addWidget(QLabel("对接引擎"), 0, 0)
+        self.engine = QComboBox()
+        self.engine.setMaximumWidth(360)
+        self.engine.setToolTip(
+            "Vina 适合大多数任务；某个复合物在 Vina 上卡死时，"
+            "可改用 QuickVina 2 或 Smina。"
+        )
+        grid.addWidget(self.engine, 0, 1, 1, 3)
+        grid.addWidget(QLabel("精细度"), 1, 0)
         self.exhaustiveness = QComboBox()
         self.exhaustiveness.addItem("快速（8）", 8)
         self.exhaustiveness.addItem("标准（16，推荐）", 16)
@@ -598,28 +610,28 @@ class DockPage(Page):
         self.exhaustiveness.addItem("极致（64，较慢）", 64)
         self.exhaustiveness.setCurrentIndex(1)
         self.exhaustiveness.setMaximumWidth(240)
-        grid.addWidget(self.exhaustiveness, 0, 1)
-        grid.addWidget(QLabel("输出构象数"), 0, 2)
+        grid.addWidget(self.exhaustiveness, 1, 1)
+        grid.addWidget(QLabel("输出构象数"), 1, 2)
         self.num_modes = QSpinBox()
         self.num_modes.setRange(1, 20)
         self.num_modes.setValue(9)
         _plain_number(self.num_modes)
         self.num_modes.setMaximumWidth(120)
-        grid.addWidget(self.num_modes, 0, 3)
-        grid.addWidget(QLabel("随机种子"), 1, 0)
+        grid.addWidget(self.num_modes, 1, 3)
+        grid.addWidget(QLabel("随机种子"), 2, 0)
         self.seed = QSpinBox()
         self.seed.setRange(0, 2_147_483_647)
         self.seed.setValue(42)
         _plain_number(self.seed)
         self.seed.setMaximumWidth(240)
-        grid.addWidget(self.seed, 1, 1)
-        grid.addWidget(QLabel("CPU 核心（0 = 自动）"), 1, 2)
+        grid.addWidget(self.seed, 2, 1)
+        grid.addWidget(QLabel("CPU 核心（0 = 自动）"), 2, 2)
         self.cpu = QSpinBox()
         self.cpu.setRange(0, 256)
         self.cpu.setValue(0)
         _plain_number(self.cpu)
         self.cpu.setMaximumWidth(120)
-        grid.addWidget(self.cpu, 1, 3)
+        grid.addWidget(self.cpu, 2, 3)
         grid.setColumnStretch(1, 1)
         grid.setColumnStretch(3, 1)
         grid.setColumnMinimumWidth(0, 110)
@@ -646,9 +658,29 @@ class DockPage(Page):
         self.body.addLayout(nav)
         self.body.addStretch(1)
 
+    def set_engine_choices(
+        self, choices: list[tuple[str, str, bool, str]], selected: str
+    ) -> None:
+        """填充引擎下拉框。``choices`` 为 (key, 标签, 是否可用, 说明)。"""
+        self.engine.blockSignals(True)
+        self.engine.clear()
+        for key, label, available, description in choices:
+            text = label if available else f"{label}（未找到）"
+            self.engine.addItem(text, key)
+            tip = description
+            if not available:
+                tip += "\n未检测到该引擎；请先在“设置”中指定可执行文件。"
+            self.engine.setItemData(
+                self.engine.count() - 1, tip, Qt.ItemDataRole.ToolTipRole
+            )
+        index = self.engine.findData(selected)
+        self.engine.setCurrentIndex(index if index >= 0 else 0)
+        self.engine.blockSignals(False)
+
     def _emit_run(self) -> None:
         self.run_requested.emit(
             {
+                "engine": str(self.engine.currentData() or "vina"),
                 "exhaustiveness": int(self.exhaustiveness.currentData()),
                 "num_modes": int(self.num_modes.value()),
                 "seed": int(self.seed.value()),

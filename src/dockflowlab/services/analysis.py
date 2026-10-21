@@ -387,7 +387,7 @@ def analyze(
     if len(mode_labels) > 1:
         warnings.append(
             "结果包含多种对接类型（" + "、".join(mode_labels) + "）。"
-            "Vina 分数适合在同一对接类型内部排序，不宜跨类型直接比较。"
+            "对接分数适合在同一对接类型内部排序，不宜跨类型直接比较。"
         )
     parameter_signatures = {
         (
@@ -396,14 +396,16 @@ def analyze(
             result.parameters.get("energy_range"),
             result.parameters.get("seed"),
             result.parameters.get("cpu"),
-            result.parameters.get("vina_version"),
+            result.parameters.get("engine")
+            or ("vina" if result.parameters.get("vina_version") else None),
+            result.parameters.get("engine_version") or result.parameters.get("vina_version"),
         )
         for result in successes
         if (result.parameters or {}).get("exhaustiveness") is not None
     }
     if len(parameter_signatures) > 1:
         warnings.append(
-            "不同结果使用了不同的对接参数（搜索强度、随机种子或 Vina 版本不同），"
+            "不同结果使用了不同的对接参数（搜索强度、随机种子、对接引擎或版本不同），"
             "分数差异可能来自参数设置而非分子本身。"
         )
     elif parameter_signatures and any(

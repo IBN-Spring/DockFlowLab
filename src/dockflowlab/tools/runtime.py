@@ -171,11 +171,17 @@ class ProcessResult:
     output: str = ""
     timed_out: bool = False
     cancelled: bool = False
+    stalled: bool = False
     command: list[str] = field(default_factory=list)
 
     @property
     def ok(self) -> bool:
-        return self.returncode == 0 and not self.timed_out and not self.cancelled
+        return (
+            self.returncode == 0
+            and not self.timed_out
+            and not self.cancelled
+            and not self.stalled
+        )
 
     def tail(self, lines: int = 12) -> str:
         chunks = [line for line in self.output.splitlines() if line.strip()]
@@ -228,6 +234,7 @@ def run_process(
     cwd: str | Path | None = None,
     env: dict[str, str] | None = None,
     timeout: float | None = None,
+    stall_timeout: float | None = None,
     log_path: str | Path | None = None,
     log_mode: str = "w",
     on_line: Callable[[str], None] | None = None,
@@ -283,7 +290,9 @@ def run_process(
 
     collected: list[str] = []
     started = time.monotonic()
+    last_activity = started
     timed_out = False
+    stalled = False
     cancelled = False
     log_handle = None
     if log_path:
@@ -301,6 +310,14 @@ def run_process(
             if timeout is not None and not timed_out and (time.monotonic() - started) > timeout:
                 timed_out = True
                 _terminate(process, kill_tree=kill_tree)
+            if (
+                stall_timeout is not None
+                and not stalled
+                and not timed_out
+                and (time.monotonic() - last_activity) > stall_timeout
+            ):
+                stalled = True
+                _terminate(process, kill_tree=kill_tree)
             try:
                 raw = lines.get(timeout=0.1)
             except queue.Empty:
@@ -309,6 +326,7 @@ def run_process(
                 continue
             if raw is None:
                 break
+            last_activity = time.monotonic()
             text = raw.decode("utf-8", errors="replace").rstrip("\r\n")
             collected.append(text)
             if log_handle is not None:
@@ -344,6 +362,7 @@ def run_process(
         output="\n".join(collected),
         timed_out=timed_out,
         cancelled=cancelled,
+        stalled=stalled,
         command=cmd,
     )
 

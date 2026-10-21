@@ -44,7 +44,14 @@ from ..services.pymol_render import find_renderer, render_complex
 from ..services.report import generate_report
 from ..tools.obabel import OpenBabelAdapter
 from ..tools.runtime import open_path, reveal_path
-from ..tools.vina import VinaAdapter
+from ..tools.vina import (
+    ENGINE_DESCRIPTIONS,
+    ENGINE_LABELS,
+    ENGINE_ORDER,
+    EngineAdapter,
+    available_engines,
+    engine_from_settings,
+)
 from ..version import __app_name_zh__, __version__
 from ..workspace import Workspace
 from . import theme
@@ -88,7 +95,7 @@ class MainWindow(QMainWindow):
         self._task: Task | None = None
         self._busy = False
         self._obabel: OpenBabelAdapter | None = None
-        self._vina: VinaAdapter | None = None
+        self._engines: dict[str, EngineAdapter] = {}
         self._screen_connected = False
         self._shortcuts: list[QShortcut] = []
 
@@ -144,6 +151,7 @@ class MainWindow(QMainWindow):
             self.render_page.set_script_dir(self.settings.pymol_script_dir)
         self.render_page.set_renderer(find_renderer(self.settings.pymol_path))
         self._apply_settings_to_controls()
+        self._configure_engine_choices()
         self._update_environment()
         self._update_sidebar()
         self.statusBar().showMessage("请选择一个工作文件夹开始。", 8000)
@@ -257,17 +265,27 @@ class MainWindow(QMainWindow):
             button.style().polish(button)
 
     def _update_environment(self) -> None:
-        vina = self._get_vina()
-        if vina.available:
+        usable = available_engines(self.settings)
+        if usable:
+            primary = self._get_engine(self.settings.docking_engine)
+            if primary.available:
+                text = f"{primary.label} 已就绪"
+            else:
+                text = f"{usable[0].label} 已就绪"
+            extra = [item.label for item in usable if item.label not in text]
+            if extra:
+                text += " · 另可用 " + "、".join(extra)
             self.env_label.setText(
-                f"<span style='color:#6ee7a8'>●</span> Vina 已就绪"
+                f"<span style='color:#6ee7a8'>●</span> {text}"
             )
-            self.env_label.setToolTip(vina.version)
+            self.env_label.setToolTip(
+                "\n".join(f"{item.label}：{item.version or item.executable}" for item in usable)
+            )
         else:
             self.env_label.setText(
-                "<span style='color:#ffb4a8'>●</span> 未找到 Vina，请在设置中指定"
+                "<span style='color:#ffb4a8'>●</span> 未找到对接引擎，请在设置中指定"
             )
-            self.env_label.setToolTip("对接计算需要 AutoDock Vina 可执行文件")
+            self.env_label.setToolTip("对接计算需要至少一个可用的对接引擎可执行文件")
 
     # ------------------------------------------------------------------
     # 信号连接
@@ -588,10 +606,33 @@ class MainWindow(QMainWindow):
             self._obabel = OpenBabelAdapter(self.settings.obabel_path)
         return self._obabel
 
-    def _get_vina(self) -> VinaAdapter:
-        if self._vina is None:
-            self._vina = VinaAdapter(self.settings.vina_path)
-        return self._vina
+    def _get_engine(self, key: str) -> EngineAdapter:
+        if key not in self._engines:
+            self._engines[key] = engine_from_settings(self.settings, key)
+        return self._engines[key]
+
+    def _configure_engine_choices(self) -> None:
+        """按当前设置刷新“对接引擎”下拉框与实际可用的引擎。"""
+        choices = []
+        for key in ENGINE_ORDER:
+            engine = self._get_engine(key)
+            choices.append(
+                (key, ENGINE_LABELS[key], engine.available, ENGINE_DESCRIPTIONS[key])
+            )
+        self.dock_page.set_engine_choices(choices, self.settings.docking_engine)
+
+    def _fallback_engines(self, primary: EngineAdapter) -> list[EngineAdapter]:
+        """按优先级返回其他可用引擎，供首选引擎卡死时自动重试。"""
+        if not self.settings.engine_fallback:
+            return []
+        engines = []
+        for key in ENGINE_ORDER:
+            if key == primary.key:
+                continue
+            engine = self._get_engine(key)
+            if engine.available:
+                engines.append(engine)
+        return engines
 
     def _start_prepare(self, force: bool) -> None:
         if self.workspace is None or self._busy_notice():
@@ -788,16 +829,19 @@ class MainWindow(QMainWindow):
         if not ready_targets or not ready_ligands:
             QMessageBox.information(self, "还不能开始", "请先准备至少一个靶点和一个候选分子。")
             return
-        vina = self._get_vina()
-        if not vina.available:
+        engine_key = str(params.get("engine") or self.settings.docking_engine)
+        engine = self._get_engine(engine_key)
+        if not engine.available:
             QMessageBox.warning(
                 self,
-                "未找到 Vina",
-                "对接需要 AutoDock Vina。请在“设置”中指定 vina 可执行文件，"
-                "或把 vina 放到程序目录的 resources/vina 下。",
+                f"未找到 {engine.label}",
+                f"当前无法启动 {engine.label}。请在“设置”中指定它的可执行文件，"
+                f"或把 {engine_key} 放到程序目录的 resources/{engine_key} 下。\n\n"
+                "也可以回到本页把“对接引擎”改为 AutoDock Vina。",
             )
             return
 
+        self.settings.docking_engine = engine_key
         self.settings.exhaustiveness = int(params["exhaustiveness"])
         self.settings.num_modes = int(params["num_modes"])
         self.settings.seed = int(params["seed"])
@@ -809,10 +853,13 @@ class MainWindow(QMainWindow):
             energy_range=self.settings.energy_range,
             seed=self.settings.seed,
             cpu=self.settings.cpu,
+            engine=engine_key,
+            fallback=self.settings.engine_fallback,
             skip_existing=False,
             make_complex=True,
             make_pymol=True,
         )
+        fallback_engines = self._fallback_engines(engine)
         supported = modes.supported_pairs(ready_targets, ready_ligands, workspace)
         if not supported:
             reasons: list[str] = []
@@ -914,7 +961,8 @@ class MainWindow(QMainWindow):
                 boxes,
                 options=options,
                 settings=settings,
-                vina=vina,
+                vina=engine,
+                fallback_engines=fallback_engines,
                 obabel=obabel,
                 progress=progress,
                 cancel=cancel,
@@ -1239,9 +1287,10 @@ class MainWindow(QMainWindow):
         if dialog.exec() != dialog.DialogCode.Accepted:
             return
         self.settings = dialog.settings
-        self._vina = None
+        self._engines.clear()
         self._obabel = None
         self._apply_settings_to_controls()
+        self._configure_engine_choices()
         self._update_environment()
         self.render_page.set_renderer(find_renderer(self.settings.pymol_path))
         self.statusBar().showMessage("设置已保存。", 5000)
@@ -1332,7 +1381,8 @@ class MainWindow(QMainWindow):
             "支持蛋白–小分子、多肽–小分子、核酸–小分子与小分子–小分子对接。<br>"
             "程序会根据结构类型自动选择模式；蛋白–蛋白、蛋白–多肽等大分子对接"
             "不在本地实现，请使用 ClusPro、HADDOCK 或 RosettaDock 等专门工具。<br>"
-            "计算由 AutoDock Vina 完成；结构准备使用 RDKit、Meeko、PDBFixer 与 OpenBabel。<br><br>"
+            "对接计算可使用 AutoDock Vina、QuickVina 2 或 Smina；"
+            "结构准备使用 RDKit、Meeko、PDBFixer 与 OpenBabel。<br><br>"
             "结果仅用于科研参考，需结合实验验证。",
         )
 
