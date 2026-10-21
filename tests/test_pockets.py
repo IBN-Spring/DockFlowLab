@@ -7,10 +7,11 @@ import math
 import pytest
 
 from dockflowlab.config import AppSettings
+from dockflowlab.core import pdbio
 from dockflowlab.core.models import Box
 from dockflowlab.services import boxes, pockets
 
-from .factories import make_cage_pdb, make_protein_pdb
+from .factories import make_cage_pdb, make_peptide_ligand_pdb, make_protein_pdb
 
 
 @pytest.fixture()
@@ -164,6 +165,29 @@ def test_geometry_consensus_with_site(pdb_path, settings):
 
     assert box.source == "pocket"
     assert "SITE" in box.note
+
+
+def test_box_uses_full_peptide_ligand_chain(tmp_path, settings):
+    """盒子必须覆盖整条肽类配体，而不是只覆盖其中某个 HETATM 片段。"""
+    path = make_peptide_ligand_pdb(tmp_path / "peptide_complex.pdb")
+    site = next(site for site in pdbio.find_ligand_sites(path) if site.chain == "C")
+
+    box, _ = boxes.suggest_box(
+        target_source=path,
+        target_prepared_pdb=None,
+        settings=settings,
+    )
+
+    assert box.source in {"cocrystal", "pocket"}
+    assert "链 C" in box.note
+    low = [box.center[i] - box.size[i] / 2.0 for i in range(3)]
+    high = [box.center[i] + box.size[i] / 2.0 for i in range(3)]
+    for atom in site.atoms:
+        if atom.is_hydrogen:
+            continue
+        assert low[0] <= atom.x <= high[0]
+        assert low[1] <= atom.y <= high[1]
+        assert low[2] <= atom.z <= high[2]
 
 
 def test_pocket_source_label():

@@ -245,8 +245,8 @@ def _co_crystal_box(
         size,
         settings,
         source="cocrystal",
-        note=f"检测到共晶配体 {site.label}，以其为中心",
-        reference=site.resname,
+        note=f"检测到共晶配体：{site.display_name}，以其为中心",
+        reference=site.reference,
     )
     _check_ligand_fit(box, required, warnings)
     return box, warnings
@@ -484,7 +484,8 @@ def suggest_box(
         # 同名配体中选择与几何口袋最吻合的那一份。
         primary = co_crystal_sites[0]
         same_ligand = [
-            site for site in co_crystal_sites if site.resname == primary.resname
+            site for site in co_crystal_sites
+            if site.ligand_key == primary.ligand_key
         ]
         consensus = _best_consensus(
             [
@@ -502,8 +503,8 @@ def suggest_box(
             evidence = [
                 atom.coord for atom in co_crystal.atoms if not atom.is_hydrogen
             ]
-            prefix = f"几何口袋与共晶配体 {co_crystal.resname} 一致"
-            if co_crystal.chain:
+            prefix = f"几何口袋与共晶配体 {co_crystal.display_name} 一致"
+            if co_crystal.kind != "chain" and co_crystal.chain:
                 prefix += f"（链 {co_crystal.chain}）"
             note = _pocket_note(pocket, prefix)
             box, extra = _pocket_box(
@@ -511,7 +512,7 @@ def suggest_box(
                 settings,
                 required,
                 note=note,
-                reference=co_crystal.resname,
+                reference=co_crystal.reference,
                 evidence_coords=evidence,
             )
             warnings.extend(extra)

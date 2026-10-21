@@ -43,6 +43,18 @@ ADDITIVES = {
     "OLA", "MYR", "STE", "PAL", "UNX", "UNL",
 }
 
+# 常见修饰氨基酸：它们仍是聚合物链的一部分，不能当成共晶配体整链删除。
+MODIFIED_AMINO_ACIDS = {
+    "MSE", "SEP", "TPO", "PTR", "CSO", "CME", "KCX", "LLP", "MLY", "M3L",
+    "HYP", "PCA", "FME", "NEP", "HIC", "TYS", "PHD", "SAC", "CSD", "CSX",
+    "OCS", "CAS", "ALY", "SAR", "NLE", "ORN", "DAB", "ABA", "AIB", "BMT",
+    "DAL", "DLE", "DVA", "DTH", "DTR", "DTY", "TMD", "UNK",
+}
+
+# 短于该残基数、且含有非标准残基的链，若明显短于结构中的主要聚合物链，
+# 视为肽类/多残基配体链（例如 6LU7 的 N3 抑制剂链 C）。
+LIGAND_CHAIN_MAX_RESIDUES = 20
+
 _HYDROGEN_NAMES = {"H", "H1", "H2", "H3", "HA", "HB", "HG", "HD", "HE", "HZ"}
 
 
@@ -97,15 +109,96 @@ class LigandSite:
     atoms: list[Atom]
     center: tuple[float, float, float]
     size: tuple[float, float, float]
+    # 多残基配体（肽类抑制剂等）的完整残基列表：(resname, resseq, icode)
+    residues: tuple[tuple[str, int, str], ...] = ()
+    kind: str = "residue"  # residue / chain
+
+    @property
+    def residue_count(self) -> int:
+        return len(self.residues) if self.residues else 1
+
+    @property
+    def display_name(self) -> str:
+        if self.kind == "chain":
+            return _format_chain_ligand(self.chain, self.residues)
+        return self.resname
 
     @property
     def label(self) -> str:
+        if self.kind == "chain":
+            return self.display_name
         chain = f"链 {self.chain} " if self.chain else ""
         return f"{self.resname}（{chain}序号 {self.resseq}）"
 
     @property
+    def reference(self) -> str:
+        if self.kind == "chain":
+            return f"链 {self.chain or '?'} 配体"
+        return self.resname
+
+    @property
+    def ligand_key(self) -> str:
+        """用于识别同一配体在不同链中的拷贝。"""
+        if self.kind == "chain":
+            names = sorted({name for name, _, _ in self.residues})
+            return "chain:" + "/".join(names)
+        return f"residue:{self.resname}"
+
+    @property
     def heavy_atom_count(self) -> int:
         return sum(1 for atom in self.atoms if not atom.is_hydrogen)
+
+
+@dataclass
+class LigandChain:
+    """一条由配体残基组成的短链（肽类抑制剂、糖链等）。"""
+
+    chain: str
+    residues: tuple[tuple[str, int, str], ...]
+    atoms: list[Atom]
+
+    @property
+    def residue_count(self) -> int:
+        return len(self.residues)
+
+    @property
+    def heavy_atom_count(self) -> int:
+        return sum(1 for atom in self.atoms if not atom.is_hydrogen)
+
+    @property
+    def label(self) -> str:
+        return _format_chain_ligand(self.chain, self.residues)
+
+
+def _is_polymer_residue(resname: str) -> bool:
+    resname = resname.upper()
+    return (
+        resname in AMINO_ACIDS
+        or resname in NUCLEIC_ACIDS
+        or resname in MODIFIED_AMINO_ACIDS
+    )
+
+
+def _is_ligand_residue(resname: str) -> bool:
+    resname = resname.upper()
+    return (
+        resname not in WATERS
+        and resname not in IONS
+        and resname not in ADDITIVES
+        and not _is_polymer_residue(resname)
+    )
+
+
+def _format_chain_ligand(
+    chain: str,
+    residues: Sequence[tuple[str, int, str]],
+) -> str:
+    names = [name for name, _, _ in residues if _is_ligand_residue(name)]
+    if not names:
+        names = [name for name, _, _ in residues]
+    unique = list(dict.fromkeys(names))
+    shown = "/".join(unique[:3]) + ("…" if len(unique) > 3 else "")
+    return f"链 {chain or '?'} 配体（{shown}，{len(residues)} 个残基）"
 
 
 # ----------------------------------------------------------------------
@@ -412,22 +505,187 @@ def looks_like_protein(path: str | Path) -> bool:
 # ----------------------------------------------------------------------
 # 结合位点
 # ----------------------------------------------------------------------
-def find_ligand_sites(path: str | Path) -> list[LigandSite]:
-    """查找适合作为结合位点参考的共晶小分子，按重原子数降序。"""
+def _residue_groups(
+    atoms: Sequence[Atom],
+) -> dict[tuple[str, int, str, str], list[Atom]]:
+    """按残基分组，忽略水、离子与结晶添加剂。"""
     groups: dict[tuple[str, int, str, str], list[Atom]] = {}
-    for atom in parse_atoms(path):
-        if atom.record != "HETATM":
-            continue
+    for atom in atoms:
         resname = atom.resname.upper()
         if resname in WATERS or resname in IONS or resname in ADDITIVES:
             continue
-        if resname in AMINO_ACIDS or resname in NUCLEIC_ACIDS:
+        groups.setdefault(atom.residue_key, []).append(atom)
+    return groups
+
+
+def _parse_link_pairs(
+    path: str | Path,
+) -> list[tuple[tuple[str, str, int, str], tuple[str, str, int, str]]]:
+    """解析 PDB LINK 记录，返回残基对 ((resname, chain, resseq, icode), ...)。"""
+    try:
+        text = Path(path).read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return []
+    pairs = []
+    for line in text.splitlines():
+        if not line.upper().startswith("LINK"):
+            continue
+        first = (
+            line[17:20].strip().upper(),
+            line[21:22].strip(),
+            _to_int(line[22:26]),
+            line[26:27].strip(),
+        )
+        second = (
+            line[47:50].strip().upper(),
+            line[51:52].strip(),
+            _to_int(line[52:56]),
+            line[56:57].strip(),
+        )
+        if first[0] and second[0]:
+            pairs.append((first, second))
+    return pairs
+
+
+def find_ligand_chains(
+    path: str | Path,
+    *,
+    atoms: Sequence[Atom] | None = None,
+) -> list[LigandChain]:
+    """找出由配体残基组成的短链（肽类抑制剂、糖链等）。
+
+    很多 PDB 把肽类抑制剂拆成“标准氨基酸 ATOM + 非标准残基 HETATM”，
+    例如 6LU7 的 N3 抑制剂（链 C：02J ALA VAL LEU PJE 010）。如果只按
+    单个 HETATM 残基识别，会漏掉整个配体，还会把标准残基留在受体里。
+    """
+    atoms = list(atoms) if atoms is not None else parse_atoms(path)
+    groups = _residue_groups(atoms)
+    by_chain: dict[str, list[tuple[int, str, str, list[Atom]]]] = {}
+    for (chain, resseq, icode, resname), residue_atoms in groups.items():
+        by_chain.setdefault(chain, []).append((resseq, icode, resname, residue_atoms))
+
+    standard_counts = {
+        chain: sum(1 for _, _, resname, _ in residues if _is_polymer_residue(resname))
+        for chain, residues in by_chain.items()
+    }
+    max_standard = max(standard_counts.values(), default=0)
+    links = _parse_link_pairs(path)
+
+    chains: list[LigandChain] = []
+    for chain, residues in by_chain.items():
+        residues.sort(key=lambda item: (item[0], item[1]))
+        if len(residues) > LIGAND_CHAIN_MAX_RESIDUES:
+            continue
+        if not any(_is_ligand_residue(resname) for _, _, resname, _ in residues):
+            continue
+        chain_atoms = [atom for _, _, _, residue_atoms in residues for atom in residue_atoms]
+        heavy = [atom for atom in chain_atoms if not atom.is_hydrogen]
+        carbons = sum(1 for atom in heavy if atom.element.upper() == "C")
+        if len(heavy) < 6 or carbons < 3:
+            continue
+
+        standard_count = standard_counts.get(chain, 0)
+        if standard_count:
+            # 只有当结构中存在明显更长的聚合物链时，才把这条短链当成配体；
+            # 否则它可能就是用户想对接的肽类靶点本身。
+            if max_standard < 2 * standard_count and max_standard - standard_count < 20:
+                continue
+            # 真正蛋白链上的修饰残基：标准残基占绝对多数，且没有跨链连接。
+            standard_heavy = sum(1 for atom in heavy if _is_polymer_residue(atom.resname))
+            nonstandard_heavy = sum(
+                1 for atom in heavy if _is_ligand_residue(atom.resname)
+            )
+            cross_linked = any(
+                (first[1] == chain) != (second[1] == chain)
+                for first, second in links
+            )
+            if (
+                standard_count > 6
+                and standard_heavy > nonstandard_heavy
+                and not cross_linked
+            ):
+                continue
+        else:
+            # 全部为 HETATM 的链：要求 LINK 把链内残基连接起来，
+            # 避免把同一条链里的多个独立小分子合并成一个配体。
+            chain_keys = {(resseq, icode, resname) for resseq, icode, resname, _ in residues}
+            connected = any(
+                (first[1], first[2], first[3]) in chain_keys
+                and (second[1], second[2], second[3]) in chain_keys
+                for first, second in links
+            )
+            if not connected:
+                continue
+
+        chains.append(
+            LigandChain(
+                chain=chain,
+                residues=tuple(
+                    (resname, resseq, icode)
+                    for resseq, icode, resname, _ in residues
+                ),
+                atoms=chain_atoms,
+            )
+        )
+    return chains
+
+
+def find_ligand_sites(path: str | Path) -> list[LigandSite]:
+    """查找适合作为结合位点参考的共晶配体，按重原子数降序。
+
+    既识别单个 HETATM 小分子，也识别由多个残基组成的肽类配体链。
+    """
+    atoms = parse_atoms(path)
+    ligand_chains = find_ligand_chains(path, atoms=atoms)
+    grouped_chains = {chain.chain for chain in ligand_chains}
+
+    groups: dict[tuple[str, int, str, str], list[Atom]] = {}
+    for atom in atoms:
+        if atom.record != "HETATM":
+            continue
+        if not _is_ligand_residue(atom.resname):
+            continue
+        if atom.chain in grouped_chains:
             continue
         groups.setdefault(atom.residue_key, []).append(atom)
 
     sites: list[LigandSite] = []
-    for (chain, resseq, icode, resname), atoms in groups.items():
-        heavy = [a for a in atoms if not a.is_hydrogen]
+    for ligand_chain in ligand_chains:
+        heavy = [atom for atom in ligand_chain.atoms if not atom.is_hydrogen]
+        if len(heavy) < 6:
+            continue
+        try:
+            center, size = bounds_center_size([atom.coord for atom in heavy])
+        except ValueError:
+            continue
+        counts: dict[str, int] = {}
+        for atom in ligand_chain.atoms:
+            if atom.is_hydrogen or not _is_ligand_residue(atom.resname):
+                continue
+            resname = atom.resname.upper()
+            counts[resname] = counts.get(resname, 0) + 1
+        primary = (
+            max(counts, key=counts.get)
+            if counts
+            else ligand_chain.residues[0][0]
+        )
+        first_resname, first_resseq, first_icode = ligand_chain.residues[0]
+        sites.append(
+            LigandSite(
+                resname=primary,
+                chain=ligand_chain.chain,
+                resseq=first_resseq,
+                icode=first_icode,
+                atoms=ligand_chain.atoms,
+                center=center,
+                size=size,
+                residues=ligand_chain.residues,
+                kind="chain",
+            )
+        )
+
+    for (chain, resseq, icode, resname), residue_atoms in groups.items():
+        heavy = [a for a in residue_atoms if not a.is_hydrogen]
         carbons = sum(1 for a in heavy if a.element.upper() == "C")
         if len(heavy) < 6 or carbons < 3:
             continue
@@ -441,13 +699,57 @@ def find_ligand_sites(path: str | Path) -> list[LigandSite]:
                 chain=chain,
                 resseq=resseq,
                 icode=icode,
-                atoms=atoms,
+                atoms=residue_atoms,
                 center=center,
                 size=size,
+                residues=((resname, resseq, icode),),
+                kind="residue",
             )
         )
-    sites.sort(key=lambda s: len(s.atoms), reverse=True)
+    sites.sort(key=lambda site: site.heavy_atom_count, reverse=True)
     return sites
+
+
+def remove_chains(
+    path: str | Path,
+    output_path: str | Path,
+    chains: Iterable[str],
+) -> int:
+    """写出移除指定链后的 PDB，返回移除的原子行数。
+
+    同时删除这些链的 SEQRES / LINK / SSBOND 记录，避免修复工具
+    根据序列记录把配体肽链又补回受体。
+    """
+    removed_chains = {str(chain).strip() for chain in chains if str(chain).strip()}
+    removed_atoms = 0
+    lines: list[str] = []
+    try:
+        text = Path(path).read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        text = ""
+    for line in text.splitlines():
+        record = line[0:6].strip().upper()
+        if record in {"ATOM", "HETATM", "TER"}:
+            if line[21:22].strip() in removed_chains:
+                if record != "TER":
+                    removed_atoms += 1
+                continue
+        elif record == "SEQRES":
+            if line[11:12].strip() in removed_chains:
+                continue
+        elif record == "LINK":
+            first_chain = line[21:22].strip()
+            second_chain = line[51:52].strip()
+            if first_chain in removed_chains or second_chain in removed_chains:
+                continue
+        elif record == "SSBOND":
+            first_chain = line[15:16].strip()
+            second_chain = line[29:30].strip()
+            if first_chain in removed_chains or second_chain in removed_chains:
+                continue
+        lines.append(line)
+    Path(output_path).write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return removed_atoms
 
 
 @dataclass

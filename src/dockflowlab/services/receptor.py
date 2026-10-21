@@ -14,7 +14,7 @@ from __future__ import annotations
 import os
 import re
 import shutil
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Callable
 
@@ -280,6 +280,50 @@ def _from_existing_pdbqt(
     )
 
 
+def _exclude_ligand_chains(
+    source: Path,
+    temp: Path,
+    options: ReceptorPrepOptions,
+    warnings: list[str],
+) -> tuple[Path, ReceptorPrepOptions]:
+    """移除共晶配体所在的短链。
+
+    肽类抑制剂常被拆成标准氨基酸（ATOM）和非标准残基（HETATM），
+    PDBFixer 的 ``removeHeterogens`` 只能删掉后者，标准残基会留在受体里
+    并占据结合位点。这里按链整体移除，保证受体干净。
+    """
+    if not options.remove_heterogens:
+        return source, options
+    try:
+        ligand_chains = pdbio.find_ligand_chains(source)
+    except Exception as exc:
+        warnings.append(f"配体链检测失败：{exc}")
+        return source, options
+    if not ligand_chains:
+        return source, options
+
+    ligand_ids = {chain.chain for chain in ligand_chains}
+    labels = "、".join(chain.label for chain in ligand_chains)
+    if options.chains:
+        wanted = set(options.chains)
+        kept = wanted - ligand_ids
+        if not kept:
+            raise InputError(
+                f"选择的链 {', '.join(sorted(wanted))} 是共晶配体（{labels}），不能作为受体。"
+                "请选择蛋白链，或把配体作为待对接分子导入。"
+            )
+        if kept != wanted:
+            warnings.append(f"已从受体链选择中排除共晶配体链（{labels}）")
+            options = replace(options, chains=tuple(sorted(kept)))
+    else:
+        warnings.append(f"已自动排除共晶配体链（{labels}），避免其占据结合位点")
+
+    output = temp / "receptor_without_ligand_chains.pdb"
+    if pdbio.remove_chains(source, output, ligand_ids) <= 0:
+        return source, options
+    return output, options
+
+
 def prepare_receptor(
     input_path: str | Path,
     output_pdbqt: str | Path,
@@ -336,6 +380,9 @@ def prepare_receptor(
                     source = converted
                 else:
                     warnings.append(f"mmCIF 转 PDB 失败（{message}），将直接交给 PDBFixer")
+
+        # 肽类共晶配体可能同时包含 ATOM 与 HETATM 残基，必须在修复前整链移除。
+        source, options = _exclude_ligand_chains(source, temp, options, warnings)
 
         try:
             _notify(progress, "修复结构（PDBFixer）…")

@@ -27,13 +27,16 @@ config.py    用户偏好（与项目无关）
 ### core
 
 - `models.py`：`ProjectFile`、`Box`、`Pose`、`DockingResult` 等 dataclass。
-- `pdbio.py`：PDB/PDBQT 解析、元素推断、位点/共晶配体识别、复合物生成。
+- `pdbio.py`：PDB/PDBQT 解析、元素推断、位点/共晶配体识别（含标准氨基酸与
+  非标准残基混合的多残基肽类配体链）、指定链移除、复合物生成。
 - 只做确定性的文本/几何处理，不启动外部程序。
 
 ### services
 
 - `preparation.py`：编排受体与配体的准备流程，汇总每个条目的结果。
 - `receptor.py` / `ligand.py`：具体的结构修复、加氢、Meeko 与 OpenBabel 回退。
+  受体准备会先整链移除共晶配体所在的短链（包括肽类抑制剂），再做 PDBFixer
+  修复，避免配体的标准残基被当成受体的一部分。
 - `pockets.py`：基于 LIGSITE 思路的几何口袋检测（NumPy/SciPy，无需外部程序）。
 - `boxes.py`：盒子推荐与校验。手动 / 参考分子优先；自动模式先用几何口袋，
   再与共晶配体、`SITE` 记录做一致性校验，实验位点作为兜底。

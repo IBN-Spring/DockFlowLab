@@ -6,7 +6,11 @@ import pytest
 
 from dockflowlab.core import pdbio
 
-from .factories import make_ligand_pdbqt, make_protein_pdb
+from .factories import (
+    make_ligand_pdbqt,
+    make_peptide_ligand_pdb,
+    make_protein_pdb,
+)
 
 
 def test_parse_real_structure(pdb_path):
@@ -56,6 +60,43 @@ def test_synthetic_protein_and_ligand_site(tmp_path):
     assert pdbio.parse_site_records(path)
     assert pdbio.infer_element("CA", "ALA", "ATOM") == "C"
     assert pdbio.infer_element("CA", "CA", "HETATM") == "Ca"
+
+
+def test_peptide_ligand_chain_is_grouped(tmp_path):
+    """标准氨基酸 + 非标准残基组成的肽类配体应作为一个整体识别。"""
+    path = make_peptide_ligand_pdb(tmp_path / "peptide_complex.pdb")
+
+    chains = pdbio.find_ligand_chains(path)
+    assert [chain.chain for chain in chains] == ["C"]
+    assert chains[0].residue_count == 6
+    assert chains[0].heavy_atom_count == 49
+
+    sites = pdbio.find_ligand_sites(path)
+    assert len(sites) == 1
+    site = sites[0]
+    assert site.kind == "chain"
+    assert site.chain == "C"
+    assert site.residue_count == 6
+    assert site.heavy_atom_count == 49
+    assert site.resname == "PJE"  # 非标准残基中原子最多
+    assert "链 C" in site.label
+    assert "6 个残基" in site.label
+    assert site.reference == "链 C 配体"
+
+
+def test_remove_chains_drops_peptide_ligand(tmp_path):
+    path = make_peptide_ligand_pdb(tmp_path / "peptide_complex.pdb")
+    output = tmp_path / "without_chain_c.pdb"
+
+    removed = pdbio.remove_chains(path, output, {"C"})
+
+    assert removed == 49
+    atoms = pdbio.parse_atoms(output)
+    assert atoms
+    assert all(atom.chain == "A" for atom in atoms)
+    text = output.read_text(encoding="utf-8")
+    assert "SEQRES   1 C" not in text
+    assert " PJE C" not in text
 
 
 def test_validate_receptor_and_ligand_pdbqt(tmp_path, pdb_path):

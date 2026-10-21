@@ -227,7 +227,7 @@ def _methods(workspace: Workspace, results: Sequence[DockingResult], settings: A
         ("对接程序", "AutoDock Vina"),
         ("搜索参数", f"exhaustiveness = {settings.exhaustiveness}，num_modes = {settings.num_modes}，energy_range = {settings.energy_range:g} kcal/mol，seed = {settings.seed}"),
         ("盒子来源", "；".join(box_sources) or "自动"),
-        ("评分含义", "Vina 打分是经验评分函数的输出，单位为 kcal/mol；数值越低表示该程序预测的结合越有利，不等同于实验测得的 ΔG 或 Kd，也不能单独证明结合模式。"),
+        ("评分含义", "Vina 打分是经验评分函数的输出，单位为 kcal/mol；数值越低表示该程序预测的结合越有利。它不等同于实验测得的 ΔG 或 Kd，也不能单独证明结合模式；分数还会随 Vina 版本、评分函数（如 Vinardo）、受体/配体预处理、是否保留水/离子以及盒子范围而变化，因此不宜直接与其他软件的分数比较。小分子片段通常只能得到较小的负值。"),
         ("可重复性", "在相同软件版本、相同输入与相同参数下，固定 seed 的结果可重复；升级软件后可能出现细微差异。"),
     ]
     return "".join(f"<dt>{_e(key)}</dt><dd>{_e(value)}</dd>" for key, value in items)
