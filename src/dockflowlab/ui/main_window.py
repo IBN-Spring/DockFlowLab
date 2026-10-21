@@ -25,6 +25,7 @@ from ..config import AppSettings
 from ..core.models import KIND_LIGAND, KIND_TARGET, STATUS_READY, DockingResult
 from ..errors import DockFlowError
 from ..logging_setup import get_logger, setup_logging
+from ..services import modes
 from ..services.boxes import suggest_box
 from ..services.docking import DockingOptions, collect_existing_results, run_batch
 from ..services.download import DownloadResult
@@ -518,11 +519,26 @@ class MainWindow(QMainWindow):
         if self.workspace is None or self._busy:
             return
         workspace = self.workspace
-        targets = [entry for entry in workspace.targets if entry.status == STATUS_READY]
-        if not targets:
+        ready_targets = [entry for entry in workspace.targets if entry.status == STATUS_READY]
+        ready_ligands = [entry for entry in workspace.ligands if entry.is_ready]
+        if not ready_targets:
             QMessageBox.information(self, "没有可用的靶点", "请先在“检查与准备”中准备靶点。")
             return
-        ligands = [workspace.absolute(entry.prepared) for entry in workspace.ligands if entry.is_ready]
+        supported = modes.supported_pairs(ready_targets, ready_ligands, workspace)
+        if not supported:
+            QMessageBox.information(
+                self,
+                "没有可运行的组合",
+                "当前的靶点与候选分子组合都属于不支持的对接类型，无法生成盒子。\n\n"
+                "蛋白–蛋白等大分子对接请使用 ClusPro、HADDOCK 或 RosettaDock。",
+            )
+            return
+        ligands_by_target: dict[str, list] = {}
+        for target, ligand, _mode in supported:
+            ligands_by_target.setdefault(target.stem, []).append(
+                workspace.absolute(ligand.prepared)
+            )
+        targets = [target for target in ready_targets if target.stem in ligands_by_target]
         settings = self.settings
         obabel = self._get_obabel()
         QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
@@ -538,9 +554,9 @@ class MainWindow(QMainWindow):
                     box, _ = suggest_box(
                         target_source=workspace.absolute(target.source),
                         target_prepared_pdb=workspace.prepared_target_pdb(target.stem),
-                        ligand_paths=ligands,
+                        ligand_paths=ligands_by_target[target.stem],
                         settings=settings,
-                        target_kind=str(target.meta.get("kind", "macromolecule")),
+                        target_kind=modes.target_kind_for(target, workspace),
                         chains=target.meta.get("chains", []),
                         obabel=obabel,
                     )
@@ -606,7 +622,31 @@ class MainWindow(QMainWindow):
             make_complex=True,
             make_pymol=True,
         )
-        pairs = [(target, ligand) for target in ready_targets for ligand in ready_ligands]
+        supported = modes.supported_pairs(ready_targets, ready_ligands, workspace)
+        if not supported:
+            reasons: list[str] = []
+            for target in ready_targets:
+                for ligand in ready_ligands:
+                    mode = modes.pair_mode(target, ligand, workspace)
+                    if not mode.supported:
+                        reasons.append(
+                            f"{target.display_name} + {ligand.display_name}：{mode.label}"
+                        )
+            QMessageBox.information(
+                self,
+                "没有可运行的组合",
+                "当前组合都属于不支持的对接类型，不会执行 Vina 计算：\n\n"
+                + "\n".join(f"· {item}" for item in reasons[:8])
+                + "\n\n蛋白–蛋白等大分子对接请使用 ClusPro、HADDOCK 或 RosettaDock 等专门工具。",
+            )
+            return
+        pairs = [(target, ligand) for target, ligand, _mode in supported]
+        ligands_by_target: dict[str, list] = {}
+        for target, ligand, _mode in supported:
+            ligands_by_target.setdefault(target.stem, []).append(
+                workspace.absolute(ligand.prepared)
+            )
+        runnable_targets = [target for target in ready_targets if target.stem in ligands_by_target]
         obabel = self._get_obabel()
         settings = self.settings
 
@@ -617,16 +657,16 @@ class MainWindow(QMainWindow):
         def job(progress, cancel, line):
             boxes = {}
             box_errors: dict[str, str] = {}
-            for target in ready_targets:
+            for target in runnable_targets:
                 box = workspace.load_box(target.stem)
                 if box is None:
                     try:
                         box, _ = suggest_box(
                             target_source=workspace.absolute(target.source),
                             target_prepared_pdb=workspace.prepared_target_pdb(target.stem),
-                            ligand_paths=[workspace.absolute(entry.prepared) for entry in ready_ligands],
+                            ligand_paths=ligands_by_target[target.stem],
                             settings=settings,
-                            target_kind=str(target.meta.get("kind", "macromolecule")),
+                            target_kind=modes.target_kind_for(target, workspace),
                             chains=target.meta.get("chains", []),
                             obabel=obabel,
                         )
@@ -657,12 +697,16 @@ class MainWindow(QMainWindow):
             )
             for target, ligand in pairs:
                 if target.stem in box_errors:
+                    mode = modes.pair_mode(target, ligand, workspace)
                     results.append(
                         DockingResult(
                             target=target.stem,
                             ligand=ligand.stem,
                             ok=False,
                             error=box_errors[target.stem],
+                            mode_key=mode.key,
+                            mode_label=mode.label,
+                            mode_supported=mode.supported,
                         )
                     )
             report_path = ""
@@ -871,7 +915,9 @@ class MainWindow(QMainWindow):
             self,
             f"关于 {__app_name_zh__}",
             f"<b>DockFlowLab {__version__}</b><br><br>"
-            "面向蛋白–小分子对接的桌面工作台。<br>"
+            "支持蛋白–小分子、多肽–小分子、核酸–小分子、小分子–小分子与蛋白–多肽对接。<br>"
+            "程序会根据结构类型自动选择模式；蛋白–蛋白等大分子对接不在本地实现，"
+            "请使用 ClusPro、HADDOCK 或 RosettaDock 等专门工具。<br>"
             "计算由 AutoDock Vina 完成；结构准备使用 RDKit、Meeko、PDBFixer 与 OpenBabel。<br><br>"
             "结果仅用于科研参考，需结合实验验证。",
         )

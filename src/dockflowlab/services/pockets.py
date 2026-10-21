@@ -382,11 +382,11 @@ def _load_protein_atoms(
         atoms = pdbio.parse_atoms(path, first_model=True)
 
     allowed = {str(chain).strip() for chain in chains if str(chain).strip()}
-    protein = [
+    polymer = [
         atom
         for atom in atoms
-        if atom.resname in pdbio.AMINO_ACIDS
+        if pdbio.is_polymer_residue(atom.resname)
         and not atom.is_hydrogen
         and (not allowed or atom.chain in allowed)
     ]
-    return protein
+    return polymer

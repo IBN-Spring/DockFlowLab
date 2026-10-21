@@ -19,6 +19,7 @@ from ..logging_setup import get_logger
 from ..tools.runtime import resource_path
 from ..version import __app_name__, __version__, component_version
 from ..workspace import Workspace
+from . import modes
 from .analysis import AnalysisBundle, analyze, unique_labels
 from .docking import collect_existing_results
 
@@ -28,7 +29,7 @@ BOX_LABELS = {
     "pocket": "几何口袋",
     "cocrystal": "共晶配体",
     "site": "PDB 结合位点",
-    "blind": "全蛋白盲对接",
+    "blind": "全结构盲对接",
     "manual": "手动设置",
     "reference": "参考分子",
     "ligand": "目标分子",
@@ -82,7 +83,7 @@ def _tiles(bundle: AnalysisBundle) -> str:
     targets = len({item.target for item in results})
     ligands = len({item.ligand for item in results})
     cards = [
-        (str(targets), "靶点蛋白"),
+        (str(targets), "靶点结构"),
         (str(ligands), "候选分子"),
         (f"{len(success)} / {len(results)}", "成功 / 总任务"),
         (f"{best:.2f}" if best is not None else "—", "最佳打分 (kcal/mol)"),
@@ -148,7 +149,10 @@ def _results_table(
             runtime = f"{item.runtime_seconds:.1f}" if item.runtime_seconds else "—"
             note = "；".join(item.warnings)
         else:
-            status = '<span class="badge fail">失败</span>'
+            if item.mode_supported:
+                status = '<span class="badge fail">失败</span>'
+            else:
+                status = '<span class="badge fail">不支持</span>'
             score = "—"
             runtime = "—"
             note = item.error or "未知错误"
@@ -156,6 +160,7 @@ def _results_table(
             "<tr>"
             f"<td>{_e(target_labels.get(item.target, item.target))}</td>"
             f"<td>{_e(ligand_labels.get(item.ligand, item.ligand))}</td>"
+            f"<td>{_e(item.mode_label or '—')}</td>"
             f'<td class="num">{_e(score)}</td>'
             f"<td>{_e(BOX_LABELS.get(item.box_source, item.box_source or '自动'))}</td>"
             f'<td class="num">{_e(runtime)}</td>'
@@ -165,7 +170,7 @@ def _results_table(
         )
     return (
         '<div class="table-wrap"><table>'
-        "<thead><tr><th>靶点</th><th>候选分子</th><th class='num'>最佳打分</th>"
+        "<thead><tr><th>靶点</th><th>候选分子</th><th>对接类型</th><th class='num'>最佳打分</th>"
         "<th>盒子来源</th><th class='num'>耗时 (秒)</th><th>状态</th><th>说明</th></tr></thead>"
         f"<tbody>{''.join(rows)}</tbody></table></div>"
     )
@@ -220,16 +225,39 @@ def _methods(workspace: Workspace, results: Sequence[DockingResult], settings: A
         for entry in workspace.ligands
         if entry.meta.get("prep_method")
     })
+    mode_labels = sorted({item.mode_label for item in results if item.mode_label})
+    mode_notes: list[str] = []
+    seen_modes: set[str] = set()
+    for item in results:
+        if not item.mode_key or item.mode_key in seen_modes:
+            continue
+        seen_modes.add(item.mode_key)
+        mode = modes.MODES_BY_KEY.get(item.mode_key)
+        if mode is not None and mode.warnings:
+            mode_notes.append(f"{mode.label}：" + " ".join(mode.warnings))
+    unsupported = sorted({
+        item.mode_label for item in results
+        if not item.mode_supported and item.mode_label
+    })
     items = [
         ("软件版本", _software_line()),
         ("靶点准备", "；".join(target_methods) or "去除水/离子/添加剂，补全缺失残基与原子，按 pH 7.4 加氢，生成含 Gasteiger 电荷的刚性 PDBQT。"),
         ("候选分子准备", "；".join(ligand_methods) or "保留最大有机片段，补氢并生成三维构象，能量最小化，按 pH 7.4 校正质子化，输出柔性 PDBQT。"),
+        ("对接类型", "；".join(mode_labels) or "根据结构类型自动识别"),
         ("对接程序", "AutoDock Vina"),
         ("搜索参数", f"exhaustiveness = {settings.exhaustiveness}，num_modes = {settings.num_modes}，energy_range = {settings.energy_range:g} kcal/mol，seed = {settings.seed}"),
         ("盒子来源", "；".join(box_sources) or "自动"),
         ("评分含义", "Vina 打分是经验评分函数的输出，单位为 kcal/mol；数值越低表示该程序预测的结合越有利。它不等同于实验测得的 ΔG 或 Kd，也不能单独证明结合模式；分数还会随 Vina 版本、评分函数（如 Vinardo）、受体/配体预处理、是否保留水/离子以及盒子范围而变化，因此不宜直接与其他软件的分数比较。小分子片段通常只能得到较小的负值。"),
+        ("类型适用性", "；".join(mode_notes) or "不同对接类型的分数不宜直接横向比较。"),
         ("可重复性", "在相同软件版本、相同输入与相同参数下，固定 seed 的结果可重复；升级软件后可能出现细微差异。"),
     ]
+    if unsupported:
+        items.append(
+            (
+                "未支持的组合",
+                "；".join(unsupported) + " 未执行 Vina 计算。蛋白–蛋白等大分子对接请使用 ClusPro、HADDOCK 或 RosettaDock 等专门工具。",
+            )
+        )
     return "".join(f"<dt>{_e(key)}</dt><dd>{_e(value)}</dd>" for key, value in items)
 
 

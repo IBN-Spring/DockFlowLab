@@ -119,6 +119,8 @@ def unique_labels(entries: Iterable[ProjectFile]) -> dict[str, str]:
 def _status_label(result: DockingResult) -> str:
     if result.ok:
         return "成功（已有结果）" if result.skipped else "成功"
+    if not result.mode_supported:
+        return "不支持"
     return "失败"
 
 
@@ -150,6 +152,7 @@ def analyze(
             "靶点代号": result.target,
             "配体": ligand_label,
             "配体代号": result.ligand,
+            "对接类型": result.mode_label or "—",
             "盒子来源": result.box_source or "—",
             "耗时（秒）": round(result.runtime_seconds, 1) if result.runtime_seconds else None,
         }
@@ -183,9 +186,9 @@ def analyze(
     if dataframe.empty:
         dataframe = pd.DataFrame(
             columns=[
-                "靶点", "靶点代号", "配体", "配体代号", "盒子来源", "耗时（秒）",
-                "排名", "结合能 (kcal/mol)", "RMSD 下限 (Å)", "RMSD 上限 (Å)",
-                "状态", "说明",
+                "靶点", "靶点代号", "配体", "配体代号", "对接类型", "盒子来源",
+                "耗时（秒）", "排名", "结合能 (kcal/mol)", "RMSD 下限 (Å)",
+                "RMSD 上限 (Å)", "状态", "说明",
             ]
         )
 
@@ -229,6 +232,17 @@ def analyze(
 
     summary = _build_summary(workspace, results, target_labels, ligand_labels)
     summary_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    mode_labels = sorted(
+        {result.mode_label for result in results if result.ok and result.mode_label}
+    )
+    if len(mode_labels) > 1:
+        warnings.append(
+            "结果包含多种对接类型（" + "、".join(mode_labels) + "）。"
+            "Vina 分数适合在同一对接类型内部排序，不宜跨类型直接比较。"
+        )
+    if any(not result.mode_supported for result in results):
+        warnings.append("部分组合属于不支持的对接类型，未执行计算；详见结果表中的“不支持”状态。")
 
     actual_heatmap: Path | None = None
     if make_heatmap and not matrix.empty and matrix.size >= 2:
@@ -289,6 +303,25 @@ def _build_summary(
                 "target": target_labels.get(result.target, result.target),
                 "affinity": round(result.poses[0].affinity, 3),
             }
+    modes: dict[str, Any] = {}
+    for result in results:
+        label = result.mode_label or "未识别"
+        current = modes.setdefault(label, {"total": 0, "success": 0, "failed": 0})
+        current["total"] += 1
+        if result.ok and result.poses:
+            current["success"] += 1
+        else:
+            current["failed"] += 1
+    unsupported_modes = [
+        {
+            "target": target_labels.get(result.target, result.target),
+            "ligand": ligand_labels.get(result.ligand, result.ligand),
+            "mode": result.mode_label,
+            "reason": result.error,
+        }
+        for result in results
+        if not result.mode_supported
+    ]
     return {
         "generated": datetime.now().astimezone().isoformat(timespec="seconds"),
         "project": workspace.name,
@@ -307,6 +340,8 @@ def _build_summary(
         },
         "per_target": dict(sorted(per_target.items(), key=lambda item: item[1]["affinity"])),
         "per_ligand": dict(sorted(per_ligand.items(), key=lambda item: item[1]["affinity"])),
+        "modes": dict(sorted(modes.items(), key=lambda item: (-item[1]["total"], item[0]))),
+        "unsupported_modes": unsupported_modes,
         "failures": [
             {
                 "target": target_labels.get(result.target, result.target),

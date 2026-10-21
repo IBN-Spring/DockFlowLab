@@ -31,6 +31,7 @@ from PySide6.QtWidgets import (
 from ..config import AppSettings
 from ..core.models import KIND_LIGAND, KIND_TARGET, Box, DownloadResult, ProjectFile
 from ..errors import DockFlowError
+from ..services import modes
 from ..services.boxes import suggest_box, validate_manual_box
 from ..services.download import DownloadClient
 from ..tools.obabel import OpenBabelAdapter
@@ -360,14 +361,19 @@ class BoxDialog(QDialog):
     def _compute_auto(self) -> None:
         self.auto_summary.setText("正在计算推荐位置…")
         self.auto_warning.setText("")
-        ligands = [self.workspace.absolute(entry.prepared) for entry in self.workspace.ligands if entry.is_ready]
+        ligands = [
+            self.workspace.absolute(entry.prepared)
+            for entry in self.workspace.ligands
+            if entry.is_ready
+            and modes.pair_mode(self.target, entry, self.workspace).supported
+        ]
         try:
             box, warnings = suggest_box(
                 target_source=self.workspace.absolute(self.target.source),
                 target_prepared_pdb=self.workspace.prepared_target_pdb(self.target.stem),
                 ligand_paths=ligands,
                 settings=self.settings,
-                target_kind=str(self.target.meta.get("kind", "macromolecule")),
+                target_kind=modes.target_kind_for(self.target, self.workspace),
                 chains=self.target.meta.get("chains", []),
                 obabel=self.obabel,
             )

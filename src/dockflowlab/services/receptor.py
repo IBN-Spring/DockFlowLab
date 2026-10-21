@@ -51,6 +51,16 @@ def _notify(progress: Progress, message: str) -> None:
             pass
 
 
+def _model_count(pdb_path: Path) -> int:
+    """返回 PDB 中 MODEL 记录的数量；没有 MODEL 时视为 1 个模型。"""
+    try:
+        text = pdb_path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return 1
+    count = len(re.findall(r"^MODEL\b", text, re.M))
+    return max(1, count)
+
+
 def _first_model(pdb_path: Path, output_path: Path) -> Path:
     """如果 PDB 含多个 MODEL，只保留第一个（NMR 结构常见）。"""
     text = pdb_path.read_text(encoding="utf-8", errors="replace")
@@ -346,7 +356,14 @@ def prepare_receptor(
 
     fmt = pdbio.detect_format(input_path)
     if fmt == "pdbqt":
-        return _from_existing_pdbqt(input_path, output_pdbqt, output_pdb, obabel, warnings)
+        kind, _ = pdbio.structure_kind(input_path)
+        outcome = _from_existing_pdbqt(
+            input_path, output_pdbqt, output_pdb, obabel, warnings
+        )
+        outcome.details.setdefault(
+            "kind", kind if kind in {"protein", "peptide", "nucleic_acid", "small_molecule"} else "macromolecule"
+        )
+        return outcome
 
     _notify(progress, "检查结构类型…")
     kind, detail = pdbio.structure_kind(input_path) if fmt in {"pdb", "mol2"} else ("macromolecule", "mmCIF 结构")
@@ -361,6 +378,12 @@ def prepare_receptor(
     with work_directory("receptor") as temp:
         source = input_path
         if fmt == "pdb":
+            model_count = _model_count(input_path)
+            if model_count > 1:
+                warnings.append(
+                    f"结构包含 {model_count} 个模型，已只使用第一个模型。"
+                    "若需要集合对接，请先把模型拆分为单独文件分别导入。"
+                )
             source = _first_model(input_path, temp / "first_model.pdb")
             if options.keep_cofactors:
                 source, removed = _filter_heterogens_for_cofactors(source, temp / "with_cofactors.pdb")
@@ -378,6 +401,14 @@ def prepare_receptor(
                 ok, message = obabel.convert(source, converted, out_format="pdb")
                 if ok:
                     source = converted
+                    detected, detected_detail = pdbio.structure_kind(source)
+                    if detected == "small_molecule":
+                        raise InputError(
+                            "这个 mmCIF 文件是小分子，应作为“待对接分子”处理，"
+                            "或用于小分子–小分子对接的目标。"
+                        )
+                    if detected != "unknown":
+                        kind, detail = detected, detected_detail
                 else:
                     warnings.append(f"mmCIF 转 PDB 失败（{message}），将直接交给 PDBFixer")
 
@@ -405,6 +436,9 @@ def prepare_receptor(
                 source, output_pdb, output_pdbqt, options, obabel, warnings, progress
             )
             outcome.warnings = warnings
+            outcome.details.setdefault(
+                "kind", kind if kind in {"protein", "peptide", "nucleic_acid"} else "macromolecule"
+            )
             return outcome
 
         _notify(progress, "转换为受体 PDBQT（Gasteiger 电荷）…")
@@ -421,6 +455,7 @@ def prepare_receptor(
                 "atoms": stats.get("atoms", details.get("atoms", 0)),
                 "ph": options.ph,
                 "chains_selected": list(options.chains),
+                "kind": kind if kind in {"protein", "peptide", "nucleic_acid"} else "macromolecule",
             }
         )
         return PrepOutcome(
@@ -430,6 +465,35 @@ def prepare_receptor(
             details=details,
             warnings=warnings,
         )
+
+
+def _classify_target(
+    input_path: Path,
+    obabel: OpenBabelAdapter,
+) -> tuple[str, str]:
+    """按“靶点”角色判断结构类型。
+
+    MOL2/mmCIF 无法直接用 PDB 列解析，需要先借助 OpenBabel 转成 PDB；
+    转换失败时返回 unknown，由调用方给出明确提示。
+    """
+    fmt = pdbio.detect_format(input_path)
+    if fmt in {"pdb", "pdbqt"}:
+        return pdbio.structure_kind(input_path)
+    if fmt in {"sdf", "mol", "smi", "smiles", "inchi"}:
+        return "small_molecule", f"{fmt.upper()} 分子文件"
+    if fmt in {"mol2", "cif"}:
+        if not obabel.available:
+            return "unknown", "需要 OpenBabel 才能读取这种格式"
+        try:
+            with work_directory("target_kind") as temp:
+                converted = temp / "target.pdb"
+                ok, _ = obabel.convert(input_path, converted, out_format="pdb")
+                if ok:
+                    return pdbio.structure_kind(converted)
+        except Exception as exc:  # 分类失败不应阻断后续准备流程
+            log.warning("靶点类型识别失败：%s", exc)
+        return "unknown", f"无法读取 {fmt.upper()} 结构"
+    return "unknown", f"不支持的格式：{fmt}"
 
 
 def prepare_target(
@@ -447,19 +511,9 @@ def prepare_target(
     obabel = obabel or get_openbabel()
     input_path = Path(input_path)
     fmt = pdbio.detect_format(input_path)
-    if fmt in {"pdb", "mol2"}:
-        kind, _ = pdbio.structure_kind(input_path)
-        if kind == "small_molecule":
-            ligand_options = ligand_options or LigandPrepOptions(ph=options.ph)
-            return prepare_rigid_target(
-                input_path,
-                output_pdbqt,
-                output_pdb,
-                options=ligand_options,
-                obabel=obabel,
-                progress=progress,
-            )
-    if fmt in {"sdf", "mol", "smi", "smiles", "inchi"}:
+    kind, detail = _classify_target(input_path, obabel)
+
+    if kind == "small_molecule":
         ligand_options = ligand_options or LigandPrepOptions(ph=options.ph)
         return prepare_rigid_target(
             input_path,
@@ -468,6 +522,12 @@ def prepare_target(
             options=ligand_options,
             obabel=obabel,
             progress=progress,
+        )
+    # MOL2 只有经过 OpenBabel 才能被受体流程读取；大分子 MOL2 不在支持范围内。
+    if fmt == "mol2" and kind != "small_molecule":
+        raise InputError(
+            "无法把该 MOL2 识别为小分子靶点。MOL2 靶点目前只支持小分子；"
+            "蛋白/核酸等大分子请使用 PDB 或 mmCIF 格式。"
         )
     return prepare_receptor(
         input_path,
@@ -487,12 +547,14 @@ def inspect_target(path: str | Path, obabel: OpenBabelAdapter | None = None) -> 
     if fmt == "pdbqt":
         atoms = pdbio.parse_pdbqt_atoms(path)
         heavy = [a for a in atoms if not a.is_hydrogen]
+        kind, detail = pdbio.structure_kind(path)
         info.update(
             {
                 "ok": True,
-                "kind": "macromolecule",
+                "kind": kind,
+                "detail": detail,
                 "atoms": len(heavy),
-                "chains": sorted({a.chain for a in heavy if a.chain}),
+                "chains": pdbio.polymer_chains(path),
                 "residues": len({a.residue_key for a in heavy}),
                 "co_crystal": [],
                 "sites": [],
@@ -514,14 +576,29 @@ def inspect_target(path: str | Path, obabel: OpenBabelAdapter | None = None) -> 
                 pass
         info.update({"kind": "macromolecule", "note": "mmCIF 结构将在准备时转换"})
         return info
-    if fmt not in {"pdb", "mol2"}:
+    if fmt == "mol2":
+        adapter = obabel or get_openbabel()
+        if adapter.available:
+            try:
+                with work_directory("inspect_mol2") as temp:
+                    converted = temp / "inspect.pdb"
+                    ok, _ = adapter.convert(path, converted, out_format="pdb")
+                    if ok:
+                        nested = inspect_target(converted, adapter)
+                        nested.update({"path": str(path), "format": "mol2", "converted": True})
+                        return nested
+            except Exception:
+                pass
+        info.update({"kind": "unknown", "note": "无法读取 MOL2 结构，请确认 OpenBabel 可用"})
+        return info
+    if fmt != "pdb":
         info.update({"kind": "unknown", "note": f"不支持的格式：{fmt}"})
         return info
 
     atoms = pdbio.parse_atoms(path)
     heavy = [a for a in atoms if not a.is_hydrogen]
     kind, detail = pdbio.structure_kind(path)
-    chains = pdbio.protein_chains(path)
+    chains = pdbio.polymer_chains(path)
     sites = pdbio.find_ligand_sites(path)
     site_records = pdbio.parse_site_records(path)
     info.update(

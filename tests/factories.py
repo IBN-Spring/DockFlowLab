@@ -196,6 +196,37 @@ def make_peptide_ligand_pdb(path: Path, *, residues: int = 25) -> Path:
     return path
 
 
+def make_dna_pdb(path: Path, *, residues: int = 8) -> Path:
+    """生成一段单链 DNA，用于测试核酸分类与核酸靶点流程。"""
+    names = ["DA", "DC", "DG", "DT"]
+    lines = ["HEADER    TEST DNA SINGLE STRAND"]
+    serial = 1
+    atoms = (
+        ("P", "P", 0.0),
+        ("OP1", "O", 0.6),
+        ("OP2", "O", -0.6),
+        ("O5'", "O", 1.2),
+        ("C5'", "C", 1.8),
+        ("C4'", "C", 2.4),
+        ("O4'", "O", 3.0),
+        ("C1'", "C", 3.4),
+    )
+    for index in range(residues):
+        resname = names[index % len(names)]
+        base = index * 6.0
+        for atom_name, element, dx in atoms:
+            lines.append(
+                atom_line(
+                    "ATOM", serial, atom_name, resname, "D", index + 1,
+                    float(base + dx), 50.0 + 0.3 * index, 60.0 + dx, element,
+                )
+            )
+            serial += 1
+    lines.append("END")
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return path
+
+
 def make_cage_pdb(
     path: Path,
     *,

@@ -27,6 +27,7 @@ from ..logging_setup import get_logger
 from ..tools.obabel import OpenBabelAdapter, get_openbabel
 from ..workspace import Workspace
 from .ligand import LigandPrepOptions, prepare_ligand
+from .modes import LIGAND_PEPTIDE_MAX_HEAVY_ATOMS, LIGAND_PEPTIDE_MAX_RESIDUES
 from .receptor import ReceptorPrepOptions, prepare_target
 
 log = get_logger("preparation")
@@ -79,20 +80,27 @@ def _store_outcome(
     prepared: Path,
 ) -> None:
     _invalidate_auto_box(workspace, entry)
+    meta = {
+        "prep_method": outcome.method,
+        "prep_details": outcome.details,
+        "prep_warnings": outcome.warnings,
+    }
+    kind = str(outcome.details.get("kind") or "").strip()
+    if kind:
+        meta["kind"] = kind
     workspace.update_entry(
         entry,
         status=STATUS_READY,
         prepared=workspace.relative(prepared),
         message=outcome.message or "已准备完成",
-        meta={
-            "prep_method": outcome.method,
-            "prep_details": outcome.details,
-            "prep_warnings": outcome.warnings,
-        },
+        meta=meta,
     )
 
 
 def _store_failure(workspace: Workspace, entry: ProjectFile, message: str) -> None:
+    # 准备失败后不要再沿用上一次成功时写入的结构类型，否则界面可能把
+    # 一个已经损坏/被替换的文件继续当成可对接的小分子或核酸。
+    entry.meta.pop("kind", None)
     workspace.update_entry(
         entry,
         status=STATUS_FAILED,
@@ -151,11 +159,23 @@ def prepare_entry(
             return outcome
 
         if entry.kind == KIND_LIGAND:
-            if pdbio.looks_like_protein(source):
-                raise PreparationError(
-                    "这个文件是蛋白质，不能放在“候选分子”里。"
-                    "本工具专注蛋白–小分子对接；蛋白–蛋白对接请使用 ClusPro、HADDOCK 等专门工具。"
+            if pdbio.detect_format(source) in {"pdb", "pdbqt"}:
+                kind, detail = pdbio.structure_kind(
+                    source,
+                    peptide_max_residues=LIGAND_PEPTIDE_MAX_RESIDUES,
+                    peptide_max_heavy_atoms=LIGAND_PEPTIDE_MAX_HEAVY_ATOMS,
                 )
+                if kind == "protein":
+                    raise PreparationError(
+                        "这个文件包含完整蛋白质，不能放在“候选分子”里。"
+                        "本地版本不做蛋白–蛋白对接；多肽请控制在 50 个残基以内。"
+                        "蛋白–蛋白界面请使用 ClusPro、HADDOCK 或 RosettaDock。"
+                    )
+                if kind == "nucleic_acid":
+                    raise PreparationError(
+                        "这个文件是核酸结构，不能作为候选分子。"
+                        "核酸–小分子对接请把核酸放在“靶点结构”一栏。"
+                    )
             multi_record = 0
             if source.suffix.lower() in {".sdf", ".sd"}:
                 text = source.read_text(encoding="utf-8", errors="ignore")

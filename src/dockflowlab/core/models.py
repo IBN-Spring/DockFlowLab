@@ -115,7 +115,7 @@ class Box:
             "pocket": "几何口袋",
             "cocrystal": "共晶配体",
             "site": "PDB 结合位点",
-            "blind": "全蛋白盲对接",
+            "blind": "全结构盲对接",
             "manual": "手动设置",
             "reference": "参考分子",
             "ligand": "目标分子",
@@ -149,6 +149,9 @@ class DockingResult:
     runtime_seconds: float = 0.0
     box_source: str = ""
     warnings: list[str] = field(default_factory=list)
+    mode_key: str = ""
+    mode_label: str = ""
+    mode_supported: bool = True
 
     @property
     def best_affinity(self) -> float | None:

@@ -170,13 +170,18 @@ class LigandChain:
         return _format_chain_ligand(self.chain, self.residues)
 
 
-def _is_polymer_residue(resname: str) -> bool:
+def is_polymer_residue(resname: str) -> bool:
+    """残基是否属于蛋白/多肽或核酸聚合物链。"""
     resname = resname.upper()
     return (
         resname in AMINO_ACIDS
         or resname in NUCLEIC_ACIDS
         or resname in MODIFIED_AMINO_ACIDS
     )
+
+
+def _is_polymer_residue(resname: str) -> bool:
+    return is_polymer_residue(resname)
 
 
 def _is_ligand_residue(resname: str) -> bool:
@@ -475,26 +480,108 @@ def protein_chains(path: str | Path) -> list[dict[str, object]]:
     return result
 
 
-def structure_kind(path: str | Path) -> tuple[str, str]:
-    """返回 (类别, 说明)。类别：protein / peptide / nucleic_acid / small_molecule / unknown。"""
-    atoms = parse_atoms(path)
+def polymer_chains(path: str | Path) -> list[dict[str, object]]:
+    """返回蛋白/多肽/核酸链摘要，供界面展示与模式判断使用。"""
+    fmt = detect_format(path)
+    atoms = parse_pdbqt_atoms(path) if fmt == "pdbqt" else parse_atoms(path)
+    chain_atoms: dict[str, int] = {}
+    protein_residues: dict[str, set[tuple[int, str, str]]] = {}
+    nucleic_residues: dict[str, set[tuple[int, str, str]]] = {}
+    for atom in atoms:
+        if atom.is_hydrogen:
+            continue
+        resname = atom.resname.upper()
+        if resname in AMINO_ACIDS or resname in MODIFIED_AMINO_ACIDS:
+            protein_residues.setdefault(atom.chain, set()).add(
+                (atom.resseq, atom.icode, resname)
+            )
+        elif resname in NUCLEIC_ACIDS:
+            nucleic_residues.setdefault(atom.chain, set()).add(
+                (atom.resseq, atom.icode, resname)
+            )
+        else:
+            continue
+        chain_atoms[atom.chain] = chain_atoms.get(atom.chain, 0) + 1
+
+    result: list[dict[str, object]] = []
+    for chain in sorted(chain_atoms):
+        protein_count = len(protein_residues.get(chain, set()))
+        nucleic_count = len(nucleic_residues.get(chain, set()))
+        if protein_count and nucleic_count:
+            chain_type = "mixed"
+        elif nucleic_count:
+            chain_type = "nucleic_acid"
+        else:
+            chain_type = "protein"
+        result.append(
+            {
+                "chain": chain or " ",
+                "type": chain_type,
+                "atoms": chain_atoms[chain],
+                "residues": protein_count + nucleic_count,
+                "protein_residues": protein_count,
+                "nucleic_residues": nucleic_count,
+            }
+        )
+    return result
+
+
+def classify_atoms(
+    atoms: Sequence[Atom],
+    *,
+    peptide_max_residues: int = 20,
+    peptide_max_heavy_atoms: int = 500,
+) -> tuple[str, str]:
+    """按原子记录判断结构类型。
+
+    ``peptide_max_*`` 允许调用方按角色调整“多肽”上限：候选分子可以是
+    较大的多肽（默认 50 个残基），而靶点仍按较严格的阈值区分蛋白与多肽。
+    """
     if not atoms:
         return "unknown", "文件中没有可识别的原子记录"
     heavy = [a for a in atoms if not a.is_hydrogen]
-    protein_atoms = [a for a in heavy if a.resname in AMINO_ACIDS]
+    protein_atoms = [
+        a for a in heavy
+        if a.resname in AMINO_ACIDS or a.resname in MODIFIED_AMINO_ACIDS
+    ]
     nucleic_atoms = [a for a in heavy if a.resname in NUCLEIC_ACIDS]
     protein_residues = {a.residue_key for a in protein_atoms}
+
+    def _polymer_kind() -> str:
+        if (
+            len(protein_residues) <= max(1, int(peptide_max_residues))
+            and len(protein_atoms) <= max(1, int(peptide_max_heavy_atoms))
+        ):
+            return "peptide"
+        return "protein"
+
     if len(protein_residues) >= 5 and len(protein_atoms) >= 20:
-        kind = "peptide" if len(protein_residues) < 20 else "protein"
+        kind = _polymer_kind()
         return kind, f"检测到 {len(protein_residues)} 个氨基酸残基"
     if len(protein_atoms) >= 20 and len(protein_atoms) >= 0.3 * len(heavy):
-        kind = "peptide" if len(protein_residues) < 20 else "protein"
+        kind = _polymer_kind()
         return kind, f"检测到 {len(protein_residues)} 个氨基酸残基"
     if len(nucleic_atoms) >= 20:
         return "nucleic_acid", "检测到核酸结构"
     if 3 <= len(heavy) <= 300:
         return "small_molecule", f"检测到 {len(heavy)} 个重原子的小分子"
     return "unknown", f"共 {len(heavy)} 个重原子，无法判断结构类型"
+
+
+def structure_kind(
+    path: str | Path,
+    *,
+    peptide_max_residues: int = 20,
+    peptide_max_heavy_atoms: int = 500,
+) -> tuple[str, str]:
+    """返回 (类别, 说明)。类别：protein / peptide / nucleic_acid / small_molecule / unknown。"""
+    fmt = detect_format(path)
+    atoms = parse_first_pose_atoms(path) if fmt == "pdbqt" else parse_atoms(path)
+    return classify_atoms(
+        atoms,
+        peptide_max_residues=peptide_max_residues,
+        peptide_max_heavy_atoms=peptide_max_heavy_atoms,
+    )
 
 
 def looks_like_protein(path: str | Path) -> bool:

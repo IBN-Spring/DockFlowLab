@@ -27,17 +27,25 @@ config.py    用户偏好（与项目无关）
 ### core
 
 - `models.py`：`ProjectFile`、`Box`、`Pose`、`DockingResult` 等 dataclass。
-- `pdbio.py`：PDB/PDBQT 解析、元素推断、位点/共晶配体识别（含标准氨基酸与
-  非标准残基混合的多残基肽类配体链）、指定链移除、复合物生成。
+  `DockingResult` 额外记录对接类型（`mode_key`、`mode_label`、`mode_supported`）。
+- `pdbio.py`：PDB/PDBQT 解析、元素推断、结构类型识别（蛋白 / 多肽 / 核酸 /
+  小分子）、位点/共晶配体识别（含标准氨基酸与非标准残基混合的多残基肽类
+  配体链）、指定链移除、复合物生成。
 - 只做确定性的文本/几何处理，不启动外部程序。
 
 ### services
 
-- `preparation.py`：编排受体与配体的准备流程，汇总每个条目的结果。
+- `modes.py`：对接场景注册表。根据靶点与候选分子的结构类型解析出
+  `DockingMode`（是否支持、显示名称、科学限制、替代工具建议）。结构类型优先
+  读取准备阶段写入的 `meta["kind"]`，否则按文件内容识别，并用文件时间戳/大小
+  做 LRU 缓存。所有入口（界面、CLI、对接、分析、报告）共用这一份判断。
+- `preparation.py`：编排受体与配体的准备流程，汇总每个条目的结果，并把结构
+  类型写入条目元数据。
 - `receptor.py` / `ligand.py`：具体的结构修复、加氢、Meeko 与 OpenBabel 回退。
   受体准备会先整链移除共晶配体所在的短链（包括肽类抑制剂），再做 PDBFixer
-  修复，避免配体的标准残基被当成受体的一部分。
-- `pockets.py`：基于 LIGSITE 思路的几何口袋检测（NumPy/SciPy，无需外部程序）。
+  修复，避免配体的标准残基被当成受体的一部分。小分子靶点走刚性受体流程。
+- `pockets.py`：基于 LIGSITE 思路的几何口袋检测（NumPy/SciPy，无需外部程序），
+  对蛋白、核酸与多肽一视同仁。
 - `boxes.py`：盒子推荐与校验。手动 / 参考分子优先；自动模式先用几何口袋，
   再与共晶配体、`SITE` 记录做一致性校验，实验位点作为兜底。
 - `docking.py`：批量组合、跳过已有结果、写元数据、生成复合物与 PyMOL 脚本。
@@ -84,14 +92,32 @@ logs/session.log
 
 ```text
 导入/下载 → Workspace.import_* → inputs/
-    → prepare_all() → prepared/ + 条目状态
+    → prepare_all() → prepared/ + 条目状态 + meta["kind"]
+    → pair_mode()（modes.py）→ 支持性判断与对接类型
     → suggest_box() / 手动盒子 → boxes/
     → run_batch() → docking/ + complexes/ + 元数据
     → analyze() → analysis/
     → generate_report() → report/
 ```
 
-`DockingResult` 是结果页、CSV、报告和 PyMOL 的共同数据源，避免各自解析 Vina 日志。
+对接类型在 `modes.py` 中集中定义，不支持的组合在 `run_batch()` 入口即被拦截，
+不会启动 Vina。`DockingResult` 是结果页、CSV、报告和 PyMOL 的共同数据源，
+避免各自解析 Vina 日志。
+
+### 对接模式
+
+| 模式 | 靶点 | 配体 | 说明 |
+| --- | --- | --- | --- |
+| `protein_small_molecule` | 蛋白质 | 小分子 | 主流程 |
+| `peptide_small_molecule` | 多肽 | 小分子 | 靶点柔性较高 |
+| `nucleic_acid_small_molecule` | DNA/RNA | 小分子 | 评分仅宜做相对排序 |
+| `small_molecule_small_molecule` | 小分子 | 小分子 | 靶点按刚性受体处理 |
+| `protein_peptide` | 蛋白质 | 多肽 | 配体柔性高，搜索可能不足 |
+
+不支持的组合由 `_unsupported()` 生成明确的 `guidance`（例如蛋白–蛋白指向
+ClusPro / HADDOCK / RosettaDock），而不是返回空分数。结构分类阈值：
+靶点角色以 20 个残基 / 500 个重原子区分蛋白与多肽；配体角色放宽到
+50 个残基 / 600 个重原子，避免把蛋白–蛋白伪装成多肽对接。
 
 ## 线程与取消
 
@@ -130,6 +156,8 @@ OpenBabel DLL/格式插件/数据、Vina 与报告模板。运行时钩子
 
 - `tests/test_workspace.py`：项目创建、中文名称、路径安全、损坏 JSON。
 - `tests/test_pdbio.py`：真实 1BCI 解析、位点、复合物、PDBQT 校验。
+- `tests/test_modes.py`：结构类型识别（含 DNA）、支持矩阵、不支持组合不调用
+  Vina、准备阶段类型元数据。
 - `tests/test_boxes.py`：盒子优先级、边界、错误输入。
 - `tests/test_pockets.py`：几何口袋检测、实验位点一致性、盲对接兜底。
 - `tests/test_analysis_report.py`：结果汇总与自包含报告。

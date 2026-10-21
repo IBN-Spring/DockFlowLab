@@ -21,6 +21,7 @@ from typing import Iterable, Sequence
 from .config import AppSettings, user_config_dir
 from .core.models import KIND_LIGAND, KIND_TARGET, Box, ProjectFile
 from .logging_setup import setup_logging
+from .services import modes
 from .version import __app_name__, __version__, component_version
 from .workspace import Workspace
 
@@ -264,7 +265,7 @@ def command_init(args: argparse.Namespace) -> int:
     workspace = Workspace.create(args.project, name=args.name)
     print(f"项目已就绪：{workspace.name}")
     print(f"目录：{workspace.root}")
-    print("下一步：用 import 或 fetch 添加靶点蛋白与候选分子。")
+    print("下一步：用 import 或 fetch 添加靶点结构与候选分子。")
     return EXIT_OK
 
 
@@ -276,11 +277,23 @@ def command_info(args: argparse.Namespace) -> int:
     payload = workspace.summary()
     payload["entries"] = {
         "targets": [
-            {"stem": entry.stem, "name": entry.display_name, "status": entry.status, "message": entry.message}
+            {
+                "stem": entry.stem,
+                "name": entry.display_name,
+                "status": entry.status,
+                "message": entry.message,
+                "kind": modes.entry_kind(entry, workspace),
+            }
             for entry in workspace.targets
         ],
         "ligands": [
-            {"stem": entry.stem, "name": entry.display_name, "status": entry.status, "message": entry.message}
+            {
+                "stem": entry.stem,
+                "name": entry.display_name,
+                "status": entry.status,
+                "message": entry.message,
+                "kind": modes.entry_kind(entry, workspace),
+            }
             for entry in workspace.ligands
         ],
     }
@@ -312,7 +325,9 @@ def command_info(args: argparse.Namespace) -> int:
         print(f"\n{label}：")
         for entry in entries:
             suffix = f" · {entry['message']}" if entry["message"] else ""
-            print(f"  [{entry['status']}] {entry['name']} ({entry['stem']}){suffix}")
+            kind_label = modes.KIND_LABELS.get(entry.get("kind", ""), "")
+            kind_text = f" · {kind_label}" if kind_label else ""
+            print(f"  [{entry['status']}] {entry['name']} ({entry['stem']}){kind_text}{suffix}")
     return EXIT_OK
 
 
@@ -383,8 +398,28 @@ def command_dock(args: argparse.Namespace) -> int:
         print("请先运行：dockflowlab-cli prepare <工作目录>", file=sys.stderr)
         return EXIT_USAGE
 
+    supported = modes.supported_pairs(targets, ligands, workspace)
+    unsupported = modes.unsupported_pairs(targets, ligands, workspace)
+    for target, ligand, mode in unsupported:
+        print(
+            f"跳过 {target.display_name} + {ligand.display_name}：{mode.label} 不受支持。{mode.guidance}",
+            file=sys.stderr,
+        )
+    if not supported:
+        print(
+            "没有可运行的组合：所选结构都属于不支持的对接类型。"
+            "蛋白–蛋白等大分子对接请使用 ClusPro、HADDOCK 或 RosettaDock。",
+            file=sys.stderr,
+        )
+        return EXIT_FAILURE
+    pairs = [(target, ligand) for target, ligand, _mode in supported]
+    ligands_by_target: dict[str, list] = {}
+    for target, ligand, _mode in supported:
+        ligands_by_target.setdefault(target.stem, []).append(ligand)
+    runnable_targets = [target for target in targets if target.stem in ligands_by_target]
+
     manual = _manual_box(args)
-    if manual is not None and len(targets) > 1:
+    if manual is not None and len(runnable_targets) > 1:
         print("提示：手动盒子会应用于本次全部靶点。", file=sys.stderr)
 
     options = DockingOptions.from_settings(settings)
@@ -404,7 +439,7 @@ def command_dock(args: argparse.Namespace) -> int:
 
     obabel = get_openbabel()
     boxes: dict[str, Box] = {}
-    for target in targets:
+    for target in runnable_targets:
         if manual is not None:
             box = manual
         else:
@@ -416,11 +451,11 @@ def command_dock(args: argparse.Namespace) -> int:
                     target_prepared_pdb=workspace.prepared_target_pdb(target.stem),
                     ligand_paths=[
                         workspace.absolute(ligand.prepared)
-                        for ligand in ligands
+                        for ligand in ligands_by_target[target.stem]
                         if ligand.prepared
                     ],
                     settings=settings,
-                    target_kind=str(target.meta.get("kind", "macromolecule")),
+                    target_kind=modes.target_kind_for(target, workspace),
                     chains=target.meta.get("chains", []),
                     obabel=obabel,
                 )
@@ -430,7 +465,6 @@ def command_dock(args: argparse.Namespace) -> int:
         boxes[target.stem] = box
         print(f"{target.display_name}：盒子中心 {box.center}，边长 {box.size} Å，来源 {box.source_label}")
 
-    pairs = [(target, ligand) for target in targets for ligand in ligands]
     results = run_batch(
         workspace,
         pairs,

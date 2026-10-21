@@ -27,10 +27,54 @@ from ..logging_setup import get_logger
 from ..tools import rdkit_io
 from ..tools.obabel import OpenBabelAdapter, get_openbabel
 from ..tools.runtime import work_directory
+from .modes import LIGAND_PEPTIDE_MAX_HEAVY_ATOMS, LIGAND_PEPTIDE_MAX_RESIDUES
 
 log = get_logger("ligand")
 
 Progress = Callable[[str], None] | None
+
+
+def _classify_ligand(path: Path) -> tuple[str, str]:
+    """按“候选分子”角色判断结构类型。
+
+    SDF/MOL/SMILES 等格式天然是小分子；PDB/PDBQT 可能是小分子、短肽，
+    也可能是误导入的完整蛋白质，需要区分。
+    """
+    fmt = pdbio.detect_format(path)
+    if fmt in {"pdb", "pdbqt"}:
+        return pdbio.structure_kind(
+            path,
+            peptide_max_residues=LIGAND_PEPTIDE_MAX_RESIDUES,
+            peptide_max_heavy_atoms=LIGAND_PEPTIDE_MAX_HEAVY_ATOMS,
+        )
+    if fmt in {"sdf", "mol", "mol2", "smi", "smiles", "inchi"}:
+        return "small_molecule", f"{fmt.upper()} 分子文件"
+    return "unknown", f"无法识别的格式：{fmt}"
+
+
+def _check_ligand_kind(kind: str, detail: str, warnings: list[str]) -> None:
+    if kind == "protein":
+        raise PreparationError(
+            "该文件包含完整蛋白质，不能放在“候选分子”里。"
+            "本地版本不做蛋白–蛋白对接；如需对接多肽，请确认它是短肽"
+            f"（不超过 {LIGAND_PEPTIDE_MAX_RESIDUES} 个残基）。"
+            "蛋白–蛋白界面请使用 ClusPro、HADDOCK 或 RosettaDock 等专门工具。"
+        )
+    if kind == "nucleic_acid":
+        raise PreparationError(
+            "该文件是核酸结构，不能作为候选分子。"
+            "核酸–小分子对接请把核酸放在“靶点结构”一栏。"
+        )
+    if kind == "unknown":
+        raise PreparationError(
+            f"无法识别这个结构的类型（{detail}）。请确认文件包含有效的小分子或多肽，"
+            "或先转换为 SDF/MOL2 后再导入。"
+        )
+    if kind == "peptide":
+        warnings.append(
+            f"候选分子具有多肽特征（{detail}）。多肽柔性很高，"
+            "Vina 的搜索空间可能不足，建议把结果视为初步筛选。"
+        )
 
 
 @dataclass
@@ -300,6 +344,9 @@ def prepare_ligand(
     if output_sdf is not None:
         Path(output_sdf).parent.mkdir(parents=True, exist_ok=True)
 
+    kind, detail = _classify_ligand(input_path)
+    _check_ligand_kind(kind, detail, warnings)
+
     # 已经是 PDBQT：直接校验并复用
     if pdbio.detect_format(input_path) == "pdbqt":
         _notify(progress, "检测到 PDBQT 文件，正在校验…")
@@ -316,18 +363,9 @@ def prepare_ligand(
             ok=True,
             method="已有 PDBQT",
             message="已校验现有 PDBQT 文件",
-            details={"atoms": stats.get("atoms", 0)},
+            details={"atoms": stats.get("atoms", 0), "kind": kind},
             warnings=warnings,
         )
-
-    kind, detail = pdbio.structure_kind(input_path)
-    if kind == "protein":
-        raise PreparationError(
-            "该文件看起来是一个完整蛋白质。当前版本专注“小分子-蛋白”对接，"
-            "蛋白-蛋白对接暂未开放。若要做多肽对接，请确认文件确实是短肽。"
-        )
-    if kind == "peptide":
-        warnings.append(f"输入具有多肽特征（{detail}）。多肽柔性很高，对接结果需谨慎解释")
 
     Chem, AllChem, (Descriptors, rdMolDescriptors) = _rdkit()
     _notify(progress, "读取分子结构…")
@@ -366,6 +404,7 @@ def prepare_ligand(
         mol, ph_corrected = _ph_correction(mol, options, obabel, warnings)
 
     details = _molecule_details(mol, forcefield, ph_corrected, warnings)
+    details["kind"] = kind
     if details["rotatable_bonds"] > 20:
         warnings.append("可旋转键较多，Vina 的搜索可能不够充分；建议提高精细度")
 
@@ -450,8 +489,13 @@ def prepare_rigid_target(
         if not converted:
             atoms = pdbio.parse_pdbqt_atoms(input_path)
             pdbio.write_pdb_atoms(atoms, output_pdb, resname="TGT", chain="T")
-        return PrepOutcome(True, "已有 PDBQT", "靶点分子已就绪",
-                           {"atoms": stats.get("atoms", 0)}, warnings)
+        return PrepOutcome(
+            True,
+            "已有 PDBQT",
+            "靶点分子已就绪",
+            {"atoms": stats.get("atoms", 0), "kind": "small_molecule"},
+            warnings,
+        )
 
     with work_directory("rigid_target") as temp:
         flexible = temp / "flexible.pdbqt"
@@ -499,7 +543,11 @@ def prepare_rigid_target(
         ok=True,
         method=outcome.method + "（刚性化）",
         message="小分子靶点已准备完成",
-        details={**outcome.details, "atoms": stats.get("atoms", 0)},
+        details={
+            **outcome.details,
+            "atoms": stats.get("atoms", 0),
+            "kind": "small_molecule",
+        },
         warnings=warnings,
     )
 

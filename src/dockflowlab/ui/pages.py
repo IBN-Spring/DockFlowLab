@@ -28,6 +28,7 @@ from PySide6.QtWidgets import (
 )
 
 from ..core.models import KIND_LIGAND, KIND_TARGET, STATUS_READY, DockingResult, ProjectFile
+from ..services import modes
 from ..workspace import Workspace
 from . import theme
 from .widgets import (
@@ -41,7 +42,9 @@ from .widgets import (
     StatusChip,
 )
 
-TARGET_FILTER = "结构文件 (*.pdb *.cif *.pdbqt *.mol2 *.sdf *.mol);;所有文件 (*)"
+TARGET_FILTER = (
+    "结构文件 (*.pdb *.cif *.pdbqt *.mol2 *.sdf *.mol *.smi *.smiles);;所有文件 (*)"
+)
 LIGAND_FILTER = "分子文件 (*.sdf *.mol2 *.mol *.pdb *.pdbqt *.smi *.smiles);;所有文件 (*)"
 
 
@@ -124,8 +127,8 @@ class WelcomePage(Page):
         title.setStyleSheet("font-size: 34px; font-weight: 700;")
         title.setWordWrap(True)
         subtitle = QLabel(
-            "不用记命令，也不用理解文件格式。选择工作文件夹，加入蛋白和小分子，"
-            "程序会完成结构修复、格式转换与对接计算。"
+            "不用记命令，也不用理解文件格式。选择工作文件夹，加入靶点结构（蛋白、核酸或多肽）"
+            "和候选分子，程序会自动识别对接类型，并完成结构修复、格式转换与对接计算。"
         )
         subtitle.setObjectName("PageSubtitle")
         subtitle.setWordWrap(True)
@@ -155,7 +158,7 @@ class WelcomePage(Page):
         grid.setVerticalSpacing(12)
         items = [
             ("1", "选择文件夹", "所有输入、结果和报告都保存在这里，不会散落到别处。"),
-            ("2", "添加结构", "拖入蛋白结构，再放入候选小分子；也可以从公共数据库下载。"),
+            ("2", "添加结构", "拖入蛋白、DNA/RNA 或多肽靶点，再放入候选分子；也可以从公共数据库下载。"),
             ("3", "一键准备", "自动补全缺失原子、加氢、转换对接格式，并检查文件是否可用。"),
             ("4", "设置盒子并运行", "自动检测几何口袋，并用共晶配体或已知位点校验，确认后开始对接并生成报告。"),
         ]
@@ -236,8 +239,8 @@ class MoleculesPage(Page):
         self.body.addWidget(
             _header_row(
                 "第 2 步 · 添加分子",
-                "先放入靶点蛋白，再加入候选分子",
-                "拖放文件到虚线框，或从电脑中选择。支持一次添加多个文件。",
+                "先放入靶点结构，再加入候选分子",
+                "拖放文件到虚线框，或从电脑中选择。程序会自动识别蛋白、核酸、多肽与小分子。",
                 [change],
             )
         )
@@ -264,11 +267,15 @@ class MoleculesPage(Page):
         self.body.addStretch(1)
 
     def _build_target_card(self) -> Card:
-        card = Card("靶点蛋白", "通常是蛋白质的 PDB 或 mmCIF 结构。小分子也可以作为靶点，用于分子–分子对接。")
+        card = Card(
+            "靶点结构",
+            "蛋白、DNA/RNA 或多肽的 PDB/mmCIF 结构；小分子也可以作为靶点，"
+            "用于分子–分子对接。蛋白–蛋白对接不在本地支持范围内。",
+        )
 
         zone = DropZone(
             "拖放靶点结构到这里",
-            "支持 PDB、mmCIF、PDBQT、MOL2",
+            "支持 PDB、mmCIF、PDBQT、MOL2、SDF",
             "选择结构文件",
         )
         zone.activated.connect(lambda: self.add_requested.emit(KIND_TARGET))
@@ -288,7 +295,7 @@ class MoleculesPage(Page):
         self.target_list = QVBoxLayout()
         self.target_list.setSpacing(0)
         card.add_layout(self.target_list)
-        self.target_empty = QLabel("还没有靶点。先添加一个蛋白结构。")
+        self.target_empty = QLabel("还没有靶点。先添加一个蛋白、核酸或多肽结构。")
         self.target_empty.setObjectName("Muted")
         card.add(self.target_empty)
         card.body.addStretch(1)
@@ -344,12 +351,12 @@ class MoleculesPage(Page):
         self.target_empty.setVisible(not targets)
         self.ligand_empty.setVisible(not ligands)
         for entry in targets:
-            row = EntityRow(entry)
+            row = EntityRow(entry, workspace=workspace)
             row.remove_requested.connect(lambda stem, k=KIND_TARGET: self.remove_requested.emit(k, stem))
             row.open_requested.connect(lambda stem, k=KIND_TARGET: self.locate_requested.emit(k, stem))
             self.target_list.addWidget(row)
         for entry in ligands:
-            row = EntityRow(entry)
+            row = EntityRow(entry, workspace=workspace)
             row.remove_requested.connect(lambda stem, k=KIND_LIGAND: self.remove_requested.emit(k, stem))
             row.open_requested.connect(lambda stem, k=KIND_LIGAND: self.locate_requested.emit(k, stem))
             self.ligand_list.addWidget(row)
@@ -382,7 +389,7 @@ class PreparePage(Page):
 
         tiles = QHBoxLayout()
         tiles.setSpacing(12)
-        self.tile_targets = StatTile("靶点蛋白")
+        self.tile_targets = StatTile("靶点结构")
         self.tile_ligands = StatTile("候选分子")
         self.tile_ready = StatTile("已就绪", accent=True)
         tiles.addWidget(self.tile_targets)
@@ -411,8 +418,9 @@ class PreparePage(Page):
         option_row.addStretch(1)
         options.add_layout(option_row)
         note = QLabel(
-            "默认会移除结晶水、离子和添加剂，保留蛋白链；缺失的残基与原子会被补全。"
-            "这些设置适合大多数常规对接。"
+            "默认会移除结晶水、离子和添加剂，保留聚合物链；缺失的残基与原子会被补全。"
+            "蛋白、多肽与核酸使用同一套修复流程。若文件被识别为完整蛋白质，程序会提示"
+            "改用专门的蛋白–蛋白对接工具，而不是给出不可靠的 Vina 分数。"
         )
         note.setObjectName("Muted")
         note.setWordWrap(True)
@@ -478,7 +486,7 @@ class PreparePage(Page):
         self.tile_ready.set_value(f"{len(ready)}/{len(entries)}")
         self.entries_empty.setVisible(not entries)
         for entry in entries:
-            row = EntityRow(entry, show_actions=False)
+            row = EntityRow(entry, show_actions=False, workspace=workspace)
             self.entries_layout.addWidget(row)
         self.prepare_button.setEnabled(bool(entries))
         ready_targets = [entry for entry in targets if entry.status == STATUS_READY]
@@ -532,8 +540,8 @@ class DockPage(Page):
             _header_row(
                 "第 4 步 · 对接设置",
                 "告诉程序“在哪里找结合位置”",
-                "盒子是搜索区域。软件会先用几何算法寻找蛋白表面的口袋，再用共晶配体或已知位点校验；"
-                "都不可靠时才使用全蛋白盲对接。",
+                "盒子是搜索区域。软件会先用几何算法寻找聚合物表面的口袋，再用共晶配体或已知位点校验；"
+                "都不可靠时才使用全结构盲对接。不支持的组合会被跳过，不会产生分数。",
                 [change],
             )
         )
@@ -635,16 +643,36 @@ class DockPage(Page):
             return
         ready_targets = [entry for entry in workspace.targets if entry.status == STATUS_READY]
         ready_ligands = [entry for entry in workspace.ligands if entry.status == STATUS_READY]
-        self.box_empty.setVisible(not ready_targets)
-        for target in ready_targets:
+        supported = modes.supported_pairs(ready_targets, ready_ligands, workspace)
+        runnable_targets = []
+        seen: set[str] = set()
+        for target, _ligand, _mode in supported:
+            if target.stem not in seen:
+                seen.add(target.stem)
+                runnable_targets.append(target)
+        self.box_empty.setVisible(not runnable_targets)
+        for target in runnable_targets:
             self.box_rows.addWidget(self._box_row(workspace, target))
-        pair_count = len(ready_targets) * len(ready_ligands)
-        missing_boxes = sum(1 for target in ready_targets if workspace.load_box(target.stem) is None)
+
+        pair_count = len(supported)
+        total_pairs = len(ready_targets) * len(ready_ligands)
+        unsupported_count = total_pairs - pair_count
+        missing_boxes = sum(1 for target in runnable_targets if workspace.load_box(target.stem) is None)
         if pair_count:
-            text = f"共 {len(ready_targets)} 个靶点 × {len(ready_ligands)} 个候选分子 = {pair_count} 组对接。"
+            text = (
+                f"共 {len(runnable_targets)} 个可运行靶点 × 对应候选分子 = {pair_count} 组对接。"
+            )
+            if unsupported_count:
+                text += f"另有 {unsupported_count} 组属于不支持的对接类型，将不会运行。"
             if missing_boxes:
                 text += f"其中 {missing_boxes} 个靶点还没有保存盒子，运行时会自动推荐。"
             text += " 每组耗时从几十秒到几分钟不等，取决于分子大小和精细度。"
+        elif total_pairs:
+            text = (
+                "当前所有组合都属于不支持的对接类型，无法运行。"
+                "可以是蛋白–蛋白、核酸–蛋白等大分子组合；请检查结构类型，"
+                "或改用 ClusPro、HADDOCK、RosettaDock 等专门工具。"
+            )
         else:
             text = "还没有可运行的组合。请先在“检查与准备”中准备至少一个靶点和一个候选分子。"
         self.summary_label.setText(text)
@@ -664,12 +692,14 @@ class DockPage(Page):
         name.setStyleSheet("font-weight: 600;")
         name.setWordWrap(False)
         text_box.addWidget(name)
+        kind_label = modes.KIND_LABELS.get(modes.target_kind_for(target, workspace), "")
         box = workspace.load_box(target.stem)
         if box is None:
-            summary = "尚未设置 · 运行时会自动推荐"
+            summary = f"{kind_label} · 尚未设置，运行时会自动推荐" if kind_label else "尚未设置 · 运行时会自动推荐"
         else:
             size = " × ".join(f"{value:.0f}" for value in box.size)
-            summary = f"{box.source_label} · 盒子 {size} Å"
+            prefix = f"{kind_label} · " if kind_label else ""
+            summary = f"{prefix}{box.source_label} · 盒子 {size} Å"
         detail = QLabel(summary)
         detail.setObjectName("Muted")
         text_box.addWidget(detail)
@@ -707,7 +737,8 @@ class ResultsPage(Page):
             _header_row(
                 "第 5 步 · 运行与结果",
                 "对接结果",
-                "分数越低，表示该程序预测的结合越有利。请结合实验或文献证据判断。",
+                "分数越低，表示该程序预测的结合越有利。不同对接类型的分数不宜直接比较；"
+                "请结合实验或文献证据判断。",
                 [refresh, folder, self.report_button],
             )
         )
@@ -728,8 +759,10 @@ class ResultsPage(Page):
         self.body.addWidget(self.log_panel)
 
         self.table_card = Card("结果列表")
-        self.table = QTableWidget(0, 7)
-        self.table.setHorizontalHeaderLabels(["靶点", "候选分子", "最佳打分", "盒子来源", "状态", "说明", "操作"])
+        self.table = QTableWidget(0, 8)
+        self.table.setHorizontalHeaderLabels(
+            ["靶点", "候选分子", "对接类型", "最佳打分", "盒子来源", "状态", "说明", "操作"]
+        )
         self.table.verticalHeader().setVisible(False)
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
@@ -743,14 +776,20 @@ class ResultsPage(Page):
         header.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
         header.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
         header.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
-        header.setSectionResizeMode(4, QHeaderView.ResizeMode.Fixed)
-        self.table.setColumnWidth(4, 92)
-        header.setSectionResizeMode(5, QHeaderView.ResizeMode.Stretch)
-        header.setSectionResizeMode(6, QHeaderView.ResizeMode.Fixed)
-        self.table.setColumnWidth(6, 140)
+        header.setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(5, QHeaderView.ResizeMode.Fixed)
+        self.table.setColumnWidth(5, 92)
+        header.setSectionResizeMode(6, QHeaderView.ResizeMode.Stretch)
+        header.setSectionResizeMode(7, QHeaderView.ResizeMode.Fixed)
+        self.table.setColumnWidth(7, 140)
         self.table.setMinimumHeight(120)
         self.table.setVisible(False)
         self.table_card.add(self.table)
+        self.mode_note = QLabel("")
+        self.mode_note.setObjectName("Muted")
+        self.mode_note.setWordWrap(True)
+        self.mode_note.setVisible(False)
+        self.table_card.add(self.mode_note)
         self.empty_label = QLabel("还没有结果。完成准备后，在上一步点击“开始对接”。")
         self.empty_label.setObjectName("Muted")
         self.empty_label.setWordWrap(True)
@@ -836,25 +875,34 @@ class ResultsPage(Page):
         for row, result in enumerate(ordered):
             self.table.setItem(row, 0, QTableWidgetItem(target_labels.get(result.target, result.target)))
             self.table.setItem(row, 1, QTableWidgetItem(ligand_labels.get(result.ligand, result.ligand)))
+            self.table.setItem(row, 2, QTableWidgetItem(result.mode_label or "—"))
             score = f"{result.poses[0].affinity:.2f}" if result.poses else "—"
             score_item = QTableWidgetItem(score)
             score_item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-            self.table.setItem(row, 2, score_item)
-            self.table.setItem(row, 3, QTableWidgetItem(
-                {"pocket": "几何口袋", "cocrystal": "共晶配体", "site": "PDB 位点", "blind": "盲对接", "manual": "手动",
-                 "reference": "参考分子", "ligand": "目标分子"}.get(result.box_source, result.box_source or "自动")
+            self.table.setItem(row, 3, score_item)
+            self.table.setItem(row, 4, QTableWidgetItem(
+                {"pocket": "几何口袋", "cocrystal": "共晶配体", "site": "PDB 位点", "blind": "全结构盲对接",
+                 "manual": "手动", "reference": "参考分子", "ligand": "目标分子"}.get(
+                    result.box_source, result.box_source or "自动"
+                )
             ))
-            chip = StatusChip("success" if result.ok else "error", "已有结果" if result.skipped else ("成功" if result.ok else "失败"))
+            if not result.mode_supported:
+                chip = StatusChip("error", "不支持")
+            else:
+                chip = StatusChip(
+                    "success" if result.ok else "error",
+                    "已有结果" if result.skipped else ("成功" if result.ok else "失败"),
+                )
             holder = QWidget()
             holder_layout = QHBoxLayout(holder)
             holder_layout.setContentsMargins(6, 0, 0, 0)
             holder_layout.addWidget(chip, 0, Qt.AlignmentFlag.AlignVCenter)
             holder_layout.addStretch(1)
-            self.table.setCellWidget(row, 4, holder)
+            self.table.setCellWidget(row, 5, holder)
             note = result.error if not result.ok else "；".join(result.warnings)
             note_item = QTableWidgetItem(note or "—")
             note_item.setToolTip(note)
-            self.table.setItem(row, 5, note_item)
+            self.table.setItem(row, 6, note_item)
             if result.ok and result.pymol_path:
                 actions = QWidget()
                 action_layout = QHBoxLayout(actions)
@@ -873,7 +921,17 @@ class ResultsPage(Page):
                 )
                 action_layout.addWidget(pymol)
                 action_layout.addWidget(locate)
-                self.table.setCellWidget(row, 6, actions)
+                self.table.setCellWidget(row, 7, actions)
+        mode_labels = sorted({result.mode_label for result in results if result.ok and result.mode_label})
+        if len(mode_labels) > 1:
+            self.mode_note.setText(
+                "本表包含多种对接类型（" + "、".join(mode_labels) + "）。"
+                "Vina 分数适合在同一类型内部排序，不宜跨类型直接比较。"
+            )
+            self.mode_note.setVisible(True)
+        else:
+            self.mode_note.setVisible(False)
+            self.mode_note.setText("")
         self._load_chart(workspace)
 
     def _fit_table_height(self, rows: int) -> None:

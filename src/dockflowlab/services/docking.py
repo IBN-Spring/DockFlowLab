@@ -22,6 +22,7 @@ from ..tools.runtime import open_path
 from ..tools.vina import VinaAdapter
 from ..workspace import Workspace
 from . import boxes as box_service
+from . import modes
 from .pymol import write_pml
 
 log = get_logger("docking")
@@ -90,6 +91,9 @@ def _write_meta(workspace: Workspace, result: DockingResult) -> None:
         "runtime_seconds": round(result.runtime_seconds, 2),
         "warnings": list(result.warnings),
         "error": result.error,
+        "mode_key": result.mode_key,
+        "mode_label": result.mode_label,
+        "mode_supported": result.mode_supported,
         "finished": datetime.now().astimezone().isoformat(timespec="seconds"),
     }
     tmp = path.with_suffix(".json.tmp")
@@ -172,7 +176,8 @@ def dock_pair(
     options = options or DockingOptions()
     vina = vina or VinaAdapter()
     obabel = obabel or get_openbabel()
-    warnings: list[str] = []
+    mode = modes.pair_mode(target, ligand, workspace)
+    warnings: list[str] = list(mode.warnings)
     output, log_path, complex_path, pml_path = _result_paths(workspace, target, ligand)
     result = DockingResult(
         target=target.stem,
@@ -183,7 +188,15 @@ def dock_pair(
         complex_path=workspace.relative(complex_path),
         pymol_path=workspace.relative(pml_path),
         box_source=box.source,
+        mode_key=mode.key,
+        mode_label=mode.label,
+        mode_supported=mode.supported,
     )
+
+    # 不支持的组合直接返回明确原因，绝不调用 Vina 产生误导性的分数。
+    if not mode.supported:
+        result.error = mode.error_text
+        return result
 
     if not target.prepared:
         result.error = "靶点尚未准备"
@@ -313,6 +326,20 @@ def run_batch(
         if cancel is not None and cancel.is_set():
             break
         _notify(progress, index, total, f"[{index}/{total}] {target.display_name} + {ligand.display_name}")
+        mode = modes.pair_mode(target, ligand, workspace)
+        if not mode.supported:
+            results.append(
+                DockingResult(
+                    target=target.stem,
+                    ligand=ligand.stem,
+                    ok=False,
+                    error=mode.error_text,
+                    mode_key=mode.key,
+                    mode_label=mode.label,
+                    mode_supported=False,
+                )
+            )
+            continue
         box = boxes.get(target.stem)
         if box is None:
             try:
@@ -321,7 +348,7 @@ def run_batch(
                     target_prepared_pdb=workspace.prepared_target_pdb(target.stem),
                     ligand_paths=[workspace.absolute(ligand.prepared)] if ligand.prepared else [],
                     settings=settings,
-                    target_kind=str(target.meta.get("kind", "macromolecule")),
+                    target_kind=modes.target_kind_for(target, workspace),
                     chains=target.meta.get("chains", []),
                     obabel=obabel,
                 )
@@ -334,6 +361,9 @@ def run_batch(
                         ligand=ligand.stem,
                         ok=False,
                         error=f"无法生成对接盒子：{exc}",
+                        mode_key=mode.key,
+                        mode_label=mode.label,
+                        mode_supported=True,
                     )
                 )
                 continue
@@ -359,6 +389,9 @@ def run_batch(
                 ok=False,
                 error=str(exc),
                 box_source=box.source,
+                mode_key=mode.key,
+                mode_label=mode.label,
+                mode_supported=True,
             )
         results.append(result)
         _notify(
@@ -385,6 +418,11 @@ def collect_existing_results(workspace: Workspace) -> list[DockingResult]:
             output = workspace.docking_output(target.stem, ligand.stem)
             if not output.is_file():
                 continue
+            mode = modes.pair_mode(target, ligand, workspace)
+            if not mode.supported:
+                # 旧版本可能留下了不受支持的组合结果；不要把它们当作有效
+                # 分数展示，避免用户误用蛋白–蛋白等不适用的 Vina 结果。
+                continue
             poses = pdbio.parse_pdbqt_poses(output)
             if not poses:
                 continue
@@ -396,6 +434,9 @@ def collect_existing_results(workspace: Workspace) -> list[DockingResult]:
                     ligand=ligand.stem,
                     ok=True,
                     poses=poses,
+                    mode_key=mode.key,
+                    mode_label=mode.label,
+                    mode_supported=True,
                     log_path=workspace.relative(workspace.docking_log(target.stem, ligand.stem))
                     if workspace.docking_log(target.stem, ligand.stem).is_file() else "",
                     output_path=workspace.relative(output),

@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
 )
 
 from ..core.models import ProjectFile
+from ..services import modes
 from . import theme
 
 
@@ -180,7 +181,14 @@ class EntityRow(QFrame):
     remove_requested = Signal(str)
     open_requested = Signal(str)
 
-    def __init__(self, entry: ProjectFile, parent: QWidget | None = None, *, show_actions: bool = True) -> None:
+    def __init__(
+        self,
+        entry: ProjectFile,
+        parent: QWidget | None = None,
+        *,
+        show_actions: bool = True,
+        workspace=None,
+    ) -> None:
         super().__init__(parent)
         self.entry = entry
         self.setObjectName("EntityRow")
@@ -196,6 +204,10 @@ class EntityRow(QFrame):
         name.setStyleSheet("font-weight: 600; font-size: 14px;")
         text_box.addWidget(name)
         meta_parts = []
+        kind = modes.entry_kind(entry, workspace)
+        kind_label = modes.KIND_LABELS.get(kind, "")
+        if kind_label and kind != "unknown":
+            meta_parts.append(kind_label)
         fmt = str(entry.meta.get("format", "")).upper()
         if fmt:
             meta_parts.append(fmt)
