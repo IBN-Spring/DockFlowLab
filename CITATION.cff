@@ -1,0 +1,23 @@
+cff-version: 1.2.0
+message: "如果 DockFlowLab 对你的研究或教学有帮助，请引用本项目。"
+title: "DockFlowLab: 面向非专业用户的跨平台分子对接桌面工作台"
+abstract: >-
+  DockFlowLab 是一个图形化分子对接工作台，把结构准备、结合位点设置、
+  对接计算、结果分析与报告导出整合在同一个本地项目中。内置 AutoDock Vina、
+  QuickVina 2 与 Smina，支持完全离线运行。
+authors:
+  - name: "IBN-Spring"
+    email: "3929555374@qq.com"
+version: 2.2.0
+date-released: 2026-10-22
+license: MIT
+repository-code: "https://github.com/IBN-Spring/DockFlowLab"
+url: "https://github.com/IBN-Spring/DockFlowLab"
+keywords:
+  - molecular docking
+  - AutoDock Vina
+  - QuickVina 2
+  - Smina
+  - cheminformatics
+  - structural biology
+  - PySide6

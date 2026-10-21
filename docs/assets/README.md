@@ -39,7 +39,13 @@
 | `banner-dark.png` | README 顶部横幅（深色） |
 | `social-preview.png` | GitHub 仓库社交预览图（1280×640） |
 | `app-icon.ico` | Windows 应用图标源文件 |
-| `screenshots/` | README 截图，按画面内容命名即可 |
+| `screenshots/01-workspace.png` | 工作目录页 |
+| `screenshots/02-prepare.png` | 检查与准备页 |
+| `screenshots/03-box-settings.png` | 设置对接页 |
+| `screenshots/04-box-editor.png` | 3D 盒子编辑器 |
+| `screenshots/05-results.png` | 运行与结果页（README 首图） |
+| `screenshots/06-pymol-render.png` | PyMOL 渲染页 |
+| `screenshots/07-pymol-styles.png` | 两种 PyMOL 渲染风格拼图 |
 
 `packaging/DockFlowLab.icns` 与 `src/dockflowlab/resources/app.ico` 由这里的图标生成。
 
@@ -53,4 +59,6 @@
 
 ## 截图
 
-截图放在 `screenshots/`。建议使用 1440px 以上的窗口宽度，只截应用窗口，避免出现个人路径、用户名或无关窗口。
+截图放在 `screenshots/`，编号即 README 中的展示顺序。建议使用 1440px 以上的窗口宽度，
+只截应用窗口，避免出现个人路径、用户名或无关窗口。示例截图已将项目名与路径替换为
+`示例项目` / `D:\docking\demo` 等演示值；重新截图时请做同样的处理。
