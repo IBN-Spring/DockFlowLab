@@ -3,18 +3,26 @@
 from __future__ import annotations
 
 import locale
+from pathlib import Path
 
 import numpy as np
 import pytest
 
 from dockflowlab.core.models import Box
 from dockflowlab.services.pymol import write_box_pml
+from dockflowlab.core import pdbio
 from dockflowlab.ui.box_view import (
     BOX_EDGES,
     BOX_FACES,
+    _SSE_COLORS,
+    assign_secondary_structure,
     box_corners,
     box_handle_positions,
+    cartoon_geometry,
+    classify_phi_psi,
     closest_axis_parameter,
+    collect_backbone_residues,
+    dihedral_angle,
     element_color,
     empty_structure,
     load_view_structure,
@@ -113,6 +121,62 @@ def test_element_color_marks_hetero_carbon():
     assert element_color("C", hetero=True) != element_color("C")
 
 
+def test_dihedral_angle_matches_known_geometry():
+    angle = dihedral_angle((1, 0, 0), (0, 0, 0), (0, 1, 0), (0, 1, 1))
+    assert angle == pytest.approx(-90.0)
+    # 共线时没有唯一二面角。
+    assert dihedral_angle((1, 0, 0), (0, 0, 0), (2, 0, 0), (3, 0, 0)) is None
+
+
+def test_classify_phi_psi_recognizes_secondary_structure():
+    assert classify_phi_psi(-60.0, -45.0) == "H"
+    assert classify_phi_psi(-120.0, 130.0) == "E"
+    assert classify_phi_psi(60.0, 60.0) == "C"
+    assert classify_phi_psi(None, None) == "C"
+
+
+def test_assign_secondary_structure_matches_known_1bci_ranges():
+    atoms = pdbio.parse_atoms(
+        Path(__file__).parent / "data" / "1BCI.pdb", first_model=True
+    )
+    residues = collect_backbone_residues(atoms)
+    assign_secondary_structure(residues)
+
+    labels = {residue.resseq: residue.sse for residue in residues}
+    # 1BCI 的真实二级结构：一段短螺旋位于 35-39 附近，折叠片贯穿 18-28、
+    # 69-79、128-137 等区段。允许边界处各扩展一个残基。
+    helix_positions = [resseq for resseq, sse in labels.items() if sse == "H"]
+    assert min(helix_positions) <= 35 and max(helix_positions) >= 39
+    assert max(helix_positions) - min(helix_positions) >= 4
+    for start, end in ((18, 28), (69, 79), (128, 137)):
+        overlaps = sum(
+            1 for resseq in range(start, end + 1) if labels.get(resseq) == "E"
+        )
+        assert overlaps >= (end - start) * 0.6
+
+
+def test_cartoon_geometry_builds_finite_closed_mesh():
+    atoms = pdbio.parse_atoms(
+        Path(__file__).parent / "data" / "1BCI.pdb", first_model=True
+    )
+    residues = collect_backbone_residues(atoms)
+    assign_secondary_structure(residues)
+    vertices, faces, colors = cartoon_geometry(residues)
+
+    assert vertices.shape[1] == 3
+    assert faces.shape[1] == 3
+    assert colors.shape == (len(vertices), 4)
+    assert np.all(np.isfinite(vertices))
+    assert faces.max() < len(vertices)
+    assert len(faces) > 0
+    # 螺旋、折叠、loop 都应产生几何，而不是只剩一种表示。
+    for key in ("H", "E", "C"):
+        assert any(
+            np.allclose(color[:3], _SSE_COLORS[key][:3], atol=1e-6)
+            for color in colors
+        ), f"缺少 {key} 的卡通几何"
+
+
 def test_load_view_structure_from_protein_with_ligand(tmp_path):
     path = make_protein_pdb(tmp_path / "complex.pdb", residues=6, ligand=True)
     structure = load_view_structure(path)
@@ -120,8 +184,16 @@ def test_load_view_structure_from_protein_with_ligand(tmp_path):
     assert not structure.is_empty
     assert structure.atom_count == 6 * 4 + 8
     assert structure.positions.shape == (structure.atom_count, 3)
-    assert structure.trace.shape == (5, 2, 3)
+    assert structure.cartoon_vertices.shape[1] == 3
+    assert structure.cartoon_faces.shape[1] == 3
+    assert structure.cartoon_colors.shape == (
+        len(structure.cartoon_vertices),
+        4,
+    )
+    assert len(structure.cartoon_faces) > 0
     assert structure.hetero_positions.shape == (8, 3)
+    assert structure.hetero_bonds.shape[1:] == (2, 3)
+    assert len(structure.hetero_bonds) > 0
     assert structure.radius > 0
     assert np.all(np.isfinite(structure.positions))
 
@@ -131,13 +203,17 @@ def test_load_view_structure_reads_pdbqt(tmp_path):
     structure = load_view_structure(path)
     assert not structure.is_empty
     assert structure.atom_count == 6  # 两个 MODEL，各 3 个重原子
-    assert structure.trace.shape == (0, 2, 3)
+    assert structure.cartoon_faces.shape == (0, 3)
+    assert len(structure.hetero_bonds) > 0
 
 
 def test_empty_structure_has_safe_defaults():
     structure = empty_structure()
     assert structure.is_empty
     assert structure.positions.shape == (0, 3)
+    assert structure.cartoon_vertices.shape == (0, 3)
+    assert structure.cartoon_faces.shape == (0, 3)
+    assert structure.hetero_bonds.shape == (0, 2, 3)
     assert structure.radius > 0
 
 

@@ -24,11 +24,13 @@ config.py    用户偏好（与项目无关）
 `cli.py` 和 `ui/` 是并列入口，二者只依赖 `services/`、`workspace.py`、`config.py`，
 不互相导入。
 
-- `ui/box_view.py`：3D 盒子编辑器。基于 `pyqtgraph.opengl`（PyOpenGL），把受体
-  重原子/骨架与半透明盒子放在同一视图，提供中心点与六个面点的拖拽、点击结构
-  设置中心、数值输入双向同步。几何投影、射线拾取与缩放计算都是无 Qt 的纯函数，
-  便于测试；缺少 OpenGL 时退化为数值输入。导入 pyqtgraph 之前固定
-  `PYQTGRAPH_QT_LIB=PySide6`，避免与环境中并存的 PyQt5/PyQt6 混用。
+- `ui/box_view.py`：3D 盒子编辑器。基于 `pyqtgraph.opengl`（PyOpenGL），在同一
+  视图中绘制受体卡通模型、配体球棍与半透明盒子，提供中心点与六个面点的拖拽、
+  点击结构设置中心、数值输入双向同步。卡通模型由主链 φ/ψ 角分配二级结构，
+  再分别放样螺旋丝带、β 折叠箭头与 loop 细管，不依赖 PDB 的 HELIX/SHEET 记录；
+  这些几何计算以及投影、射线拾取与缩放都是无 Qt 的纯函数，便于测试。缺少
+  OpenGL 时退化为数值输入。导入 pyqtgraph 之前固定 `PYQTGRAPH_QT_LIB=PySide6`，
+  避免与环境中并存的 PyQt5/PyQt6 混用。
 
 ### core
 
@@ -58,7 +60,7 @@ config.py    用户偏好（与项目无关）
 - `analysis.py`：结果表、矩阵、汇总 JSON、图表（matplotlib Agg）。
 - `report.py`：自包含 HTML，图片以 base64 内嵌，不依赖网络。
 - `download.py`：PDB / PubChem / AlphaFold / ChEMBL，带缓存与格式回退。
-- `pymol.py`：生成复合物与盒子预览的 `.pml` 脚本，查找并启动 PyMOL。
+- `pymol.py`：生成复合物（以及可选的盒子预览）`.pml` 脚本，查找并启动 PyMOL。
   PyMOL 在中文 Windows 上按系统区域编码读取脚本，且部分构建遇到非 ASCII
   字符会崩溃，因此脚本正文保持纯 ASCII；中文路径优先转成相对路径或 8.3 短路径，
   仍不可用时复制到 ASCII 临时目录。
@@ -169,8 +171,9 @@ OpenBabel DLL/格式插件/数据、Vina 与报告模板。运行时钩子
   Vina、准备阶段类型元数据。
 - `tests/test_boxes.py`：盒子优先级、边界、错误输入。
 - `tests/test_pockets.py`：几何口袋检测、实验位点一致性、盲对接兜底。
-- `tests/test_box_view.py`：盒子顶点/手柄/缩放/射线几何、结构加载、PyMOL
-  脚本的 ASCII 与中文路径处理、数值输入与自动推荐的状态同步。
+- `tests/test_box_view.py`：盒子顶点/手柄/缩放/射线几何、二级结构判定与卡通
+  网格、结构加载、PyMOL 脚本的 ASCII 与中文路径处理、数值输入与自动推荐的状态
+  同步。
 - `tests/test_analysis_report.py`：结果汇总与自包含报告。
 - `tests/test_download.py`：用 mock 网络验证格式回退。
 - `tests/test_cli.py`：命令行参数与失败路径。

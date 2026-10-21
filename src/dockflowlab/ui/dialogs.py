@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import importlib.util
-import shutil
 from dataclasses import replace
 from pathlib import Path
 
@@ -34,9 +33,7 @@ from ..logging_setup import get_logger
 from ..services import modes
 from ..services.boxes import suggest_box, validate_manual_box
 from ..services.download import DownloadClient
-from ..services.pymol import open_in_pymol, write_box_pml
 from ..tools.obabel import OpenBabelAdapter
-from ..tools.runtime import ascii_temp_root
 from ..tools.vina import VinaAdapter
 from ..workspace import Workspace
 from . import theme
@@ -305,12 +302,6 @@ class BoxDialog(QDialog):
         layout.addWidget(self.viewer, 1)
 
         buttons = QHBoxLayout()
-        self.pymol_button = QPushButton("在 PyMOL 中查看")
-        self.pymol_button.setToolTip(
-            "生成只含结构与盒子的 PyMOL 脚本，方便在 PyMOL 中旋转、放大检查。"
-        )
-        self.pymol_button.clicked.connect(self._open_pymol)
-        buttons.addWidget(self.pymol_button)
         buttons.addStretch(1)
         cancel = QPushButton("取消")
         cancel.clicked.connect(self.reject)
@@ -423,7 +414,7 @@ class BoxDialog(QDialog):
         self.viewer.focus_box()
 
     # ------------------------------------------------------------------
-    # 保存 / PyMOL
+    # 保存
     # ------------------------------------------------------------------
     def _save(self) -> None:
         box = self.viewer.current_box()
@@ -449,42 +440,6 @@ class BoxDialog(QDialog):
         )
         self.box = box
         self.accept()
-
-    def _open_pymol(self) -> None:
-        box = self.viewer.current_box() or self.auto_box
-        if box is None:
-            QMessageBox.information(self, "尚未设置盒子", "请先等待自动推荐，或手动设置盒子。")
-            return
-        structure = self._structure_path()
-        if structure is None:
-            QMessageBox.information(
-                self, "无法预览", "还没有可用的 PDB/PDBQT 结构，请先准备靶点。"
-            )
-            return
-        try:
-            temp_dir = ascii_temp_root() / "pymol_preview"
-            temp_dir.mkdir(parents=True, exist_ok=True)
-            suffix = structure.suffix.lower() or ".pdb"
-            temp_structure = temp_dir / f"{self.target.stem}{suffix}"
-            shutil.copy2(structure, temp_structure)
-            pml = temp_dir / f"{self.target.stem}.pml"
-            write_box_pml(
-                temp_structure,
-                pml,
-                box,
-                title=f"{self.target.display_name} 搜索盒子",
-            )
-        except OSError as exc:
-            QMessageBox.warning(self, "无法生成预览", f"写入临时文件失败：{exc}")
-            return
-        ok, message = open_in_pymol(pml)
-        if not ok:
-            hint = (
-                f"{message}\n\n"
-                f"盒子脚本已保存到：\n{pml}\n"
-                "安装 PyMOL 后可直接打开该文件；也可以把可执行文件放到 PATH 中。"
-            )
-            QMessageBox.information(self, "无法打开 PyMOL", hint)
 
 
 class SettingsDialog(QDialog):

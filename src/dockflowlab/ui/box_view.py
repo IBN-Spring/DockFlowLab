@@ -63,7 +63,6 @@ HANDLE_PICK_PX = 16.0
 ATOM_PICK_PX = 14.0
 
 _BACKGROUND = (0.045, 0.060, 0.085, 1.0)
-_TRACE_COLOR = (0.52, 0.66, 0.86, 0.95)
 _BOX_COLOR = (1.00, 0.66, 0.18, 1.0)
 _BOX_FACE_COLOR = (1.00, 0.62, 0.15, 0.10)
 _CENTER_COLOR = (1.00, 1.00, 1.00, 1.0)
@@ -103,14 +102,31 @@ def element_color(element: str, *, hetero: bool = False) -> tuple[float, float, 
 
 
 @dataclass
+class BackboneResidue:
+    """卡通模型需要的主链信息；核酸残基用 P 作为 ``ca``。"""
+
+    chain: str
+    resseq: int
+    icode: str
+    resname: str
+    n: np.ndarray | None
+    ca: np.ndarray
+    c: np.ndarray | None
+    sse: str = "C"
+
+
+@dataclass
 class ViewStructure:
     """3D 视图所需的轻量结构数据。"""
 
     positions: np.ndarray
     colors: np.ndarray
-    trace: np.ndarray
+    cartoon_vertices: np.ndarray
+    cartoon_faces: np.ndarray
+    cartoon_colors: np.ndarray
     hetero_positions: np.ndarray
     hetero_colors: np.ndarray
+    hetero_bonds: np.ndarray
     center: np.ndarray
     radius: float
     atom_count: int = 0
@@ -121,9 +137,12 @@ def empty_structure() -> ViewStructure:
     return ViewStructure(
         positions=np.zeros((0, 3), dtype=np.float32),
         colors=np.zeros((0, 4), dtype=np.float32),
-        trace=np.zeros((0, 2, 3), dtype=np.float32),
+        cartoon_vertices=np.zeros((0, 3), dtype=np.float32),
+        cartoon_faces=np.zeros((0, 3), dtype=np.uint32),
+        cartoon_colors=np.zeros((0, 4), dtype=np.float32),
         hetero_positions=np.zeros((0, 3), dtype=np.float32),
         hetero_colors=np.zeros((0, 4), dtype=np.float32),
+        hetero_bonds=np.zeros((0, 2, 3), dtype=np.float32),
         center=np.zeros(3, dtype=np.float32),
         radius=20.0,
         atom_count=0,
@@ -131,44 +150,635 @@ def empty_structure() -> ViewStructure:
     )
 
 
-def _trace_points(atoms: Sequence[pdbio.Atom]) -> np.ndarray:
-    """为每个链提取骨架点：蛋白用 CA，核酸用 P（没有 P 时用 C4'）。"""
-    protein: dict[str, list[pdbio.Atom]] = {}
-    nucleic: dict[str, list[pdbio.Atom]] = {}
-    nucleic_fallback: dict[str, list[pdbio.Atom]] = {}
+# 卡通模型参数（单位 Å）。数值参考常见分子查看器的比例，便于在盒子
+# 编辑器里一眼认出螺旋、折叠与 loop，而不追求与 PyMOL 完全一致。
+_HELIX_RADIUS = 1.45
+_HELIX_HALF_WIDTH = 1.05
+_STRAND_HALF_WIDTH = 1.15
+_ARROW_HALF_WIDTH = 2.15
+_COIL_RADIUS = 0.42
+_RIBBON_HALF_THICKNESS = 0.12
+_HELIX_TURN_DEGREES = 100.0  # α-螺旋每残基约 100°
+
+_SSE_COLORS = {
+    "H": (0.78, 0.81, 0.87, 1.0),
+    "E": (0.68, 0.73, 0.81, 1.0),
+    "C": (0.60, 0.65, 0.73, 1.0),
+}
+
+_BOND_RADII = {
+    "H": 0.31,
+    "C": 0.76,
+    "N": 0.71,
+    "O": 0.66,
+    "F": 0.57,
+    "P": 1.07,
+    "S": 1.05,
+    "CL": 1.02,
+    "BR": 1.20,
+    "I": 1.39,
+}
+
+
+def _coerce_point(value) -> np.ndarray | None:
+    if value is None:
+        return None
+    point = np.asarray(value, dtype=float).reshape(3)
+    if not np.all(np.isfinite(point)):
+        return None
+    return point
+
+
+def dihedral_angle(
+    p0: Sequence[float],
+    p1: Sequence[float],
+    p2: Sequence[float],
+    p3: Sequence[float],
+) -> float | None:
+    """四点二面角（度）；退化时返回 None。"""
+    b0 = np.asarray(p0, dtype=float) - np.asarray(p1, dtype=float)
+    b1 = np.asarray(p2, dtype=float) - np.asarray(p1, dtype=float)
+    b2 = np.asarray(p3, dtype=float) - np.asarray(p2, dtype=float)
+    norm_b1 = float(np.linalg.norm(b1))
+    if norm_b1 < 1e-9:
+        return None
+    b1 = b1 / norm_b1
+    v = b0 - float(np.dot(b0, b1)) * b1
+    w = b2 - float(np.dot(b2, b1)) * b1
+    if float(np.linalg.norm(v)) < 1e-9 or float(np.linalg.norm(w)) < 1e-9:
+        return None
+    x = float(np.dot(v, w))
+    y = float(np.dot(np.cross(b1, v), w))
+    return math.degrees(math.atan2(y, x))
+
+
+def classify_phi_psi(phi: float | None, psi: float | None) -> str:
+    """按 φ/ψ 判断二级结构：H（螺旋）、E（折叠）、C（无规卷曲）。"""
+    if phi is None or psi is None:
+        return "C"
+    if -160.0 <= phi <= -30.0 and -85.0 <= psi <= 15.0:
+        return "H"
+    if -175.0 <= phi <= -45.0 and (psi >= 80.0 or psi <= -155.0):
+        return "E"
+    return "C"
+
+
+def collect_backbone_residues(atoms: Sequence[pdbio.Atom]) -> list[BackboneResidue]:
+    """按残基汇总主链 N/CA/C；核酸使用 P（或 C4'）。"""
+    groups: dict[tuple[str, int, str, str], dict[str, np.ndarray]] = {}
+    order: list[tuple[str, int, str, str]] = []
     for atom in atoms:
         if atom.is_hydrogen:
             continue
-        resname = atom.resname.upper()
-        if resname in _AMINO and atom.name.upper() == "CA":
-            protein.setdefault(atom.chain, []).append(atom)
-        elif resname in _NUCLEIC:
-            name = atom.name.upper()
-            if name == "P":
-                nucleic.setdefault(atom.chain, []).append(atom)
-            elif name in {"C4'", "C4*"}:
-                nucleic_fallback.setdefault(atom.chain, []).append(atom)
+        if not pdbio.is_polymer_residue(atom.resname):
+            continue
+        key = atom.residue_key
+        if key not in groups:
+            groups[key] = {}
+            order.append(key)
+        name = atom.name.upper()
+        if name not in groups[key]:
+            point = _coerce_point(atom.coord)
+            if point is not None:
+                groups[key][name] = point
 
-    for chain, fallback in nucleic_fallback.items():
-        nucleic.setdefault(chain, fallback)
-
-    segments: list[list[np.ndarray]] = []
-    for group, max_gap in ((protein, 5.0), (nucleic, 9.0)):
-        for chain_atoms in group.values():
-            ordered = sorted(chain_atoms, key=lambda a: (a.resseq, a.icode))
-            points = np.array([a.coord for a in ordered], dtype=np.float32)
-            if len(points) < 2:
+    residues: list[BackboneResidue] = []
+    for chain, resseq, icode, resname in order:
+        atoms_by_name = groups[(chain, resseq, icode, resname)]
+        if resname in _AMINO:
+            ca = atoms_by_name.get("CA")
+            if ca is None:
                 continue
-            for index in range(len(points) - 1):
-                if float(np.linalg.norm(points[index + 1] - points[index])) <= max_gap:
-                    segments.append([points[index], points[index + 1]])
-    if not segments:
+            residues.append(
+                BackboneResidue(
+                    chain=chain,
+                    resseq=resseq,
+                    icode=icode,
+                    resname=resname,
+                    n=atoms_by_name.get("N"),
+                    ca=ca,
+                    c=atoms_by_name.get("C"),
+                )
+            )
+        elif resname in _NUCLEIC:
+            ca = (
+                atoms_by_name.get("P")
+                if atoms_by_name.get("P") is not None
+                else atoms_by_name.get("C4'", atoms_by_name.get("C4*"))
+            )
+            if ca is None:
+                continue
+            residues.append(
+                BackboneResidue(
+                    chain=chain,
+                    resseq=resseq,
+                    icode=icode,
+                    resname=resname,
+                    n=None,
+                    ca=ca,
+                    c=None,
+                )
+            )
+    return residues
+
+
+def _smooth_sse(labels: list[str], gap: float = 4.8) -> list[str]:
+    """整理二级结构：短片段降级、单残基空档补齐、螺旋两端延伸。"""
+    result = list(labels)
+    size = len(result)
+    if not size:
+        return result
+
+    # 同一链内按顺序处理；调用方保证 labels 已按链分好。
+    index = 0
+    while index < size:
+        end = index + 1
+        while end < size and result[end] == result[index]:
+            end += 1
+        run = end - index
+        if result[index] == "H" and run < 4:
+            for i in range(index, end):
+                result[i] = "C"
+        elif result[index] == "E" and run < 3:
+            for i in range(index, end):
+                result[i] = "C"
+        index = end
+
+    # 被两个相同结构夹住的单残基空档，归入该结构。
+    for i in range(1, size - 1):
+        if result[i] == "C" and result[i - 1] == result[i + 1] != "C":
+            result[i] = result[i - 1]
+
+    # 螺旋两端各延伸一个残基，覆盖边界处常被误判的残基。
+    extension = [i for i, label in enumerate(result) if label == "H"]
+    for i in extension:
+        for neighbor in (i - 1, i + 1):
+            if 0 <= neighbor < size and result[neighbor] == "C":
+                result[neighbor] = "H"
+    return result
+
+
+def assign_secondary_structure(residues: Sequence[BackboneResidue]) -> None:
+    """根据 φ/ψ 为残基写入 ``sse``（就地修改）。"""
+    by_chain: dict[str, list[BackboneResidue]] = {}
+    for residue in residues:
+        by_chain.setdefault(residue.chain, []).append(residue)
+
+    for chain_residues in by_chain.values():
+        raw: list[str] = []
+        for index, residue in enumerate(chain_residues):
+            if residue.n is None or residue.c is None:
+                raw.append("C")
+                continue
+            previous = chain_residues[index - 1] if index > 0 else None
+            following = (
+                chain_residues[index + 1] if index + 1 < len(chain_residues) else None
+            )
+            phi = None
+            psi = None
+            if previous is not None and previous.c is not None:
+                if float(np.linalg.norm(previous.ca - residue.ca)) <= 5.0:
+                    phi = dihedral_angle(previous.c, residue.n, residue.ca, residue.c)
+            if following is not None and following.n is not None:
+                if float(np.linalg.norm(following.ca - residue.ca)) <= 5.0:
+                    psi = dihedral_angle(residue.n, residue.ca, residue.c, following.n)
+            raw.append(classify_phi_psi(phi, psi))
+        for residue, label in zip(chain_residues, _smooth_sse(raw)):
+            residue.sse = label
+
+
+# ----------------------------------------------------------------------
+# 卡通几何
+# ----------------------------------------------------------------------
+_RECT_PROFILE = np.array([(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)])
+_OCT_PROFILE = np.array(
+    [
+        (math.cos(math.radians(angle)), math.sin(math.radians(angle)))
+        for angle in range(0, 360, 45)
+    ]
+)
+
+
+def _catmull_rom(points: np.ndarray, index: int, t: float) -> np.ndarray:
+    count = len(points)
+    p0 = points[max(index - 1, 0)]
+    p1 = points[index]
+    p2 = points[min(index + 1, count - 1)]
+    p3 = points[min(index + 2, count - 1)]
+    t2 = t * t
+    t3 = t2 * t
+    return 0.5 * (
+        2.0 * p1
+        + (-p0 + p2) * t
+        + (2.0 * p0 - 5.0 * p1 + 4.0 * p2 - p3) * t2
+        + (-p0 + 3.0 * p1 - 3.0 * p2 + p3) * t3
+    )
+
+
+def _split_segments(
+    residues: Sequence[BackboneResidue],
+) -> list[list[BackboneResidue]]:
+    segments: list[list[BackboneResidue]] = []
+    for residue in residues:
+        max_gap = 8.5 if residue.resname in _NUCLEIC else 4.8
+        if (
+            not segments
+            or residue.chain != segments[-1][-1].chain
+            or float(np.linalg.norm(residue.ca - segments[-1][-1].ca)) > max_gap
+        ):
+            segments.append([residue])
+        else:
+            segments[-1].append(residue)
+    return segments
+
+
+def _split_sse_runs(
+    segment: Sequence[BackboneResidue],
+) -> list[tuple[int, int, str]]:
+    runs: list[tuple[int, int, str]] = []
+    start = 0
+    for index in range(1, len(segment) + 1):
+        if index == len(segment) or segment[index].sse != segment[start].sse:
+            runs.append((start, index - 1, segment[start].sse))
+            start = index
+    return runs
+
+
+def _loft(
+    centers: np.ndarray,
+    us: np.ndarray,
+    vs: np.ndarray,
+    half_widths: np.ndarray,
+    half_thicknesses: np.ndarray,
+    profile: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray]:
+    """把一串截面放样成两端封口的三角网格。"""
+    if len(centers) < 2:
+        return np.zeros((0, 3), dtype=np.float32), np.zeros(
+            (0, 3), dtype=np.uint32
+        )
+
+    orientation = float(
+        np.dot(np.cross(us[0], vs[0]), centers[1] - centers[0])
+    )
+    ring_profile = profile[::-1] if orientation < 0 else profile
+    count = len(ring_profile)
+
+    vertex_rings = []
+    for center, u, v, half_width, half_thickness in zip(
+        centers, us, vs, half_widths, half_thicknesses
+    ):
+        vertex_rings.append(
+            np.array(
+                [
+                    center + du * half_width * u + dv * half_thickness * v
+                    for du, dv in ring_profile
+                ],
+                dtype=np.float32,
+            )
+        )
+    vertices = np.concatenate(vertex_rings, axis=0)
+
+    faces = []
+    for ring in range(len(vertex_rings) - 1):
+        base = ring * count
+        next_base = (ring + 1) * count
+        for corner in range(count):
+            following = (corner + 1) % count
+            faces.append(
+                (
+                    base + corner,
+                    base + following,
+                    next_base + following,
+                )
+            )
+            faces.append(
+                (
+                    base + corner,
+                    next_base + following,
+                    next_base + corner,
+                )
+            )
+
+    # 端盖：避免从开口处看到带状模型的内部。
+    last_base = (len(vertex_rings) - 1) * count
+    front_center = len(vertices)
+    back_center = front_center + 1
+    vertices = np.vstack(
+        [
+            vertices,
+            centers[0].astype(np.float32),
+            centers[-1].astype(np.float32),
+        ]
+    )
+    for corner in range(count):
+        following = (corner + 1) % count
+        faces.append((front_center, following, corner))
+        faces.append(
+            (back_center, last_base + corner, last_base + following)
+        )
+    return vertices, np.asarray(faces, dtype=np.uint32)
+
+
+def _run_samples(
+    points: np.ndarray,
+    start: int,
+    end: int,
+    samples_per_residue: int = 4,
+) -> tuple[np.ndarray, np.ndarray]:
+    """采样一段路径；返回位置和对应的残基浮点索引。"""
+    if end <= start:
+        return np.array([points[start]], dtype=float), np.array([float(start)])
+    positions: list[np.ndarray] = []
+    indices: list[float] = []
+    for index in range(start, end):
+        for step in range(samples_per_residue):
+            t = step / samples_per_residue
+            positions.append(_catmull_rom(points, index, t))
+            indices.append(index + t)
+    positions.append(points[end].astype(float))
+    indices.append(float(end))
+    return np.asarray(positions), np.asarray(indices)
+
+
+def _sample_tangents(positions: np.ndarray) -> np.ndarray:
+    tangents = np.gradient(positions, axis=0)
+    norms = np.linalg.norm(tangents, axis=1, keepdims=True)
+    norms[norms < 1e-9] = 1.0
+    return tangents / norms
+
+
+def _perpendicular(vector: np.ndarray, tangent: np.ndarray) -> np.ndarray | None:
+    perpendicular = vector - float(np.dot(vector, tangent)) * tangent
+    norm = float(np.linalg.norm(perpendicular))
+    if norm < 1e-6:
+        return None
+    return perpendicular / norm
+
+
+def _helix_geometry(
+    points: np.ndarray,
+    start: int,
+    end: int,
+    run_points: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    positions, indices = _run_samples(points, start, end)
+    tangents = _sample_tangents(positions)
+
+    centroid = run_points.mean(axis=0)
+    centered = run_points - centroid
+    if len(run_points) >= 3:
+        _, _, vh = np.linalg.svd(centered, full_matrices=False)
+        axis = vh[0]
+    else:
+        axis = tangents[0]
+    axis = axis / max(float(np.linalg.norm(axis)), 1e-9)
+    if float(np.dot(axis, run_points[-1] - run_points[0])) < 0:
+        axis = -axis
+
+    radials = []
+    for point in run_points:
+        radial = _perpendicular(point - centroid, axis)
+        radials.append(radial if radial is not None else np.zeros(3))
+    radials = np.asarray(radials)
+
+    handedness = 0.0
+    for index in range(len(radials) - 1):
+        handedness += float(np.dot(np.cross(radials[index], radials[index + 1]), axis))
+    direction = 1.0 if handedness >= 0 else -1.0
+
+    base_radial = _perpendicular(radials[0], tangents[0])
+    if base_radial is None:
+        base_radial = _perpendicular(np.array([1.0, 0.0, 0.0]), tangents[0])
+    if base_radial is None:
+        base_radial = _perpendicular(np.array([0.0, 1.0, 0.0]), tangents[0])
+    base_radial = np.asarray(base_radial, dtype=float)
+
+    centers = []
+    us = []
+    vs = []
+    widths = []
+    for position, tangent, index in zip(positions, tangents, indices):
+        angle = math.radians(direction * _HELIX_TURN_DEGREES * (index - start))
+        radial = _rotate_vector(base_radial, axis, angle)
+        radial = _perpendicular(radial, tangent)
+        if radial is None:
+            radial = base_radial
+        # 螺旋两端把偏移收回到主链，避免与 loop 之间出现断层。
+        edge = min(index - start, end - index)
+        taper = min(1.0, max(0.0, edge / 0.8))
+        centers.append(position + radial * _HELIX_RADIUS * taper)
+        # 带状面沿螺旋轴方向铺开、沿径向保持很薄；若把宽度放在切线
+        # 方向，截面会顺路径展开，看起来像一根圆管而不是螺旋带。
+        width_direction = _perpendicular(axis, tangent)
+        us.append(width_direction if width_direction is not None else axis)
+        vs.append(radial)
+        widths.append(_HELIX_HALF_WIDTH)
+    return (
+        np.asarray(centers),
+        np.asarray(us),
+        np.asarray(vs),
+        np.asarray(widths),
+    )
+
+
+def _rotate_vector(vector: np.ndarray, axis: np.ndarray, angle: float) -> np.ndarray:
+    """Rodrigues 旋转。"""
+    axis = axis / max(float(np.linalg.norm(axis)), 1e-9)
+    cos_angle = math.cos(angle)
+    sin_angle = math.sin(angle)
+    return (
+        vector * cos_angle
+        + np.cross(axis, vector) * sin_angle
+        + axis * float(np.dot(axis, vector)) * (1.0 - cos_angle)
+    )
+
+
+def _strand_geometry(
+    points: np.ndarray,
+    start: int,
+    end: int,
+    run_points: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    positions, indices = _run_samples(points, start, end)
+    tangents = _sample_tangents(positions)
+
+    centroid = run_points.mean(axis=0)
+    centered = run_points - centroid
+    if len(run_points) >= 3:
+        _, _, vh = np.linalg.svd(centered, full_matrices=False)
+        normal = vh[-1]
+    else:
+        normal = tangents[0]
+    normal = normal / max(float(np.linalg.norm(normal)), 1e-9)
+
+    us = []
+    vs = []
+    for tangent in tangents:
+        plane_normal = _perpendicular(normal, tangent)
+        if plane_normal is None:
+            plane_normal = _perpendicular(np.array([0.0, 1.0, 0.0]), tangent)
+        if plane_normal is None:
+            plane_normal = np.array([0.0, 0.0, 1.0])
+        width_direction = np.cross(plane_normal, tangent)
+        width_direction /= max(float(np.linalg.norm(width_direction)), 1e-9)
+        us.append(width_direction)
+        vs.append(plane_normal)
+
+    widths = np.full(len(positions), _STRAND_HALF_WIDTH)
+    arrow = len(positions) >= 3
+    if arrow:
+        # 末端逐渐张开，再加一个收拢到尖端的箭头。
+        for i, index in enumerate(indices):
+            distance = end - index
+            if distance <= 2.0:
+                factor = 1.0 + 0.85 * (1.0 - distance / 2.0)
+                widths[i] = _STRAND_HALF_WIDTH * factor
+        tip_base = positions[-1]
+        tangent = tangents[-1]
+        positions = np.vstack(
+            [
+                positions,
+                tip_base + tangent * 0.35,
+                tip_base + tangent * 1.45,
+            ]
+        )
+        us = np.vstack([us, us[-1], us[-1]])
+        vs = np.vstack([vs, vs[-1], vs[-1]])
+        widths = np.concatenate([widths, [_ARROW_HALF_WIDTH, 0.04]])
+
+    return (
+        np.asarray(positions),
+        np.asarray(us),
+        np.asarray(vs),
+        widths,
+    )
+
+
+def _coil_geometry(
+    points: np.ndarray, start: int, end: int
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    positions, _ = _run_samples(points, start, end)
+    tangents = _sample_tangents(positions)
+
+    reference = np.array([0.0, 0.0, 1.0])
+    if abs(float(np.dot(tangents[0], reference))) > 0.9:
+        reference = np.array([1.0, 0.0, 0.0])
+    u = np.cross(tangents[0], reference)
+    u /= max(float(np.linalg.norm(u)), 1e-9)
+
+    us = []
+    vs = []
+    previous_tangent = tangents[0]
+    for tangent in tangents:
+        axis = np.cross(previous_tangent, tangent)
+        sine = float(np.linalg.norm(axis))
+        if sine > 1e-9:
+            angle = math.atan2(sine, float(np.dot(previous_tangent, tangent)))
+            u = _rotate_vector(u, axis / sine, angle)
+        projected = _perpendicular(u, tangent)
+        if projected is not None:
+            u = projected
+        us.append(u)
+        vs.append(np.cross(tangent, u))
+        previous_tangent = tangent
+    return np.asarray(positions), np.asarray(us), np.asarray(vs)
+
+
+def cartoon_geometry(
+    residues: Sequence[BackboneResidue],
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """生成卡通模型三角网格：顶点、面、顶点颜色。"""
+    vertices_parts: list[np.ndarray] = []
+    faces_parts: list[np.ndarray] = []
+    colors_parts: list[np.ndarray] = []
+    vertex_offset = 0
+
+    for segment in _split_segments(residues):
+        if len(segment) < 2:
+            continue
+        points = np.asarray([residue.ca for residue in segment], dtype=float)
+        for start, end, sse in _split_sse_runs(segment):
+            if end <= start:
+                continue
+            run_points = points[start : end + 1]
+            color = _SSE_COLORS.get(sse, _SSE_COLORS["C"])
+            if sse == "H":
+                centers, us, vs, widths = _helix_geometry(
+                    points, start, end, run_points
+                )
+                thicknesses = np.full(len(centers), _RIBBON_HALF_THICKNESS)
+                profile = _RECT_PROFILE
+            elif sse == "E":
+                centers, us, vs, widths = _strand_geometry(
+                    points, start, end, run_points
+                )
+                thicknesses = np.full(len(centers), _RIBBON_HALF_THICKNESS)
+                profile = _RECT_PROFILE
+            else:
+                centers, us, vs = _coil_geometry(points, start, end)
+                widths = np.full(len(centers), _COIL_RADIUS)
+                thicknesses = np.full(len(centers), _COIL_RADIUS)
+                profile = _OCT_PROFILE
+
+            vertices, faces = _loft(
+                centers, us, vs, widths, thicknesses, profile
+            )
+            if len(vertices) == 0:
+                continue
+            faces_parts.append(faces + vertex_offset)
+            vertices_parts.append(vertices)
+            colors_parts.append(
+                np.tile(np.asarray(color, dtype=np.float32), (len(vertices), 1))
+            )
+            vertex_offset += len(vertices)
+
+    if not vertices_parts:
+        return (
+            np.zeros((0, 3), dtype=np.float32),
+            np.zeros((0, 3), dtype=np.uint32),
+            np.zeros((0, 4), dtype=np.float32),
+        )
+    return (
+        np.concatenate(vertices_parts).astype(np.float32),
+        np.concatenate(faces_parts).astype(np.uint32),
+        np.concatenate(colors_parts).astype(np.float32),
+    )
+
+
+def _hetero_bonds(
+    positions: np.ndarray, elements: Sequence[str]
+) -> np.ndarray:
+    """按共价半径连接杂原子，生成配体棍状模型的线段。"""
+    count = len(positions)
+    if count < 2:
         return np.zeros((0, 2, 3), dtype=np.float32)
-    return np.asarray(segments, dtype=np.float32)
+    radii = np.asarray(
+        [_BOND_RADII.get((element or "").upper(), 0.8) for element in elements],
+        dtype=np.float32,
+    )
+    limits = (radii[:, None] + radii[None, :]) * 1.3
+    # 分块计算，避免大结构中杂原子较多时一次生成 N×N×3 的临时数组。
+    block = max(1, min(512, 4_000_000 // max(count * 3, 1)))
+    pairs: list[np.ndarray] = []
+    for start in range(0, count, block):
+        stop = min(start + block, count)
+        delta = positions[start:stop, None, :] - positions[None, :, :]
+        distances = np.linalg.norm(delta, axis=2)
+        bonded = (distances > 0.4) & (distances <= limits[start:stop])
+        local = np.argwhere(
+            np.triu(bonded, k=start + 1)
+        )
+        if len(local):
+            local[:, 0] += start
+            pairs.append(local)
+    if not pairs:
+        return np.zeros((0, 2, 3), dtype=np.float32)
+    return positions[np.concatenate(pairs)].astype(np.float32)
 
 
 def load_view_structure(path: str | Path) -> ViewStructure:
-    """读取 PDB/PDBQT，生成显示用原子点与骨架线段。"""
+    """读取 PDB/PDBQT，生成卡通模型、原子点与配体线段。"""
     path = Path(path)
     fmt = pdbio.detect_format(path)
     if fmt == "pdbqt":
@@ -207,11 +817,17 @@ def load_view_structure(path: str | Path) -> ViewStructure:
             [element_color(atom.element, hetero=True) for atom in hetero],
             dtype=np.float32,
         )
+        hetero_bonds = _hetero_bonds(
+            hetero_positions, [atom.element for atom in hetero]
+        )
     else:
         hetero_positions = np.zeros((0, 3), dtype=np.float32)
         hetero_colors = np.zeros((0, 4), dtype=np.float32)
+        hetero_bonds = np.zeros((0, 2, 3), dtype=np.float32)
 
-    trace = _trace_points(polymer)
+    residues = collect_backbone_residues(polymer)
+    assign_secondary_structure(residues)
+    cartoon_vertices, cartoon_faces, cartoon_colors = cartoon_geometry(residues)
 
     low = positions.min(axis=0)
     high = positions.max(axis=0)
@@ -220,9 +836,12 @@ def load_view_structure(path: str | Path) -> ViewStructure:
     return ViewStructure(
         positions=positions,
         colors=colors,
-        trace=trace,
+        cartoon_vertices=cartoon_vertices,
+        cartoon_faces=cartoon_faces,
+        cartoon_colors=cartoon_colors,
         hetero_positions=hetero_positions,
         hetero_colors=hetero_colors,
+        hetero_bonds=hetero_bonds,
         center=center,
         radius=max(radius, 5.0),
         atom_count=len(heavy),
@@ -429,7 +1048,61 @@ def _reset_gl_shader_cache() -> None:
         program.prog = None
 
 
+_CARTOON_SHADER = "dockflowlab_cartoon"
+
+
+def _install_cartoon_shader() -> None:
+    """注册双面柔和光照着色器。
+
+    pyqtgraph 自带的 ``shaded`` 只照亮朝向光源的一面，背面接近黑色；
+    卡通模型由许多薄带组成，背面很常见，因此改用取绝对值的双面光照，
+    既保留体积感，又不会出现大片死黑。
+    """
+    try:
+        from pyqtgraph.opengl import shaders as gl_shaders
+    except Exception:  # pragma: no cover - 缺少 OpenGL 时的降级路径
+        return
+    if _CARTOON_SHADER in gl_shaders.ShaderProgram.names:
+        return
+    gl_shaders.ShaderProgram(
+        _CARTOON_SHADER,
+        [
+            gl_shaders.VertexShader(
+                """
+                uniform mat4 u_mvp;
+                uniform mat3 u_normal;
+                attribute vec4 a_position;
+                attribute vec3 a_normal;
+                attribute vec4 a_color;
+                varying vec4 v_color;
+                varying vec3 v_normal;
+                void main() {
+                    v_normal = normalize(u_normal * a_normal);
+                    v_color = a_color;
+                    gl_Position = u_mvp * a_position;
+                }
+                """
+            ),
+            gl_shaders.FragmentShader(
+                """
+                #ifdef GL_ES
+                precision mediump float;
+                #endif
+                varying vec4 v_color;
+                varying vec3 v_normal;
+                void main() {
+                    float p = abs(dot(v_normal, normalize(vec3(0.35, -0.45, 0.82))));
+                    vec3 rgb = v_color.rgb * (0.58 + 0.42 * p);
+                    gl_FragColor = vec4(rgb, v_color.a);
+                }
+                """
+            ),
+        ],
+    )
+
+
 if _HAS_GL:
+    _install_cartoon_shader()
     _OPAQUE_OPTIONS = {
         _GL.GL_DEPTH_TEST: True,
         _GL.GL_BLEND: False,
@@ -461,7 +1134,7 @@ if _HAS_GL:
             self._structure = empty_structure()
             self._box = Box(center=(0.0, 0.0, 0.0), size=(22.0, 22.0, 22.0))
             self._click_to_center = True
-            self._show_atoms = True
+            self._show_atoms = False
             self._drag: dict | None = None
             self._press_pos = None
             self._press_moved = False
@@ -478,16 +1151,28 @@ if _HAS_GL:
 
         # -- items ------------------------------------------------------
         def _build_items(self) -> None:
-            self._trace_item = gl.GLLinePlotItem(
+            # 卡通模型：螺旋/折叠/loop 的三角网格，按二级结构着色。
+            self._cartoon_item = gl.GLMeshItem(
+                smooth=True,
+                shader=_CARTOON_SHADER,
+                computeNormals=True,
+                drawEdges=False,
+                drawFaces=True,
+                glOptions=_OPAQUE_OPTIONS,
+            )
+            self._cartoon_item.setDepthValue(0)
+            self.addItem(self._cartoon_item)
+
+            self._bond_item = gl.GLLinePlotItem(
                 pos=np.zeros((0, 3), dtype=np.float32),
-                color=_TRACE_COLOR,
-                width=1.8,
+                color=(0.98, 0.72, 0.38, 1.0),
+                width=2.2,
                 mode="lines",
                 antialias=True,
                 glOptions=_OPAQUE_OPTIONS,
             )
-            self._trace_item.setDepthValue(0)
-            self.addItem(self._trace_item)
+            self._bond_item.setDepthValue(1)
+            self.addItem(self._bond_item)
 
             self._atom_item = gl.GLScatterPlotItem(
                 pos=np.zeros((0, 3), dtype=np.float32),
@@ -558,13 +1243,21 @@ if _HAS_GL:
         # -- data -------------------------------------------------------
         def set_structure(self, structure: ViewStructure) -> None:
             self._structure = structure
-            self._trace_item.setData(
-                pos=structure.trace.reshape(-1, 3),
-                color=_TRACE_COLOR,
-                width=1.8,
+            self._cartoon_item.setMeshData(
+                vertexes=structure.cartoon_vertices,
+                faces=structure.cartoon_faces,
+                vertexColors=structure.cartoon_colors,
+            )
+            has_cartoon = len(structure.cartoon_faces) > 0
+            self._cartoon_item.setVisible(has_cartoon)
+            self._bond_item.setData(
+                pos=structure.hetero_bonds.reshape(-1, 3),
+                color=(0.98, 0.72, 0.38, 1.0),
+                width=2.2,
                 mode="lines",
                 antialias=True,
             )
+            self._bond_item.setVisible(len(structure.hetero_bonds) > 0)
             self._atom_item.setData(
                 pos=structure.positions,
                 color=structure.colors,
@@ -574,7 +1267,7 @@ if _HAS_GL:
             self._hetero_item.setData(
                 pos=structure.hetero_positions,
                 color=structure.hetero_colors,
-                size=6.0,
+                size=5.0,
                 pxMode=True,
             )
             self._atom_item.setVisible(self._show_atoms and not structure.is_empty)
@@ -937,10 +1630,22 @@ class BoxViewer(QWidget):
         self.click_checkbox.toggled.connect(self._set_click_to_center)
         layout.addWidget(self.click_checkbox)
 
-        self.simple_checkbox = QCheckBox("简化显示（隐藏原子点，仅保留骨架）")
-        self.simple_checkbox.setChecked(False)
-        self.simple_checkbox.toggled.connect(self._set_show_atoms)
-        layout.addWidget(self.simple_checkbox)
+        self.atom_checkbox = QCheckBox("显示原子点")
+        self.atom_checkbox.setChecked(False)
+        self.atom_checkbox.setToolTip("默认显示卡通模型；勾选后叠加所有重原子，便于检查细节。")
+        self.atom_checkbox.toggled.connect(self._set_show_atoms)
+        layout.addWidget(self.atom_checkbox)
+
+        structure_legend = QLabel(
+            '<span style="color:#c7cfe0">■</span> 螺旋　'
+            '<span style="color:#aebacf">■</span> β 折叠　'
+            '<span style="color:#99a6ba">■</span> loop　'
+            '<span style="color:#fa9e38">●</span> 配体/辅因子'
+        )
+        structure_legend.setTextFormat(Qt.TextFormat.RichText)
+        structure_legend.setObjectName("Muted")
+        structure_legend.setWordWrap(True)
+        layout.addWidget(structure_legend)
 
         legend = QLabel(
             '<span style="color:#ffffff">●</span> 中心　'
@@ -1087,9 +1792,9 @@ class BoxViewer(QWidget):
         if self.view is not None:
             self.view.set_click_to_center(enabled)
 
-    def _set_show_atoms(self, simplified: bool) -> None:
+    def _set_show_atoms(self, visible: bool) -> None:
         if self.view is not None:
-            self.view.set_show_atoms(not simplified)
+            self.view.set_show_atoms(visible)
 
     def _focus_box(self) -> None:
         if self.view is not None:
