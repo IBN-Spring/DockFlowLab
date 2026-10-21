@@ -77,7 +77,7 @@ Python，也不要求你先把 PDB 转成 PDBQT、再去找口袋、再单独装
     <td width="50%" valign="top">
       <b>全流程跑通，不装第二套软件</b><br><br>
       结构修复、按 pH 加氢、PDBQT 生成、几何口袋检测、对接、热图、HTML 报告都在一个窗口里。
-      Windows 安装包内置三种对接引擎与无界面 PyMOL，不需要再配置 AutoDock Tools。
+      安装包内置三种对接引擎与无界面 PyMOL，不需要再配置 AutoDock Tools。
     </td>
     <td width="50%" valign="top">
       <b>完全离线，数据不出本机</b><br><br>
@@ -206,8 +206,8 @@ Python，也不要求你先把 PDB 转成 PDBQT、再去找口袋、再单独装
 - 选择对接后的复合物，再选择一个或多个 `.pml` / `.txt` 风格脚本；也可以选中整个脚本文件夹。
 - 脚本只需包含样式命令（配色、表示方式、视角等），加载结构、设置视角、保存图片由程序完成。
 - 每个任务在独立的 PyMOL 进程中渲染，渲染失败或卡住不会影响主程序。
-- Windows 安装包内置无界面 PyMOL 3.1，**无需用户另装 PyMOL**；其他平台可在设置中指定本机
-  PyMOL，源码运行时同样适用。
+- Windows 与 macOS 安装包均内置无界面 PyMOL 3.1，**无需用户另装 PyMOL**；也可以在设置中
+  指定本机 PyMOL，源码运行时同样适用。
 - 标签字号会按输出分辨率自动补偿，残基编号与氢键距离在高分辨率下仍然清晰。
 
 <p align="center">
@@ -242,7 +242,7 @@ Python，也不要求你先把 PDB 转成 PDBQT、再去找口袋、再单独装
 | 平台 | 推荐文件 | 说明 |
 | --- | --- | --- |
 | Windows 10/11 x64 | `DockFlowLab-Windows-x64.zip` | 解压即用，内置三种对接引擎与无界面 PyMOL |
-| macOS 11+ Apple Silicon | `DockFlowLab-macOS-arm64.dmg` | 拖入“应用程序”即可；缺少的引擎可在设置中指定 |
+| macOS 11+ Apple Silicon | `DockFlowLab-macOS-arm64.dmg` | 拖入“应用程序”即可；内置三种引擎与 PyMOL |
 
 - [GitHub Releases](https://github.com/IBN-Spring/DockFlowLab/releases/latest)（推荐，单文件直接下载）
 - [Gitee 发行版](https://gitee.com/spiral_IBN/dock-flow-lab/releases)（国内网络）
@@ -259,7 +259,7 @@ Python，也不要求你先把 PDB 转成 PDBQT、再去找口袋、再单独装
 
 1. 下载 `DockFlowLab-macOS-arm64.dmg`，打开后把 `DockFlowLab.app` 拖入“应用程序”。
 2. 首次打开若提示“无法验证开发者”，右键应用 →“打开”，或在“系统设置 → 隐私与安全性”中允许。
-3. macOS 安装包会打包构建机上可用的引擎；若缺少 Vina、QuickVina 2 或 Smina，可通过
+3. 安装包已内置三种引擎与 PyMOL。若要改用本机安装的其他版本，可通过
    `brew install autodock-vina` 或 `conda install -c conda-forge vina qvina smina` 安装，
    并在“设置”中指定路径。源码运行时同理。
 
@@ -431,9 +431,9 @@ DockFlowLab 把结构准备、口袋检测、盒子设置、三种引擎、结�
 <details>
 <summary><b>需要自己安装 Vina 或 PyMOL 吗？</b></summary>
 
-Windows 安装包已内置 AutoDock Vina 1.2.7、QuickVina 2.1、Smina 2020.12.10 和无界面
-PyMOL 3.1，开箱即用。macOS 安装包会打包构建机上可用的引擎（通常包含 Vina）；若缺少某个
-组件，可在“设置”中指定本机路径。从源码运行时，程序同样会查找系统中的引擎。
+Windows 与 macOS 安装包均内置 AutoDock Vina 1.2.7、QuickVina 2.1、Smina 2020.12.10 和
+无界面 PyMOL 3.1，开箱即用。若想改用本机安装的其他版本，可在“设置”中指定路径。从源码
+运行时，程序会查找系统中的引擎。
 
 </details>
 
