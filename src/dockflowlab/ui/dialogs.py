@@ -257,6 +257,11 @@ class BoxDialog(QDialog):
         self.auto_warnings: list[str] = []
         self._required_size: tuple[float, float, float] | None = None
         self._auto_pending = False
+        self._auto_scheduled = False
+        # 自动推荐会阻塞界面约一秒；等对话框画完第一帧再算，避免先闪出白窗。
+        self._auto_timer = QTimer(self)
+        self._auto_timer.setSingleShot(True)
+        self._auto_timer.timeout.connect(self._request_auto)
         self.setWindowTitle(f"设置盒子 · {target.display_name}")
         self.setMinimumSize(1000, 720)
         self.resize(1160, 820)
@@ -368,7 +373,14 @@ class BoxDialog(QDialog):
             self.viewer.set_box(self.box, mark_manual=self.box.source == "manual")
             self.viewer.focus_box()
             self._update_box_fit(self.box)
-        self._request_auto()
+
+    def showEvent(self, event) -> None:  # noqa: N802
+        super().showEvent(event)
+        if self._auto_scheduled:
+            return
+        self._auto_scheduled = True
+        # 留出第一帧绘制的时间，再执行可能较慢的口袋检测。
+        self._auto_timer.start(120)
 
     # ------------------------------------------------------------------
     # 结构
