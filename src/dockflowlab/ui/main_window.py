@@ -22,7 +22,13 @@ from PySide6.QtWidgets import (
 )
 
 from ..config import AppSettings
-from ..core.models import KIND_LIGAND, KIND_TARGET, STATUS_READY, DockingResult
+from ..core.models import (
+    KIND_LIGAND,
+    KIND_TARGET,
+    STATUS_READY,
+    DockingResult,
+    ProjectFile,
+)
 from ..errors import DockFlowError
 from ..logging_setup import get_logger, setup_logging
 from ..services import modes
@@ -530,7 +536,7 @@ class MainWindow(QMainWindow):
                 self,
                 "没有可运行的组合",
                 "当前的靶点与候选分子组合都属于不支持的对接类型，无法生成盒子。\n\n"
-                "蛋白–蛋白等大分子对接请使用 ClusPro、HADDOCK 或 RosettaDock。",
+                "蛋白–蛋白、蛋白–多肽等大分子配体对接请使用 ClusPro、HADDOCK 或 RosettaDock。",
             )
             return
         ligands_by_target: dict[str, list] = {}
@@ -572,9 +578,22 @@ class MainWindow(QMainWindow):
             QApplication.restoreOverrideCursor()
             self._set_busy(False)
             self.dock_page.refresh(workspace)
+            review = []
+            for target in targets:
+                saved = workspace.load_box(target.stem)
+                if saved is not None and saved.needs_review:
+                    review.append(f"· {target.display_name}（{saved.source_label}）")
             if errors:
                 QMessageBox.warning(self, "部分盒子未生成", "\n".join(errors[:10]))
-            else:
+            if review:
+                QMessageBox.information(
+                    self,
+                    "有盒子需要手动确认",
+                    "以下靶点无法自动确定可靠的结合位点，盒子只是兜底结果：\n\n"
+                    + "\n".join(review[:10])
+                    + "\n\n请在对应行点击“设置盒子”，手动调整中心与边长后再运行对接。",
+                )
+            elif not errors:
                 self.statusBar().showMessage("已为所有靶点生成并保存盒子。", 7000)
 
         def failed(message: str) -> None:
@@ -637,7 +656,7 @@ class MainWindow(QMainWindow):
                 "没有可运行的组合",
                 "当前组合都属于不支持的对接类型，不会执行 Vina 计算：\n\n"
                 + "\n".join(f"· {item}" for item in reasons[:8])
-                + "\n\n蛋白–蛋白等大分子对接请使用 ClusPro、HADDOCK 或 RosettaDock 等专门工具。",
+                + "\n\n蛋白–蛋白、蛋白–多肽等大分子配体对接请使用 ClusPro、HADDOCK 或 RosettaDock 等专门工具。",
             )
             return
         pairs = [(target, ligand) for target, ligand, _mode in supported]
@@ -647,6 +666,40 @@ class MainWindow(QMainWindow):
                 workspace.absolute(ligand.prepared)
             )
         runnable_targets = [target for target in ready_targets if target.stem in ligands_by_target]
+
+        # 自动盒子无法可靠定位时（盲对接、按分子尺寸估算），先让用户确认，
+        # 而不是静默使用覆盖整个结构的盒子。
+        unconfirmed: list[tuple[ProjectFile, str]] = []
+        for target in runnable_targets:
+            saved = workspace.load_box(target.stem)
+            if saved is None:
+                # 蛋白/核酸通常能自动找到几何口袋；多肽常只有盲对接，
+                # 小分子靶点只能按尺寸估算，先请用户确认。
+                kind = modes.target_kind_for(target, workspace)
+                if kind in {"peptide", "small_molecule"}:
+                    unconfirmed.append((target, "尚未设置盒子，自动推荐可能不可靠"))
+            elif saved.needs_review:
+                unconfirmed.append((target, f"{saved.source_label}，无法可靠定位"))
+        if unconfirmed:
+            dialog = QMessageBox(self)
+            dialog.setIcon(QMessageBox.Icon.Information)
+            dialog.setWindowTitle("请先确认搜索盒子")
+            dialog.setText("以下靶点的盒子不是手动设置的：")
+            dialog.setInformativeText(
+                "\n".join(f"· {item.display_name}（{reason}）" for item, reason in unconfirmed[:8])
+                + "\n\n自动盒子可能无法覆盖当前对接场景：多肽靶点常没有可靠口袋，"
+                "小分子靶点只能按两侧分子尺寸估算。建议先手动设置中心与边长。"
+            )
+            edit_button = dialog.addButton("去设置盒子", QMessageBox.ButtonRole.ActionRole)
+            auto_button = dialog.addButton("自动计算并继续", QMessageBox.ButtonRole.AcceptRole)
+            dialog.addButton("取消", QMessageBox.ButtonRole.RejectRole)
+            dialog.exec()
+            if dialog.clickedButton() is edit_button:
+                self._edit_box(unconfirmed[0][0].stem)
+                return
+            if dialog.clickedButton() is not auto_button:
+                return
+
         obabel = self._get_obabel()
         settings = self.settings
 

@@ -270,7 +270,7 @@ class MoleculesPage(Page):
         card = Card(
             "靶点结构",
             "蛋白、DNA/RNA 或多肽的 PDB/mmCIF 结构；小分子也可以作为靶点，"
-            "用于分子–分子对接。蛋白–蛋白对接不在本地支持范围内。",
+            "用于分子–分子对接。蛋白–蛋白、蛋白–多肽等大分子配体对接不在本地支持范围内。",
         )
 
         zone = DropZone(
@@ -423,8 +423,8 @@ class PreparePage(Page):
         options.add_layout(option_row)
         note = QLabel(
             "默认会移除结晶水、离子和添加剂，保留聚合物链；缺失的残基与原子会被补全。"
-            "蛋白、多肽与核酸使用同一套修复流程。若文件被识别为完整蛋白质，程序会提示"
-            "改用专门的蛋白–蛋白对接工具，而不是给出不可靠的 Vina 分数。"
+            "蛋白、多肽与核酸使用同一套修复流程。若候选分子被识别为蛋白质或多肽，"
+            "程序会提示改用专门的大分子对接工具，而不是给出不可靠的 Vina 分数。"
         )
         note.setObjectName("Muted")
         note.setWordWrap(True)
@@ -544,8 +544,10 @@ class DockPage(Page):
             _header_row(
                 "第 4 步 · 对接设置",
                 "告诉程序“在哪里找结合位置”",
-                "盒子是搜索区域。软件会先用几何算法寻找聚合物表面的口袋，再用共晶配体或已知位点校验；"
-                "都不可靠时才使用全结构盲对接。不支持的组合会被跳过，不会产生分数。",
+                "盒子是搜索区域。软件会先用几何算法寻找蛋白、核酸或多肽表面的口袋，"
+                "再用共晶配体或已知位点校验；小分子靶点按两侧分子尺寸估算；"
+                "都无法可靠定位时使用全结构盲对接，并提示你手动设置中心与边长。"
+                "不支持的组合会被跳过，不会产生分数。",
                 [change],
             )
         )
@@ -655,8 +657,15 @@ class DockPage(Page):
                 seen.add(target.stem)
                 runnable_targets.append(target)
         self.box_empty.setVisible(not runnable_targets)
+        mode_labels: dict[str, list[str]] = {}
+        for target, _ligand, mode in supported:
+            labels = mode_labels.setdefault(target.stem, [])
+            if mode.label not in labels:
+                labels.append(mode.label)
         for target in runnable_targets:
-            self.box_rows.addWidget(self._box_row(workspace, target))
+            self.box_rows.addWidget(
+                self._box_row(workspace, target, mode_labels.get(target.stem, []))
+            )
 
         pair_count = len(supported)
         total_pairs = len(ready_targets) * len(ready_ligands)
@@ -668,25 +677,41 @@ class DockPage(Page):
             )
             if unsupported_count:
                 text += f"另有 {unsupported_count} 组属于不支持的对接类型，将不会运行。"
+            review_boxes = sum(
+                1
+                for target in runnable_targets
+                if (saved := workspace.load_box(target.stem)) is not None and saved.needs_review
+            )
             if missing_boxes:
                 text += f"其中 {missing_boxes} 个靶点还没有保存盒子，运行时会自动推荐。"
+            if review_boxes:
+                text += (
+                    f" 另有 {review_boxes} 个靶点的自动盒子无法可靠定位"
+                    "（盲对接或按分子尺寸估算），建议手动设置盒子。"
+                )
             text += " 每组耗时从几十秒到几分钟不等，取决于分子大小和精细度。"
         elif total_pairs:
             text = (
                 "当前所有组合都属于不支持的对接类型，无法运行。"
-                "可以是蛋白–蛋白、核酸–蛋白等大分子组合；请检查结构类型，"
-                "或改用 ClusPro、HADDOCK、RosettaDock 等专门工具。"
+                "例如把蛋白质或多肽放进了候选分子，或使用了核酸–大分子组合；"
+                "请检查结构类型，或改用 ClusPro、HADDOCK、RosettaDock 等专门工具。"
             )
         else:
             text = "还没有可运行的组合。请先在“检查与准备”中准备至少一个靶点和一个候选分子。"
         self.summary_label.setText(text)
         self.run_button.setEnabled(pair_count > 0)
 
-    def _box_row(self, workspace: Workspace, target: ProjectFile) -> QWidget:
+    def _box_row(
+        self,
+        workspace: Workspace,
+        target: ProjectFile,
+        mode_labels: list[str] | None = None,
+    ) -> QWidget:
         row = QFrame()
         row.setObjectName("BoxRow")
         row.setMinimumHeight(58)
-        row.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        # 说明行可能折成两行（类型 + 盒子来源 + 手动确认提示），允许随内容增高。
+        row.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
         layout = QHBoxLayout(row)
         layout.setContentsMargins(2, 8, 2, 8)
         layout.setSpacing(10)
@@ -696,16 +721,27 @@ class DockPage(Page):
         name.setStyleSheet("font-weight: 600;")
         name.setWordWrap(False)
         text_box.addWidget(name)
+        parts = []
         kind_label = modes.KIND_LABELS.get(modes.target_kind_for(target, workspace), "")
+        if kind_label:
+            parts.append(kind_label)
+        if mode_labels:
+            parts.append("对接类型：" + "、".join(mode_labels))
+        prefix = " · ".join(parts)
         box = workspace.load_box(target.stem)
+        needs_review = False
         if box is None:
-            summary = f"{kind_label} · 尚未设置，运行时会自动推荐" if kind_label else "尚未设置 · 运行时会自动推荐"
+            box_text = "尚未设置盒子，运行时会自动推荐"
         else:
             size = " × ".join(f"{value:.0f}" for value in box.size)
-            prefix = f"{kind_label} · " if kind_label else ""
-            summary = f"{prefix}{box.source_label} · 盒子 {size} Å"
+            box_text = f"{box.source_label} · 盒子 {size} Å"
+            if box.needs_review:
+                box_text += " · 自动结果不可靠，请手动确认"
+                needs_review = True
+        summary = f"{prefix} · {box_text}" if prefix else box_text
         detail = QLabel(summary)
-        detail.setObjectName("Muted")
+        detail.setObjectName("Warning" if needs_review else "Muted")
+        detail.setWordWrap(True)
         text_box.addWidget(detail)
         layout.addLayout(text_box, 1)
         edit = QPushButton("设置盒子")

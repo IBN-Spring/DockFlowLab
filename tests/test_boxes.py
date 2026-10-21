@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 
 from dockflowlab.config import AppSettings
+from dockflowlab.core.models import Box
 from dockflowlab.errors import InputError
 from dockflowlab.services import boxes
 
@@ -14,6 +15,16 @@ from .factories import make_protein_pdb
 @pytest.fixture()
 def settings():
     return AppSettings(box_min_size=18, box_max_size=60, box_padding=5.0)
+
+
+def test_auto_box_review_flags():
+    """盲对接与小分子靶点估算的盒子需要用户手动确认。"""
+    size = (20.0, 20.0, 20.0)
+    center = (0.0, 0.0, 0.0)
+    assert Box(center, size, source="blind").needs_review
+    assert Box(center, size, source="ligand").needs_review
+    for source in ("pocket", "cocrystal", "site", "reference", "manual"):
+        assert not Box(center, size, source=source).needs_review
 
 
 def test_manual_box_validation():

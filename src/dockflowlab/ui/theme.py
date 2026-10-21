@@ -112,6 +112,7 @@ def _qss() -> str:
     QLabel#CardTitle {{ font-size: 15px; font-weight: 600; }}
     QLabel#CardHint {{ color: {SECONDARY}; font-size: 12px; }}
     QLabel#Muted {{ color: {MUTED}; font-size: 12px; }}
+    QLabel#Warning {{ color: {WARNING}; font-size: 12px; font-weight: 600; }}
     QLabel#Metric {{ font-size: 26px; font-weight: 700; }}
     QLabel#MetricLabel {{ color: {SECONDARY}; font-size: 12px; }}
 

@@ -125,6 +125,16 @@ class Box:
             "ligand": "目标分子",
         }.get(self.source, "自动")
 
+    @property
+    def needs_review(self) -> bool:
+        """自动盒子是否缺少可靠的结合位点信息，需要用户手动确认。
+
+        ``blind`` 覆盖整个结构，``ligand`` 只按分子尺寸估算；两者都无法
+        像几何口袋或实验位点那样定位结合位置。界面应提示用户设置中心与
+        边长，而不是静默使用。
+        """
+        return self.source in {"blind", "ligand"}
+
 
 @dataclass
 class Pose:
