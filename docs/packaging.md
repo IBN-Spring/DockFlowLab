@@ -160,6 +160,7 @@ xcrun stapler staple dist/DockFlowLab.app
 | Matplotlib | PyInstaller 官方 hook，图表使用 Agg 后端 |
 | pyqtgraph / PyOpenGL | `collect_all` + 显式 hidden imports；运行时固定 `PYQTGRAPH_QT_LIB=PySide6`，并排除 PyQt5/PyQt6 |
 | QtWebEngine / NGL | PyInstaller 的 `hook-PySide6.QtWebEngineCore` 收集渲染进程、`resources/` 与语言包；`ngl_view.py` 在冻结包中从 `_internal/PySide6` 定位这些文件 |
+| PyMOL（不打包） | 不收集。渲染页使用用户本机安装的 PyMOL，按“设置中的路径 → `PYMOL_RENDER_EXE` → 当前 Python 环境 → 系统安装”查找；缺失时页面禁用渲染，但对接与报告不受影响 |
 
 conda 把 Boost、OpenBabel、OpenMM、MKL 的共享库放在 `Library/bin` / `Library/lib`
 （Windows）或 `lib/`（macOS/Linux），而不是 Python 包目录，因此 spec 在分析前

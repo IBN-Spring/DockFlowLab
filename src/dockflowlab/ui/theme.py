@@ -288,6 +288,28 @@ def _qss() -> str:
         padding: 8px;
         color: {SECONDARY};
     }}
+    QLabel#ImagePreview {{
+        background: #fbfbf9;
+        border: 1px solid {BORDER};
+        border-radius: 10px;
+        color: {MUTED};
+    }}
+    QListWidget#StyleList {{
+        background: {SURFACE};
+        border: 1px solid {BORDER};
+        border-radius: 8px;
+        padding: 5px;
+        outline: none;
+    }}
+    QListWidget#StyleList::item {{
+        padding: 6px 8px;
+        border-radius: 5px;
+    }}
+    QListWidget#StyleList::item:hover {{ background: #f7f6f2; }}
+    QListWidget#StyleList::item:selected {{
+        background: {ACCENT_SOFT};
+        color: {INK};
+    }}
 
     /* 表格 */
     QTableWidget {{

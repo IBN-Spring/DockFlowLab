@@ -39,6 +39,7 @@ from ..services.boxes import (
     validate_manual_box,
 )
 from ..services.download import DownloadClient
+from ..services.pymol_render import find_renderer
 from ..tools.obabel import OpenBabelAdapter
 from ..tools.vina import VinaAdapter
 from ..workspace import Workspace
@@ -670,6 +671,17 @@ class SettingsDialog(QDialog):
         obabel_layout.addWidget(obabel_browse)
         form.addRow("OpenBabel 可执行文件", obabel_row)
 
+        self.pymol_edit = QLineEdit(self.settings.pymol_path)
+        self.pymol_edit.setPlaceholderText("留空自动查找；用于“PyMOL 渲染”页面")
+        pymol_row = QWidget()
+        pymol_layout = QHBoxLayout(pymol_row)
+        pymol_layout.setContentsMargins(0, 0, 0, 0)
+        pymol_layout.addWidget(self.pymol_edit, 1)
+        pymol_browse = QPushButton("浏览")
+        pymol_browse.clicked.connect(lambda: self._browse_into(self.pymol_edit))
+        pymol_layout.addWidget(pymol_browse)
+        form.addRow("PyMOL 可执行文件", pymol_row)
+
         self.proxy_edit = QLineEdit(self.settings.proxy)
         self.proxy_edit.setPlaceholderText("例如 127.0.0.1:7897；不需要代理时留空")
         form.addRow("网络代理", self.proxy_edit)
@@ -741,6 +753,17 @@ class SettingsDialog(QDialog):
             rows.append(f"<span style='color:{theme.SUCCESS}'>✓</span> {label}")
         else:
             rows.append(f"<span style='color:{theme.DANGER}'>✗</span> 未找到 OpenBabel")
+        renderer = find_renderer(self.pymol_edit.text().strip())
+        if renderer:
+            rows.append(
+                f"<span style='color:{theme.SUCCESS}'>✓</span> PyMOL 渲染可用："
+                f"<span style='color:{theme.SECONDARY}'>{html.escape(renderer)}</span>"
+            )
+        else:
+            rows.append(
+                f"<span style='color:{theme.WARNING}'>!</span> 未找到 PyMOL，"
+                "仅影响“PyMOL 渲染”页面"
+            )
         for module, label in (("rdkit", "RDKit"), ("meeko", "Meeko"), ("openmm", "OpenMM"), ("pdbfixer", "PDBFixer")):
             found = importlib.util.find_spec(module) is not None
             color = theme.SUCCESS if found else theme.WARNING
@@ -757,8 +780,13 @@ class SettingsDialog(QDialog):
         if obabel_path and not Path(obabel_path).is_file():
             QMessageBox.warning(self, "路径无效", "OpenBabel 可执行文件不存在，请重新选择。")
             return
+        pymol_path = self.pymol_edit.text().strip()
+        if pymol_path and not Path(pymol_path).is_file():
+            QMessageBox.warning(self, "路径无效", "PyMOL 可执行文件不存在，请重新选择。")
+            return
         self.settings.vina_path = vina_path
         self.settings.obabel_path = obabel_path
+        self.settings.pymol_path = pymol_path
         self.settings.proxy = self.proxy_edit.text().strip()
         self.settings.exhaustiveness = int(self.exhaustiveness.currentData())
         self.settings.cpu = int(self.cpu.value())

@@ -182,13 +182,35 @@ class ProcessResult:
         return "\n".join(chunks[-lines:])
 
 
-def _terminate(process: subprocess.Popen[bytes], grace: float = 2.0) -> None:
+def _terminate(
+    process: subprocess.Popen[bytes],
+    grace: float = 2.0,
+    *,
+    kill_tree: bool = False,
+) -> None:
+    """终止外部进程；``kill_tree`` 用于会再生成子进程的启动器（如 PyMOL）。"""
     if process.poll() is not None:
         return
+    if kill_tree and IS_WINDOWS:
+        try:
+            subprocess.run(
+                ["taskkill", "/PID", str(process.pid), "/T", "/F"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                creationflags=_CREATE_NO_WINDOW,
+                timeout=grace + 2,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+    elif kill_tree and hasattr(os, "killpg"):
+        try:
+            os.killpg(os.getpgid(process.pid), 15)  # SIGTERM
+        except OSError:
+            pass
     try:
         process.terminate()
     except OSError:
-        return
+        pass
     try:
         process.wait(timeout=grace)
         return
@@ -211,6 +233,7 @@ def run_process(
     on_line: Callable[[str], None] | None = None,
     cancel: threading.Event | None = None,
     stdin_data: bytes | None = None,
+    kill_tree: bool = False,
 ) -> ProcessResult:
     """运行外部程序，实时收集输出，支持超时与取消。"""
     cmd = [str(part) for part in command]
@@ -229,6 +252,7 @@ def run_process(
             stderr=subprocess.STDOUT,
             bufsize=0,
             creationflags=_CREATE_NO_WINDOW,
+            start_new_session=kill_tree and not IS_WINDOWS,
         )
     except FileNotFoundError as exc:
         return ProcessResult(returncode=127, output=str(exc), command=cmd)
@@ -273,10 +297,10 @@ def run_process(
         while True:
             if cancel is not None and cancel.is_set():
                 cancelled = True
-                _terminate(process)
+                _terminate(process, kill_tree=kill_tree)
             if timeout is not None and not timed_out and (time.monotonic() - started) > timeout:
                 timed_out = True
-                _terminate(process)
+                _terminate(process, kill_tree=kill_tree)
             try:
                 raw = lines.get(timeout=0.1)
             except queue.Empty:
@@ -301,7 +325,7 @@ def run_process(
         try:
             process.wait(timeout=10)
         except subprocess.TimeoutExpired:
-            _terminate(process)
+            _terminate(process, kill_tree=kill_tree)
             try:
                 process.wait(timeout=2)
             except subprocess.TimeoutExpired:

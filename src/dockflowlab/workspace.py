@@ -14,9 +14,11 @@
       analysis/                  汇总表与热图
       report/                    HTML 报告
       pymol/                     可视化脚本
+      pymol/renders/             用风格脚本渲染的 PNG
       logs/                      运行日志
 
-内部文件名统一使用 ASCII 安全字符，显示名称保留用户原始名称。
+内部文件名通常使用 ASCII 安全字符，显示名称保留用户原始名称；PyMOL 渲染图
+由 Python 复制生成，文件名会保留脚本的中文标签。
 """
 
 from __future__ import annotations
@@ -59,6 +61,7 @@ SUBDIRS = (
     "analysis",
     "report",
     "pymol",
+    "pymol/renders",
     "logs",
 )
 
@@ -542,6 +545,17 @@ class Workspace:
 
     def pymol_path(self, target_stem: str, ligand_stem: str) -> Path:
         return self.root / "pymol" / f"{target_stem}__{ligand_stem}.pml"
+
+    def render_path(self, target_stem: str, ligand_stem: str, style_token: str) -> Path:
+        """PyMOL 渲染图的输出路径（已清理的脚本标签由调用方给出）。"""
+        # 保留中文，只去掉文件系统不允许的字符。
+        token = re.sub(r'[<>:"/\\|?*\x00-\x1f]+', "_", style_token).strip(" ._-") or "style"
+        return (
+            self.root
+            / "pymol"
+            / "renders"
+            / f"{target_stem}__{ligand_stem}__{token[:80]}.png"
+        )
 
     @property
     def analysis_dir(self) -> Path:

@@ -1,4 +1,4 @@
-"""主窗口：侧栏导航 + 五步向导 + 后台任务编排。"""
+"""主窗口：侧栏导航 + 五步向导 + PyMOL 渲染页 + 后台任务编排。"""
 
 from __future__ import annotations
 
@@ -37,6 +37,7 @@ from ..services.docking import DockingOptions, collect_existing_results, run_bat
 from ..services.download import DownloadResult
 from ..services.preparation import prepare_all
 from ..services.pymol import open_in_pymol
+from ..services.pymol_render import find_renderer, render_complex
 from ..services.report import generate_report
 from ..tools.obabel import OpenBabelAdapter
 from ..tools.runtime import open_path, reveal_path
@@ -54,6 +55,7 @@ from .pages import (
     ResultsPage,
     WelcomePage,
 )
+from .render_page import RenderPage
 from .widgets import LogPanel
 from .workers import Task
 
@@ -91,12 +93,14 @@ class MainWindow(QMainWindow):
         self.prepare_page = PreparePage()
         self.dock_page = DockPage()
         self.results_page = ResultsPage()
+        self.render_page = RenderPage()
         for page in (
             self.welcome_page,
             self.molecules_page,
             self.prepare_page,
             self.dock_page,
             self.results_page,
+            self.render_page,
         ):
             self.stack.addWidget(page)
         root_layout.addWidget(self.stack, 1)
@@ -105,6 +109,10 @@ class MainWindow(QMainWindow):
         self._connect_signals()
         self.welcome_page.set_recent(self.settings.recent_workspaces)
         self.prepare_page.ph_spin.setValue(self.settings.add_hydrogens_ph)
+        self.render_page.set_render_size(self.settings.pymol_render_size)
+        if self.settings.pymol_script_dir:
+            self.render_page.set_script_dir(self.settings.pymol_script_dir)
+        self.render_page.set_renderer(find_renderer(self.settings.pymol_path))
         self._apply_settings_to_controls()
         self._update_environment()
         self._update_sidebar()
@@ -149,7 +157,14 @@ class MainWindow(QMainWindow):
         layout.addWidget(caption)
 
         self.step_buttons: list[QPushButton] = []
-        labels = ["1   工作目录", "2   添加分子", "3   检查与准备", "4   设置对接", "5   运行与结果"]
+        labels = [
+            "1   工作目录",
+            "2   添加分子",
+            "3   检查与准备",
+            "4   设置对接",
+            "5   运行与结果",
+            "6   PyMOL 渲染",
+        ]
         for index, text in enumerate(labels):
             button = QPushButton(text)
             button.setObjectName("StepButton")
@@ -200,6 +215,7 @@ class MainWindow(QMainWindow):
             workspace is not None,
             workspace is not None and has_entries,
             workspace is not None and ready_pairs,
+            workspace is not None,
             workspace is not None,
         ]
         current = self.stack.currentIndex()
@@ -258,6 +274,15 @@ class MainWindow(QMainWindow):
         self.results_page.open_pymol_requested.connect(self._open_pymol)
         self.results_page.locate_result_requested.connect(self._locate_result)
         self.results_page.back_requested.connect(lambda: self._navigate(3))
+
+        self.render_page.render_requested.connect(self._start_render)
+        self.render_page.cancel_requested.connect(self._request_cancel)
+        self.render_page.refresh_requested.connect(self._refresh_render_page)
+        self.render_page.open_image_requested.connect(open_path)
+        self.render_page.locate_image_requested.connect(reveal_path)
+        self.render_page.script_dir_changed.connect(self._remember_script_dir)
+        self.render_page.render_size_changed.connect(self._remember_render_size)
+        self.render_page.back_requested.connect(lambda: self._navigate(4))
 
     # ------------------------------------------------------------------
     # 工作目录
@@ -324,6 +349,7 @@ class MainWindow(QMainWindow):
         self.dock_page.set_workspace(workspace)
         results = collect_existing_results(workspace)
         self.results_page.show_results(workspace, results)
+        self.render_page.set_workspace(workspace, results)
         self._update_sidebar()
 
     # ------------------------------------------------------------------
@@ -878,6 +904,121 @@ class MainWindow(QMainWindow):
             reveal_path(self.workspace.docking_dir(target_stem))
 
     # ------------------------------------------------------------------
+    # PyMOL 渲染
+    # ------------------------------------------------------------------
+    def _remember_script_dir(self, path: str) -> None:
+        if path and path != self.settings.pymol_script_dir:
+            self.settings.pymol_script_dir = path
+            self.settings.save()
+
+    def _remember_render_size(self, size: int) -> None:
+        if int(size) != self.settings.pymol_render_size:
+            self.settings.pymol_render_size = int(size)
+            self.settings.save()
+
+    def _refresh_render_page(self) -> None:
+        if self.workspace is None or self._busy:
+            return
+        self.render_page.set_workspace(
+            self.workspace, collect_existing_results(self.workspace)
+        )
+
+    def _start_render(self, payload: dict) -> None:
+        if self.workspace is None or self._busy:
+            return
+        renderer = find_renderer(self.settings.pymol_path)
+        if not renderer:
+            QMessageBox.warning(
+                self,
+                "未检测到 PyMOL",
+                "渲染需要安装 PyMOL。请在“设置与环境检查”中指定 pymol 可执行文件后重试。",
+            )
+            return
+        scripts = payload.get("scripts") or []
+        complex_path = Path(str(payload.get("complex_path", "")))
+        if not scripts or not complex_path.is_file():
+            QMessageBox.warning(
+                self,
+                "无法开始渲染",
+                "没有找到所选复合物或风格脚本，请刷新后重新选择。",
+            )
+            return
+        width = max(200, min(4000, int(payload.get("width") or 1200)))
+        height = max(200, min(4000, int(payload.get("height") or width)))
+        total = len(scripts)
+        self.render_page.start_running(total)
+        self._set_busy(True)
+        self.statusBar().showMessage(f"正在渲染 {total} 张图片…")
+
+        def job(progress, cancel, line):
+            results = []
+            for index, item in enumerate(scripts, start=1):
+                if cancel.is_set():
+                    break
+                label = str(item.get("label") or Path(str(item.get("path"))).name)
+                progress(index - 1, total, f"正在渲染：{label}")
+                line(f"=== {label} ===")
+                result = render_complex(
+                    complex_path,
+                    Path(str(item.get("path", ""))),
+                    Path(str(item.get("output", ""))),
+                    width=width,
+                    height=height,
+                    timeout=600.0,
+                    renderer=renderer,
+                    cancel=cancel,
+                    on_line=line,
+                )
+                results.append(
+                    {"label": label, "result": result, "output": str(item.get("output", ""))}
+                )
+            progress(total, total, "渲染结束")
+            return results
+
+        self._run_task(
+            job,
+            self.render_page.log_panel,
+            self._render_done,
+            self._render_failed,
+        )
+
+    def _render_done(self, results) -> None:
+        self._set_busy(False)
+        results = results or []
+        self.render_page.finish(results)
+        failures = [
+            item
+            for item in results
+            if item.get("result") is not None
+            and not item["result"].ok
+            and not item["result"].cancelled
+        ]
+        cancelled = any(
+            item.get("result") is not None and item["result"].cancelled
+            for item in results
+        )
+        if failures:
+            messages = [
+                f"· {item.get('label', '')}：{item['result'].error}"
+                for item in failures[:6]
+            ]
+            QMessageBox.warning(
+                self,
+                "部分图片没有生成",
+                "\n".join(messages)
+                + "\n\n可以降低分辨率、减少同时选择的脚本，或在“查看运行日志”中检查详情。",
+            )
+        elif cancelled or not results:
+            self.statusBar().showMessage("渲染已取消。", 6000)
+        elif results:
+            self.statusBar().showMessage(f"渲染完成：{len(results)} 张图片。", 8000)
+
+    def _render_failed(self, message: str) -> None:
+        self._set_busy(False)
+        self.render_page.log_panel.finish(f"渲染失败：{message}", False)
+        QMessageBox.critical(self, "渲染失败", message)
+
+    # ------------------------------------------------------------------
     # 设置与通用
     # ------------------------------------------------------------------
     def _apply_settings_to_controls(self) -> None:
@@ -897,6 +1038,7 @@ class MainWindow(QMainWindow):
         self._obabel = None
         self._apply_settings_to_controls()
         self._update_environment()
+        self.render_page.set_renderer(find_renderer(self.settings.pymol_path))
         self.statusBar().showMessage("设置已保存。", 5000)
 
     def _navigate(self, index: int) -> None:
@@ -915,6 +1057,9 @@ class MainWindow(QMainWindow):
             self.dock_page.refresh(self.workspace)
         elif index == 4 and self.workspace is not None and not self._busy:
             self.results_page.show_results(self.workspace, collect_existing_results(self.workspace))
+        elif index == 5 and self.workspace is not None and not self._busy:
+            self.render_page.set_renderer(find_renderer(self.settings.pymol_path))
+            self.render_page.refresh_complexes()
         self._update_sidebar()
 
     def _set_busy(self, busy: bool) -> None:
@@ -958,7 +1103,7 @@ class MainWindow(QMainWindow):
         if self._task is None:
             return
         self._task.request_cancel()
-        for page in (self.prepare_page, self.results_page):
+        for page in (self.prepare_page, self.results_page, self.render_page):
             if page.log_panel.isVisible():
                 page.log_panel.request_cancel()
         self.statusBar().showMessage("正在取消…", 5000)

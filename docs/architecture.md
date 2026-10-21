@@ -10,9 +10,9 @@
 ## 分层
 
 ```text
-ui/          PySide6 五步向导、对话框、后台线程
+ui/          PySide6 五步向导、PyMOL 渲染页、对话框、后台线程
   │ 调用
-services/    准备、盒子、批量对接、分析、报告、下载、PyMOL
+services/    准备、盒子、批量对接、分析、报告、下载、PyMOL 渲染
   │ 调用
 core/        结构解析、PDBQT 校验、数据模型、几何计算（无 Qt 依赖）
   │ 调用
@@ -35,6 +35,10 @@ config.py    用户偏好（与项目无关）
   分配二级结构并放样卡通几何；投影、射线拾取与缩放都是无 Qt 的纯函数，便于
   测试。两条路径都不可用时退化为数值输入。导入 pyqtgraph 之前固定
   `PYQTGRAPH_QT_LIB=PySide6`，避免与环境中并存的 PyQt5/PyQt6 混用。
+- `ui/render_page.py`：可选的“PyMOL 渲染”页面。复合物、脚本与分辨率由界面
+  收集，实际渲染通过 `Task` 调用 `services/pymol_render.py`；预览图按控件大小
+  等比缩放，不加载完整尺寸的像素到界面布局。页面在未检测到 PyMOL 或没有复合物
+  时禁用渲染按钮并说明原因。用户脚本目录与上次分辨率保存在 `AppSettings`。
 
 ### core
 
@@ -72,6 +76,12 @@ config.py    用户偏好（与项目无关）
   PyMOL 在中文 Windows 上按系统区域编码读取脚本，且部分构建遇到非 ASCII
   字符会崩溃，因此脚本正文保持纯 ASCII；中文路径优先转成相对路径或 8.3 短路径，
   仍不可用时复制到 ASCII 临时目录。
+- `pymol_render.py`：把用户风格脚本套用到复合物并输出 PNG。PyMOL 始终以
+  `pymol -cq` 独立进程运行，不导入主进程，也不长期驻留；结构、转码后的脚本
+  与输出都放在 ASCII 临时目录，完成后只复制 PNG 回项目。`styles_in()` 递归
+  枚举 `.pml` / `.txt`，`complexes_in()` 扫描 `complexes/`，`style_token()`
+  生成保留中文的输出标签。渲染带超时，取消/超时时调用 `run_process(kill_tree=True)`
+  结束 PyMOL 启动器及其派生的 `python.exe`，因此原生崩溃或卡死不会影响界面。
 
 服务函数接收 `Workspace`、`AppSettings` 等显式参数，不读全局界面状态。
 
@@ -104,6 +114,7 @@ complexes/                    复合物
 analysis/                     表格、图表、summary.json
 report/report.html
 pymol/                        可视化脚本
+pymol/renders/                风格脚本渲染的 PNG
 logs/session.log
 ```
 

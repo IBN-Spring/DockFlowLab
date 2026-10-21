@@ -58,6 +58,7 @@ class AppSettings:
     # 外部程序（留空表示自动查找）
     vina_path: str = ""
     obabel_path: str = ""
+    pymol_path: str = ""  # 无界面渲染用的 PyMOL 可执行文件
 
     # 网络
     proxy: str = ""
@@ -74,6 +75,10 @@ class AppSettings:
     box_padding: float = 5.0
     box_min_size: float = 18.0
     box_max_size: float = 60.0
+
+    # PyMOL 渲染
+    pymol_script_dir: str = ""
+    pymol_render_size: int = 1200
 
     # 界面
     theme: str = "light"
