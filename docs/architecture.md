@@ -34,7 +34,9 @@ config.py    用户偏好（与项目无关）
 
 - `preparation.py`：编排受体与配体的准备流程，汇总每个条目的结果。
 - `receptor.py` / `ligand.py`：具体的结构修复、加氢、Meeko 与 OpenBabel 回退。
-- `boxes.py`：盒子推荐与校验，优先级为共晶配体 → 位点 → 自动推断 → 手动。
+- `pockets.py`：基于 LIGSITE 思路的几何口袋检测（NumPy/SciPy，无需外部程序）。
+- `boxes.py`：盒子推荐与校验。手动 / 参考分子优先；自动模式先用几何口袋，
+  再与共晶配体、`SITE` 记录做一致性校验，实验位点作为兜底。
 - `docking.py`：批量组合、跳过已有结果、写元数据、生成复合物与 PyMOL 脚本。
 - `analysis.py`：结果表、矩阵、汇总 JSON、图表（matplotlib Agg）。
 - `report.py`：自包含 HTML，图片以 base64 内嵌，不依赖网络。
@@ -126,6 +128,7 @@ OpenBabel DLL/格式插件/数据、Vina 与报告模板。运行时钩子
 - `tests/test_workspace.py`：项目创建、中文名称、路径安全、损坏 JSON。
 - `tests/test_pdbio.py`：真实 1BCI 解析、位点、复合物、PDBQT 校验。
 - `tests/test_boxes.py`：盒子优先级、边界、错误输入。
+- `tests/test_pockets.py`：几何口袋检测、实验位点一致性、盲对接兜底。
 - `tests/test_analysis_report.py`：结果汇总与自包含报告。
 - `tests/test_download.py`：用 mock 网络验证格式回退。
 - `tests/test_cli.py`：命令行参数与失败路径。

@@ -25,6 +25,7 @@ from .docking import collect_existing_results
 log = get_logger("report")
 
 BOX_LABELS = {
+    "pocket": "几何口袋",
     "cocrystal": "共晶配体",
     "site": "PDB 结合位点",
     "blind": "全蛋白盲对接",

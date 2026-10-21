@@ -65,6 +65,7 @@ for distribution in (
     "matplotlib",
     "pandas",
     "numpy",
+    "scipy",
     "requests",
     "psutil",
 ):
@@ -299,6 +300,8 @@ else:
 # 分析
 # ----------------------------------------------------------------------
 hiddenimports += [
+    "scipy.ndimage",
+    "scipy.spatial",
     "openbabel.openbabel",
     "openbabel.pybel",
     "rdkit.Chem.AllChem",

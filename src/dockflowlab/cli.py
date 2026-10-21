@@ -144,6 +144,21 @@ def _version_of(distribution: str) -> str:
     return component_version(distribution)
 
 
+def _check_pocket_backend() -> dict[str, object]:
+    """验证 NumPy/SciPy 编译扩展能真正加载（打包后常因缺少 DLL 失败）。"""
+    try:
+        import numpy as np
+        from scipy import ndimage
+        from scipy.spatial import cKDTree
+
+        coords = np.zeros((2, 3), dtype=float)
+        cKDTree(coords).query(coords)
+        ndimage.distance_transform_edt(np.ones((2, 2, 2), dtype=bool))
+        return {"ok": True, "error": ""}
+    except Exception as exc:  # pragma: no cover - 依赖缺失时给出诊断
+        return {"ok": False, "error": str(exc)}
+
+
 def _select(entries: Iterable[ProjectFile], names: Sequence[str] | None, label: str) -> list[ProjectFile]:
     entries = list(entries)
     if not names:
@@ -189,7 +204,10 @@ def command_doctor(args: argparse.Namespace) -> int:
         "pdbfixer": _version_of("pdbfixer"),
         "PySide6": _version_of("PySide6"),
         "matplotlib": _version_of("matplotlib"),
+        "numpy": _version_of("numpy"),
+        "scipy": _version_of("scipy"),
     }
+    pocket_backend = _check_pocket_backend()
     temp_root = ascii_temp_root()
     try:
         temp_root.mkdir(parents=True, exist_ok=True)
@@ -204,10 +222,15 @@ def command_doctor(args: argparse.Namespace) -> int:
         "vina": vina.doctor(),
         "openbabel": obabel.doctor(),
         "packages": packages,
+        "pocket_backend": pocket_backend,
         "temp_dir": {"path": str(temp_root), "writable": temp_ok},
         "settings": str(AppSettings.path()),
     }
-    optional_ok = all(packages.values()) and bool(obabel.available)
+    optional_ok = (
+        all(packages.values())
+        and bool(obabel.available)
+        and bool(pocket_backend["ok"])
+    )
     core_ok = bool(vina.available) and bool(obabel.available) and temp_ok
     report["ok"] = core_ok and (optional_ok if args.strict else True)
 
@@ -225,6 +248,10 @@ def command_doctor(args: argparse.Namespace) -> int:
         print(f"  Python API：{'可用' if obabel.has_python_api else '不可用'}")
         print(f"  路径：{obabel.executable or '—'}")
         print("化学计算组件：" + "  ".join(f"{k} {v or '缺失'}" for k, v in packages.items()))
+        print(
+            "几何口袋检测："
+            + ("可用" if pocket_backend["ok"] else f"不可用（{pocket_backend['error']}）")
+        )
         print()
         if core_ok:
             print("核心环境检查通过，可以开始对接。")

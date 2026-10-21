@@ -112,6 +112,7 @@ class Box:
     @property
     def source_label(self) -> str:
         return {
+            "pocket": "几何口袋",
             "cocrystal": "共晶配体",
             "site": "PDB 结合位点",
             "blind": "全蛋白盲对接",

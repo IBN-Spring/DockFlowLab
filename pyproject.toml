@@ -28,6 +28,7 @@ classifiers = [
 # 运行 GUI 所需的轻量依赖。化学计算重依赖见 [full]。
 dependencies = [
     "numpy>=1.24",
+    "scipy>=1.10",
     "pandas>=2.0",
     "matplotlib>=3.7",
     "requests>=2.28",

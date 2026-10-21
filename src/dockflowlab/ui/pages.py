@@ -157,7 +157,7 @@ class WelcomePage(Page):
             ("1", "选择文件夹", "所有输入、结果和报告都保存在这里，不会散落到别处。"),
             ("2", "添加结构", "拖入蛋白结构，再放入候选小分子；也可以从公共数据库下载。"),
             ("3", "一键准备", "自动补全缺失原子、加氢、转换对接格式，并检查文件是否可用。"),
-            ("4", "设置盒子并运行", "优先自动定位共晶配体或已知位点，确认后开始对接并生成报告。"),
+            ("4", "设置盒子并运行", "自动检测几何口袋，并用共晶配体或已知位点校验，确认后开始对接并生成报告。"),
         ]
         for index, (number, heading, text) in enumerate(items):
             tile = QFrame()
@@ -532,7 +532,8 @@ class DockPage(Page):
             _header_row(
                 "第 4 步 · 对接设置",
                 "告诉程序“在哪里找结合位置”",
-                "盒子是搜索区域。优先使用结构里的共晶配体或已知位点；没有时再自动推断或使用盲对接。",
+                "盒子是搜索区域。软件会先用几何算法寻找蛋白表面的口袋，再用共晶配体或已知位点校验；"
+                "都不可靠时才使用全蛋白盲对接。",
                 [change],
             )
         )
@@ -840,7 +841,7 @@ class ResultsPage(Page):
             score_item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
             self.table.setItem(row, 2, score_item)
             self.table.setItem(row, 3, QTableWidgetItem(
-                {"cocrystal": "共晶配体", "site": "PDB 位点", "blind": "盲对接", "manual": "手动",
+                {"pocket": "几何口袋", "cocrystal": "共晶配体", "site": "PDB 位点", "blind": "盲对接", "manual": "手动",
                  "reference": "参考分子", "ligand": "目标分子"}.get(result.box_source, result.box_source or "自动")
             ))
             chip = StatusChip("success" if result.ok else "error", "已有结果" if result.skipped else ("成功" if result.ok else "失败"))

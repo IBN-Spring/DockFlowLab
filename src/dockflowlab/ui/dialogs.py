@@ -258,7 +258,7 @@ class BoxDialog(QDialog):
         layout.addWidget(title)
         layout.addWidget(intro)
 
-        self.auto_radio = QRadioButton("自动推荐（优先共晶配体 / 已知位点，否则盲对接）")
+        self.auto_radio = QRadioButton("自动推荐（几何口袋检测，共晶配体 / 已知位点校验兜底）")
         self.manual_radio = QRadioButton("手动输入中心与边长")
         group = QVBoxLayout()
         group.setSpacing(6)
@@ -381,10 +381,13 @@ class BoxDialog(QDialog):
         self.auto_warnings = warnings
         center = "，".join(f"{value:.2f}" for value in box.center)
         size = " × ".join(f"{value:.1f}" for value in box.size)
-        self.auto_summary.setText(
+        summary = (
             f"来源：{box.source_label}　中心：({center})　尺寸：{size} Å\n"
             f"体积：{box.volume:,.0f} Å³"
         )
+        if box.note:
+            summary += f"\n判断依据：{box.note}"
+        self.auto_summary.setText(summary)
         self.auto_warning.setText("；".join(warnings) if warnings else "")
         if self.box is None:
             self._fill_manual(box)

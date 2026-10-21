@@ -56,7 +56,7 @@ def test_prepare_dock_analyze_and_report(prepared_workspace, tmp_path):
         chains=target.meta.get("chains", []),
         obabel=obabel,
     )
-    assert box.source in {"cocrystal", "site", "blind"}
+    assert box.source in {"pocket", "cocrystal", "site", "blind"}
     assert all(value >= 18 for value in box.size)
 
     result = dock_pair(

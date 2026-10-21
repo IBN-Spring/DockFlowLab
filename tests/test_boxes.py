@@ -48,7 +48,7 @@ def test_site_box_from_real_structure(pdb_path, settings):
         target_prepared_pdb=None,
         settings=settings,
     )
-    assert box.source == "site"
+    assert box.source in {"site", "pocket"}
     assert "SITE" in box.note
     assert all(18 <= value <= 60 for value in box.size)
     assert isinstance(warnings, list)

@@ -87,8 +87,9 @@ set DOCKFLOWLAB_SELF_CHECK=1
 dist\DockFlowLabConsole\DockFlowLabConsole.exe
 ```
 
-应返回 `"ok": true`，并显示 Vina、OpenBabel、RDKit、Meeko、OpenMM、PDBFixer 的版本。
-这项检查会真实导入化学组件，能暴露缺失 DLL 的问题。
+应返回 `"ok": true`，并显示 Vina、OpenBabel、RDKit、Meeko、OpenMM、PDBFixer、
+NumPy、SciPy 的版本。`pocket_backend` 会实际调用 SciPy 的 `cKDTree` 与
+`distance_transform_edt`，验证几何口袋检测所需的编译扩展在打包环境中可用。
 
 还可以临时把控制台版当命令行使用：
 

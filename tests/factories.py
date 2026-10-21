@@ -67,6 +67,53 @@ def make_protein_pdb(
     return path
 
 
+def make_cage_pdb(
+    path: Path,
+    *,
+    ligand: bool = False,
+) -> Path:
+    """生成一个带内部空腔的立方“笼子”蛋白，用于口袋检测测试。
+
+    六个面由碳原子组成，顶部中央留一个开口，使内腔与外部溶剂连通。
+    这是一个人工结构，仅用于验证几何算法的行为，不代表真实蛋白。
+    """
+    levels = (-7.0, -3.5, 0.0, 3.5, 7.0)
+    coordinates: set[tuple[float, float, float]] = set()
+    for fixed in (-7.0, 7.0):
+        for a in levels:
+            for b in levels:
+                coordinates.add((fixed, a, b))
+                coordinates.add((a, fixed, b))
+                coordinates.add((a, b, fixed))
+    coordinates.discard((0.0, 0.0, 7.0))  # 顶部开口
+    lines = ["HEADER    TEST POCKET CAGE"]
+    serial = 1
+    for index, (x, y, z) in enumerate(sorted(coordinates), start=1):
+        lines.append(
+            atom_line("ATOM", serial, "C", "ALA", "A", index, x, y, z, "C")
+        )
+        serial += 1
+    if ligand:
+        ring = [
+            ("C1", "C", 1.40, 0.00, 0.00),
+            ("C2", "C", 0.70, 1.21, 0.00),
+            ("C3", "C", -0.70, 1.21, 0.00),
+            ("C4", "C", -1.40, 0.00, 0.00),
+            ("C5", "C", -0.70, -1.21, 0.00),
+            ("C6", "C", 0.70, -1.21, 0.00),
+            ("O1", "O", 2.30, 0.00, 0.00),
+            ("O2", "O", -2.30, 0.00, 0.00),
+        ]
+        for atom_name, element, x, y, z in ring:
+            lines.append(
+                atom_line("HETATM", serial, atom_name, "LIG", "A", 900, x, y, z, element)
+            )
+            serial += 1
+    lines.append("END")
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return path
+
+
 def make_ligand_pdbqt(path: Path) -> Path:
     text = """MODEL 1
 REMARK VINA RESULT:    -7.500      0.000      0.000

@@ -125,6 +125,23 @@ def _to_float(value: str, default: float = 0.0) -> float:
         return default
 
 
+def _first_model_text(text: str) -> str:
+    """只保留 PDB 的第一个 MODEL。没有 MODEL 记录时原样返回。"""
+    lines: list[str] = []
+    seen_model = False
+    for line in text.splitlines():
+        record = line[0:6].strip().upper()
+        if record == "MODEL":
+            if seen_model:
+                break
+            seen_model = True
+            continue
+        if record == "ENDMDL" and seen_model:
+            break
+        lines.append(line)
+    return "\n".join(lines)
+
+
 def infer_element(atom_name: str, resname: str, record: str) -> str:
     """在没有元素列时推断元素。对蛋白原子优先按首字母判断。"""
     stripped = atom_name.strip()
@@ -147,14 +164,20 @@ def infer_element(atom_name: str, resname: str, record: str) -> str:
     return ""
 
 
-def parse_atoms(path: str | Path) -> list[Atom]:
-    """解析 PDB 的 ATOM/HETATM 记录，保留第一个 altloc。"""
+def parse_atoms(path: str | Path, *, first_model: bool = False) -> list[Atom]:
+    """解析 PDB 的 ATOM/HETATM 记录，保留第一个 altloc。
+
+    ``first_model=True`` 时只读取第一个 MODEL，避免 NMR 多模型结构把同一
+    个原子重复计入几何计算。
+    """
     atoms: list[Atom] = []
     path = Path(path)
     try:
         text = path.read_text(encoding="utf-8", errors="replace")
     except OSError:
         return atoms
+    if first_model:
+        text = _first_model_text(text)
     for line in text.splitlines():
         record = line[0:6].strip().upper()
         if record not in {"ATOM", "HETATM"}:
