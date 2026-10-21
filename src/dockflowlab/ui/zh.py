@@ -9,22 +9,24 @@ from __future__ import annotations
 from PySide6.QtCore import QEvent, QObject
 from PySide6.QtWidgets import QApplication, QDialogButtonBox, QMessageBox
 
+# 按枚举数值索引：QMessageBox.StandardButton 与 QDialogButtonBox.StandardButton
+# 是两套独立的 PySide6 枚举，彼此不相等，也不能直接互相传参。
 _TEXTS = {
-    QDialogButtonBox.StandardButton.Ok: "确定",
-    QDialogButtonBox.StandardButton.Open: "打开",
-    QDialogButtonBox.StandardButton.Save: "保存",
-    QDialogButtonBox.StandardButton.Cancel: "取消",
-    QDialogButtonBox.StandardButton.Close: "关闭",
-    QDialogButtonBox.StandardButton.Yes: "是",
-    QDialogButtonBox.StandardButton.No: "否",
-    QDialogButtonBox.StandardButton.Abort: "中止",
-    QDialogButtonBox.StandardButton.Retry: "重试",
-    QDialogButtonBox.StandardButton.Ignore: "忽略",
-    QDialogButtonBox.StandardButton.Help: "帮助",
-    QDialogButtonBox.StandardButton.Apply: "应用",
-    QDialogButtonBox.StandardButton.Reset: "重置",
-    QDialogButtonBox.StandardButton.RestoreDefaults: "恢复默认",
-    QDialogButtonBox.StandardButton.Discard: "放弃",
+    QDialogButtonBox.StandardButton.Ok.value: "确定",
+    QDialogButtonBox.StandardButton.Open.value: "打开",
+    QDialogButtonBox.StandardButton.Save.value: "保存",
+    QDialogButtonBox.StandardButton.Cancel.value: "取消",
+    QDialogButtonBox.StandardButton.Close.value: "关闭",
+    QDialogButtonBox.StandardButton.Yes.value: "是",
+    QDialogButtonBox.StandardButton.No.value: "否",
+    QDialogButtonBox.StandardButton.Abort.value: "中止",
+    QDialogButtonBox.StandardButton.Retry.value: "重试",
+    QDialogButtonBox.StandardButton.Ignore.value: "忽略",
+    QDialogButtonBox.StandardButton.Help.value: "帮助",
+    QDialogButtonBox.StandardButton.Apply.value: "应用",
+    QDialogButtonBox.StandardButton.Reset.value: "重置",
+    QDialogButtonBox.StandardButton.RestoreDefaults.value: "恢复默认",
+    QDialogButtonBox.StandardButton.Discard.value: "放弃",
 }
 
 
@@ -33,16 +35,12 @@ class ChineseButtonFilter(QObject):
 
     def eventFilter(self, obj: QObject, event: QEvent) -> bool:
         if event.type() == QEvent.Type.Show:
-            if isinstance(obj, QMessageBox):
-                for standard, text in _TEXTS.items():
-                    button = obj.button(standard)
-                    if button is not None:
-                        button.setText(text)
-            elif isinstance(obj, QDialogButtonBox):
+            if isinstance(obj, (QMessageBox, QDialogButtonBox)):
                 for button in obj.buttons():
                     standard = obj.standardButton(button)
-                    if standard in _TEXTS:
-                        button.setText(_TEXTS[standard])
+                    text = _TEXTS.get(getattr(standard, "value", None))
+                    if text:
+                        button.setText(text)
         return super().eventFilter(obj, event)
 
 
