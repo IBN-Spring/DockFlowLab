@@ -24,6 +24,14 @@ echo "[1/3] PyInstaller 构建..."
 "$PYTHON" -m PyInstaller --clean --noconfirm packaging/dockflowlab.spec
 
 echo "[2/3] 压缩应用包..."
+LICENSE_SRC="src/dockflowlab/resources/licenses/PyMOL-LICENSE.txt"
+if [[ -f "$LICENSE_SRC" ]]; then
+  if [[ -d dist/DockFlowLab.app ]]; then
+    cp "$LICENSE_SRC" "dist/DockFlowLab.app/Contents/Resources/PyMOL-LICENSE.txt"
+  elif [[ -d dist/DockFlowLab ]]; then
+    cp "$LICENSE_SRC" "dist/DockFlowLab/PyMOL-LICENSE.txt"
+  fi
+fi
 if [[ -d dist/DockFlowLab.app ]]; then
   ditto -c -k --sequesterRsrc --keepParent \
     "dist/DockFlowLab.app" "release/DockFlowLab-macOS-${ARCH}.zip"

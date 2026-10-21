@@ -23,6 +23,7 @@ if not exist release mkdir release
 if exist README.md copy /Y README.md dist\DockFlowLab\README.md >nul
 if exist docs\user-guide.md copy /Y docs\user-guide.md dist\DockFlowLab\USER-GUIDE.md >nul
 if exist LICENSE copy /Y LICENSE dist\DockFlowLab\LICENSE >nul
+if exist src\dockflowlab\resources\licenses\PyMOL-LICENSE.txt copy /Y src\dockflowlab\resources\licenses\PyMOL-LICENSE.txt dist\DockFlowLab\PYMOL-LICENSE.txt >nul
 powershell -NoProfile -ExecutionPolicy Bypass -Command ^
     "Compress-Archive -Path 'dist\DockFlowLab' -DestinationPath 'release\DockFlowLab-Windows-x64.zip' -CompressionLevel Optimal -Force"
 if errorlevel 1 exit /b 1

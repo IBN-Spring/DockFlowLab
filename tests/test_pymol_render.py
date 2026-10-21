@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -129,6 +130,22 @@ def test_find_renderer_honours_configured_executable():
     renderer = find_renderer(sys.executable)
     assert renderer
     assert Path(renderer).resolve() == Path(sys.executable).resolve()
+
+
+def test_find_renderer_prefers_bundled_runner(monkeypatch, tmp_path):
+    """安装包应在未另装 PyMOL 的机器上直接使用内置渲染器。"""
+    app_dir = tmp_path / "DockFlowLab"
+    internal = app_dir / "_internal"
+    internal.mkdir(parents=True)
+    runner = app_dir / ("PyMOLRunner.exe" if os.name == "nt" else "PyMOLRunner")
+    runner.write_text("", encoding="ascii")
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sys, "_MEIPASS", str(internal), raising=False)
+    monkeypatch.setattr(sys, "executable", str(app_dir / "DockFlowLab.exe"))
+    monkeypatch.delenv("PYMOL_RENDER_EXE", raising=False)
+
+    renderer = find_renderer()
+    assert Path(renderer).resolve() == runner.resolve()
 
 
 def test_render_complex_reports_missing_inputs(tmp_path):

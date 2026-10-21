@@ -35,7 +35,7 @@ def test_doctor_json_has_expected_sections(capsys):
     code = main(["doctor", "--json"])
     output = json.loads(capsys.readouterr().out)
     assert code in (0, 1)
-    for key in ("app", "python", "vina", "openbabel", "packages", "temp_dir"):
+    for key in ("app", "python", "vina", "openbabel", "pymol", "packages", "temp_dir"):
         assert key in output
     assert output["app"]["name"] == "DockFlowLab"
 

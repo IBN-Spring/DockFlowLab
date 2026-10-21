@@ -1382,7 +1382,9 @@ class MainWindow(QMainWindow):
             "程序会根据结构类型自动选择模式；蛋白–蛋白、蛋白–多肽等大分子对接"
             "不在本地实现，请使用 ClusPro、HADDOCK 或 RosettaDock 等专门工具。<br>"
             "对接计算可使用 AutoDock Vina、QuickVina 2 或 Smina；"
-            "结构准备使用 RDKit、Meeko、PDBFixer 与 OpenBabel。<br><br>"
+            "结构准备使用 RDKit、Meeko、PDBFixer 与 OpenBabel；"
+            "分子渲染包含 PyMOL(TM)。<br><br>"
+            "PyMOL is a trademark of Schrodinger, LLC.<br><br>"
             "结果仅用于科研参考，需结合实验验证。",
         )
 

@@ -88,18 +88,38 @@ def _local_scripts_pymol() -> Path | None:
     return None
 
 
+def _bundled_pymol() -> Path | None:
+    """安装包内置的 ``PyMOLRunner``（与主程序同级）。"""
+    if not getattr(sys, "frozen", False):
+        return None
+    roots = [Path(sys.executable).resolve().parent]
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass:
+        roots.append(Path(meipass))
+    names = ("PyMOLRunner.exe",) if IS_WINDOWS else ("PyMOLRunner",)
+    for root in roots:
+        for name in names:
+            candidate = root / name
+            if candidate.is_file():
+                return candidate
+    return None
+
+
 def find_renderer(configured: str = "") -> str:
     """查找可用于 ``-cq`` 渲染的 PyMOL。
 
-    优先使用用户指定的路径，其次是 ``PYMOL_RENDER_EXE``，然后使用当前环境
-    自带的 PyMOL，最后才搜索系统安装。经验上同一 conda 环境里的
-    ``pymol.exe`` 最可靠。
+    优先使用用户指定的路径，其次是 ``PYMOL_RENDER_EXE``；安装包内置的
+    ``PyMOLRunner`` 排在当前环境与系统安装之前，用户无需另装 PyMOL。
+    经验上同一 conda 环境里的 ``pymol.exe`` 最可靠。
     """
     local = _local_scripts_pymol()
     candidates: list[str | None] = [
         configured.strip() or None,
         os.environ.get("PYMOL_RENDER_EXE"),
     ]
+    bundled = _bundled_pymol()
+    if bundled is not None:
+        candidates.append(str(bundled))
     if local is not None:
         candidates.append(str(local))
     if IS_MACOS:

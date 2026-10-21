@@ -71,11 +71,49 @@ for distribution in (
     "scipy",
     "requests",
     "psutil",
+    "pymol",
 ):
     try:
         datas += copy_metadata(distribution)
     except Exception:
         pass
+
+
+# ----------------------------------------------------------------------
+# PyMOL：内置无界面渲染器
+# ----------------------------------------------------------------------
+# 主程序不导入 PyMOL，而是生成一个独立的 PyMOLRunner.exe。这样 PyMOL 的
+# OpenGL / Tcl 初始化与原生崩溃不会影响界面进程，也不需要完整的 PyMOL GUI。
+pymol_datas = []
+pymol_binaries = []
+pymol_hidden = []
+for package in ("pymol", "pymol2", "chempy"):
+    try:
+        package_datas, package_binaries, package_hidden = collect_all(package)
+    except Exception as exc:  # pragma: no cover - 构建期诊断
+        print(f"[spec] 警告：收集 {package} 失败：{exc}")
+        continue
+    pymol_datas += package_datas
+    pymol_binaries += package_binaries
+    pymol_hidden += package_hidden
+
+# 渲染入口只使用 pymol2 的无界面会话，不创建 Qt/Tk 窗口。把 GUI 模块排除，
+# 避免 PyInstaller 为 PyMOLRunner 再收集一套 Qt。
+pymol_hidden = [
+    name
+    for name in pymol_hidden
+    if not (
+        name == "pymol.Qt"
+        or name.startswith("pymol.Qt.")
+        or name.startswith("pmg_qt")
+        or name == "pymol.plugins.managergui_qt"
+    )
+]
+HAS_PYMOL = bool(pymol_hidden)
+if HAS_PYMOL:
+    print(f"[spec] PyMOL：收集 {len(pymol_datas)} 个数据文件，内置渲染器将启用")
+else:
+    print("[spec] 提示：构建环境未安装 PyMOL，安装包不包含内置渲染器")
 
 
 # ----------------------------------------------------------------------
@@ -402,6 +440,48 @@ if IS_WINDOWS:
 
 pyz = PYZ(a.pure)
 
+
+def _merge_toc(base, extra):
+    """把第二个 Analysis 的 TOC 并入主 TOC，同名目标只保留第一次出现的项。"""
+    seen = {str(entry[0]).replace("\\", "/").lower() for entry in base}
+    for entry in extra:
+        key = str(entry[0]).replace("\\", "/").lower()
+        if key not in seen:
+            seen.add(key)
+            base.append(entry)
+
+
+pymol_exe = None
+if HAS_PYMOL:
+    pymol_a = Analysis(
+        [str(ROOT / "packaging" / "pymol_runner.py")],
+        pathex=[str(SRC)],
+        binaries=pymol_binaries,
+        datas=pymol_datas,
+        hiddenimports=pymol_hidden,
+        hookspath=[str(ROOT / "packaging" / "hooks")],
+        runtime_hooks=[str(ROOT / "packaging" / "runtime_hooks" / "rthook_dockflowlab.py")],
+        excludes=excludes + ["pymol.Qt", "pmg_qt", "pmg_tk"],
+        noarchive=False,
+    )
+    pymol_pyz = PYZ(pymol_a.pure)
+    pymol_exe = EXE(
+        pymol_pyz,
+        pymol_a.scripts,
+        [],
+        exclude_binaries=True,
+        name="PyMOLRunner",
+        debug=False,
+        bootloader_ignore_signals=False,
+        strip=False,
+        upx=False,
+        console=True,
+        disable_windowed_traceback=False,
+    )
+    # PyMOL 的 glew32 / netcdf 等 DLL 与主程序重叠，去重后共用一份。
+    _merge_toc(a.binaries, pymol_a.binaries)
+    _merge_toc(a.datas, pymol_a.datas)
+
 icon = RESOURCES / "app.ico"
 version_file = ROOT / "packaging" / "version_info.txt"
 exe = EXE(
@@ -420,10 +500,12 @@ exe = EXE(
     version=str(version_file) if IS_WINDOWS and version_file.is_file() else None,
 )
 
+collect_args = [exe, a.binaries, a.datas]
+if pymol_exe is not None:
+    collect_args.append(pymol_exe)
+
 coll = COLLECT(
-    exe,
-    a.binaries,
-    a.datas,
+    *collect_args,
     strip=False,
     upx=False,
     name=APP_NAME,
@@ -439,8 +521,8 @@ if IS_MACOS:
         info_plist={
             "CFBundleDisplayName": APP_NAME,
             "CFBundleName": APP_NAME,
-            "CFBundleShortVersionString": "2.1.0",
-            "CFBundleVersion": "2.1.0",
+            "CFBundleShortVersionString": "2.2.0",
+            "CFBundleVersion": "2.2.0",
             "NSHighResolutionCapable": True,
             "LSMinimumSystemVersion": "11.0",
             "NSPrincipalClass": "NSApplication",

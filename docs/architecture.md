@@ -85,11 +85,13 @@ config.py    用户偏好（与项目无关）
   字符会崩溃，因此脚本正文保持纯 ASCII；中文路径优先转成相对路径或 8.3 短路径，
   仍不可用时复制到 ASCII 临时目录。
 - `pymol_render.py`：把用户风格脚本套用到复合物并输出 PNG。PyMOL 始终以
-  `pymol -cq` 独立进程运行，不导入主进程，也不长期驻留；结构、转码后的脚本
-  与输出都放在 ASCII 临时目录，完成后只复制 PNG 回项目。`styles_in()` 递归
-  枚举 `.pml` / `.txt`，`complexes_in()` 扫描 `complexes/`，`style_token()`
-  生成保留中文的输出标签。渲染带超时，取消/超时时调用 `run_process(kill_tree=True)`
-  结束 PyMOL 启动器及其派生的 `python.exe`，因此原生崩溃或卡死不会影响界面。
+  `-cq` 独立进程运行，不导入主进程，也不长期驻留；安装包使用内置的
+  `PyMOLRunner.exe`（`packaging/pymol_runner.py`，`pymol2` 无界面会话），
+  源码运行时可回退到本机 `pymol`。结构、转码后的脚本与输出都放在 ASCII
+  临时目录，完成后只复制 PNG 回项目。`styles_in()` 递归枚举 `.pml` / `.txt`，
+  `complexes_in()` 扫描 `complexes/`，`style_token()` 生成保留中文的输出标签。
+  渲染带超时，取消/超时时调用 `run_process(kill_tree=True)` 结束 PyMOL 启动器
+  及其派生的 `python.exe`，因此原生崩溃或卡死不会影响界面。
 
 服务函数接收 `Workspace`、`AppSettings` 等显式参数，不读全局界面状态。
 
@@ -183,8 +185,9 @@ logs/session.log
 ## 打包集成
 
 `packaging/dockflowlab.spec` 收集 Python 包、Qt、RDKit/Boost、OpenMM 插件、
-OpenBabel DLL/格式插件/数据、Vina 与报告模板。运行时钩子
-`rthook_dockflowlab.py` 设置：
+OpenBabel DLL/格式插件/数据、PyMOL 与 Vina 等资源。PyMOL 通过第二个
+`Analysis` 生成 `PyMOLRunner.exe`，与主程序共用 `_internal`，避免把 PyMOL
+载入界面进程。运行时钩子 `rthook_dockflowlab.py` 设置：
 
 - `BABEL_DATADIR`、`BABEL_LIBDIR`
 - `OPENMM_PLUGIN_DIR`

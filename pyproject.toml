@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "dockflowlab"
-version = "2.1.0"
+version = "2.2.0"
 description = "DockFlowLab - 面向非专业用户的跨平台分子对接桌面工具"
 readme = "README.md"
 requires-python = ">=3.10"

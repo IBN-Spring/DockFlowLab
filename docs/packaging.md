@@ -15,9 +15,12 @@ DockFlowLab 使用 **PyInstaller onedir** 打包：启动速度快、DLL 与数�
 ```bash
 conda create -n DockFlowLab python=3.12 -y
 conda activate DockFlowLab
-conda install -c conda-forge rdkit openbabel openmm pdbfixer -y
+conda install -c conda-forge rdkit openbabel openmm pdbfixer pymol-open-source -y
 pip install -e ".[dev]" meeko pyinstaller
 ```
+
+构建环境需要 `pymol` / `pymol2` Python 包；缺少时安装包仍可构建，但“PyMOL 渲染”
+页会回退到查找本机 PyMOL。
 
 pip 环境（macOS/Linux 更容易成功）：
 
@@ -56,7 +59,10 @@ python -m PyInstaller --clean --noconfirm packaging\dockflowlab.spec
 ```text
 dist/DockFlowLab/
   DockFlowLab.exe
+  PyMOLRunner.exe            内置 PyMOL 无界面渲染入口
+  PYMOL-LICENSE.txt          PyMOL 开源许可与商标声明
   _internal/
+    dockflowlab/resources/licenses/PyMOL-LICENSE.txt
     dockflowlab/resources/vina/windows/vina.exe
     dockflowlab/resources/qvina2/windows/qvina2.exe
     dockflowlab/resources/smina/windows/smina.exe
@@ -169,7 +175,7 @@ xcrun stapler staple dist/DockFlowLab.app
 | Matplotlib | PyInstaller 官方 hook，图表使用 Agg 后端 |
 | pyqtgraph / PyOpenGL | `collect_all` + 显式 hidden imports；运行时固定 `PYQTGRAPH_QT_LIB=PySide6`，并排除 PyQt5/PyQt6 |
 | QtWebEngine / NGL | PyInstaller 的 `hook-PySide6.QtWebEngineCore` 收集渲染进程、`resources/` 与语言包；`ngl_view.py` 在冻结包中从 `_internal/PySide6` 定位这些文件 |
-| PyMOL（不打包） | 不收集。渲染页使用用户本机安装的 PyMOL，按“设置中的路径 → `PYMOL_RENDER_EXE` → 当前 Python 环境 → 系统安装”查找；缺失时页面禁用渲染，但对接与报告不受影响 |
+| PyMOL（内置） | `collect_all("pymol")`、`collect_all("pymol2")`、`collect_all("chempy")`；另建 `PyMOLRunner.exe`（`packaging/pymol_runner.py`，`pymol2` 无界面会话）并与主程序共用 `_internal`。查找顺序为“设置中的路径 → `PYMOL_RENDER_EXE` → 内置 `PyMOLRunner` → 当前 Python 环境 → 系统安装” |
 
 conda 把 Boost、OpenBabel、OpenMM、MKL 的共享库放在 `Library/bin` / `Library/lib`
 （Windows）或 `lib/`（macOS/Linux），而不是 Python 包目录，因此 spec 在分析前
@@ -230,12 +236,18 @@ PyInstaller 日志中 QtWebEngine hook 的输出。程序在 conda/冻结布局�
 确认没有手动删除 `_internal/PySide6/plugins/platforms`；conda 与 pip 混装 Qt 时
 先清理环境再重建。
 
+**`PyMOLRunner.exe` 启动时报 `DLL load failed while importing _cmd`**
+PyMOL 的 `_cmd.pyd` 依赖 conda `Library/bin` 中的 `glew32.dll`、`netcdf.dll`、
+`freetype.dll` 等。spec 在分析前已把这些目录加入 `PATH`；若手动改过构建环境，
+确认 `_internal` 中存在这些 DLL，或重新执行 `--clean` 构建。
+
 **安装包过大**
-onedir 中包含 Qt、QtWebEngine、RDKit、OpenMM、OpenBabel 与数据文件，Windows
-版实测约 800 MB，压缩后约 310 MB；其中 QtWebEngine（`Qt6WebEngineCore.dll`、
-ICU、`resources/` 与语言包）约占 280 MB。可以通过排除未使用的 Qt 模块/插件
-进一步缩小，但不要删除 `platforms`、`styles`、`imageformats`、`translations`
-与 QtWebEngine 的 `resources` / `qtwebengine_locales`。
+onedir 中包含 Qt、QtWebEngine、RDKit、OpenMM、OpenBabel、PyMOL 与数据文件，
+Windows 版实测约 850 MB，压缩后约 330 MB；其中 QtWebEngine
+（`Qt6WebEngineCore.dll`、ICU、`resources/` 与语言包）约占 280 MB，内置 PyMOL
+约 40 MB。可以通过排除未使用的 Qt 模块/插件进一步缩小，但不要删除
+`platforms`、`styles`、`imageformats`、`translations` 与 QtWebEngine 的
+`resources` / `qtwebengine_locales`。
 
 ## 发布清单
 
@@ -244,6 +256,7 @@ ICU、`resources/` 与语言包）约占 280 MB。可以通过排除未使用的
 - [ ] 用真实结构跑通导入、准备、对接、报告
 - [ ] 检查 `dist/DockFlowLab/_internal/dockflowlab/resources/{vina,qvina2,smina}/...`
 - [ ] 在干净机器上分别用 vina / qvina2 / smina 各跑一次对接，确认 boost 等 DLL 可加载
+- [ ] 在未安装 PyMOL 的机器上从渲染页导出一张 PNG，确认使用内置 `PyMOLRunner.exe`
 - [ ] 在未安装 Python 与 conda 的干净机器上启动测试
 - [ ] 压缩包命名包含平台与架构，并附带 README/使用指南
 - [ ] macOS 应用完成签名/公证（正式发布时）

@@ -203,11 +203,13 @@ def _print_progress(current: int, total: int, message: str) -> None:
 # 命令
 # ----------------------------------------------------------------------
 def command_doctor(args: argparse.Namespace) -> int:
+    from .services.pymol_render import find_renderer
     from .tools.obabel import get_openbabel
     from .tools.runtime import ascii_temp_root
     from .tools.vina import ENGINE_ORDER, engine_from_settings
 
     settings = AppSettings.load()
+    pymol = find_renderer(settings.pymol_path)
     engines = [engine_from_settings(settings, key) for key in ENGINE_ORDER]
     obabel = get_openbabel()
     packages = {
@@ -237,6 +239,7 @@ def command_doctor(args: argparse.Namespace) -> int:
         # 保留旧字段，便于已有的脚本继续读取 Vina 的状态。
         "vina": engines[0].doctor(),
         "openbabel": obabel.doctor(),
+        "pymol": {"available": bool(pymol), "path": pymol or ""},
         "packages": packages,
         "pocket_backend": pocket_backend,
         "temp_dir": {"path": str(temp_root), "writable": temp_ok},
@@ -266,6 +269,9 @@ def command_doctor(args: argparse.Namespace) -> int:
         print(f"OpenBabel：{obabel.version_string or '未找到'}")
         print(f"  Python API：{'可用' if obabel.has_python_api else '不可用'}")
         print(f"  路径：{obabel.executable or '—'}")
+        print(f"PyMOL 渲染：{pymol or '未找到'}")
+        if not pymol:
+            print("  提示：安装包应内置 PyMOLRunner；源码运行可安装 pymol-open-source。")
         print("化学计算组件：" + "  ".join(f"{k} {v or '缺失'}" for k, v in packages.items()))
         print(
             "几何口袋检测："
