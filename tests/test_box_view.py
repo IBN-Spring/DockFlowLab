@@ -176,6 +176,36 @@ def test_write_pml_keeps_non_ascii_paths_out_of_script(tmp_path):
     assert 'load "' in text
 
 
+def test_shader_cache_is_reset_between_opengl_contexts():
+    """重新打开编辑器会创建新上下文，旧的着色器程序 ID 必须被清空。"""
+    from dockflowlab.ui import box_view
+
+    if not box_view._HAS_GL:
+        pytest.skip("缺少 pyqtgraph / PyOpenGL")
+    from pyqtgraph.opengl import shaders as gl_shaders
+
+    line_class = box_view.gl.GLLinePlotItem
+    scatter_class = box_view.gl.GLScatterPlotItem
+    default_program = gl_shaders.ShaderProgram.names[None]
+    previous = (
+        line_class._shaderProgram,
+        scatter_class._shaderProgram,
+        default_program.prog,
+    )
+    try:
+        line_class._shaderProgram = 3
+        scatter_class._shaderProgram = 6
+        default_program.prog = 9
+
+        box_view._reset_gl_shader_cache()
+
+        assert line_class._shaderProgram is None
+        assert scatter_class._shaderProgram is None
+        assert default_program.prog is None
+    finally:
+        line_class._shaderProgram, scatter_class._shaderProgram, default_program.prog = previous
+
+
 # ----------------------------------------------------------------------
 # Qt 部件逻辑（不显示窗口，不创建 OpenGL 上下文）
 # ----------------------------------------------------------------------

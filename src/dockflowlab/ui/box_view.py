@@ -408,6 +408,27 @@ def nearest_handle(
 # ----------------------------------------------------------------------
 # OpenGL 视图
 # ----------------------------------------------------------------------
+def _reset_gl_shader_cache() -> None:
+    """清空 pyqtgraph 的全局着色器缓存。
+
+    pyqtgraph 0.14 把编译好的着色器程序缓存在类属性（``GLLinePlotItem`` 等）
+    和全局 ``ShaderProgram`` 对象上，不区分 OpenGL 上下文。``QOpenGLWidget``
+    的上下文会随窗口销毁；再次打开盒子编辑器时，新上下文中的旧程序 ID 已失效，
+    ``glUseProgram`` 会抛 ``GL_INVALID_VALUE``，严重时导致进程崩溃。每次新
+    上下文初始化时清空缓存，让 pyqtgraph 在当前上下文中重新编译。
+    """
+    for name in ("GLLinePlotItem", "GLScatterPlotItem", "GLImageItem", "GLVolumeItem"):
+        item_class = getattr(gl, name, None)
+        if item_class is not None and hasattr(item_class, "_shaderProgram"):
+            item_class._shaderProgram = None
+    try:
+        from pyqtgraph.opengl import shaders as gl_shaders
+    except Exception:  # pragma: no cover - pyqtgraph 内部结构变化时的兜底
+        return
+    for program in gl_shaders.ShaderProgram.names.values():
+        program.prog = None
+
+
 if _HAS_GL:
     _OPAQUE_OPTIONS = {
         _GL.GL_DEPTH_TEST: True,
@@ -449,6 +470,11 @@ if _HAS_GL:
             self._build_items()
             self._refresh_box_items()
             self.reset_view()
+
+        def initializeGL(self) -> None:
+            # 新窗口/新上下文：旧上下文中的着色器程序已失效，必须重新编译。
+            _reset_gl_shader_cache()
+            super().initializeGL()
 
         # -- items ------------------------------------------------------
         def _build_items(self) -> None:
