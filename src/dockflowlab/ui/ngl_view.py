@@ -187,12 +187,17 @@ class _Bridge(QObject):
 
     box_edited = Signal(object)
     ready = Signal()
+    structure_ready = Signal()
     failed = Signal(str)
     message = Signal(str)
 
     @Slot(str)
     def viewerReady(self, payload: str) -> None:  # noqa: N802 - JS 端命名
         self.ready.emit()
+
+    @Slot(str)
+    def structureReady(self, payload: str) -> None:  # noqa: N802 - JS 端命名
+        self.structure_ready.emit()
 
     @Slot(str)
     def viewerFailed(self, payload: str) -> None:  # noqa: N802 - JS 端命名
@@ -259,6 +264,7 @@ class NglBoxView(QWidget):
     box_changed = Signal(object)
     failed = Signal(str)
     ready = Signal()
+    structure_ready = Signal()
 
     READY_TIMEOUT_MS = 20000
 
@@ -274,6 +280,11 @@ class NglBoxView(QWidget):
         self._show_atoms = False
         self._click_to_center = True
         self._sites_visible = False  # 洞察模式默认关闭
+        # NGL 不监听窗口尺寸，画布需要显式同步；合并连续 resize 事件。
+        self._resize_timer = QTimer(self)
+        self._resize_timer.setSingleShot(True)
+        self._resize_timer.setInterval(40)
+        self._resize_timer.timeout.connect(self._sync_size)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -287,6 +298,7 @@ class NglBoxView(QWidget):
         self._bridge = _Bridge()
         self._bridge.box_edited.connect(self._on_box_edited)
         self._bridge.ready.connect(self._on_ready)
+        self._bridge.structure_ready.connect(self.structure_ready)
         self._bridge.failed.connect(self._on_failed)
         self._bridge.message.connect(lambda message: log.debug("NGL：%s", message))
         self._channel = QWebChannel(self.web_view.page())
@@ -318,6 +330,17 @@ class NglBoxView(QWidget):
         for script in pending:
             self.web_view.page().runJavaScript(script)
         self.ready.emit()
+        # 初始化时 WebEngine 往往还是最小尺寸（460×380），等这一轮事件处理完
+        # 再让 NGL 按实际大小重建画布，避免只显示左上角一块。
+        self._resize_timer.start(0)
+
+    def resizeEvent(self, event) -> None:  # noqa: N802
+        super().resizeEvent(event)
+        self._resize_timer.start()
+
+    def _sync_size(self) -> None:
+        if self._ready:
+            self._call("syncSize")
 
     def _on_failed(self, message: str) -> None:
         if self._failed or self._ready:
@@ -394,6 +417,8 @@ class NglBoxView(QWidget):
     def shutdown(self) -> None:
         """停止定时器；窗口关闭时避免回调访问已销毁的页面。"""
         self._watchdog.stop()
+        self._resize_timer.stop()
         self._bridge.box_edited.disconnect()
         self._bridge.ready.disconnect()
+        self._bridge.structure_ready.disconnect()
         self._bridge.failed.disconnect()

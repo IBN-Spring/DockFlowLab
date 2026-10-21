@@ -27,7 +27,7 @@ from typing import Sequence
 os.environ["PYQTGRAPH_QT_LIB"] = "PySide6"
 
 import numpy as np
-from PySide6.QtCore import QSize, Qt, Signal
+from PySide6.QtCore import QSize, Qt, QTimer, Signal
 from PySide6.QtWidgets import (
     QCheckBox,
     QDoubleSpinBox,
@@ -35,6 +35,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QPushButton,
+    QScrollArea,
     QSizePolicy,
     QStackedWidget,
     QVBoxLayout,
@@ -1582,6 +1583,11 @@ class BoxViewer(QWidget):
         self._show_atoms = False
         self._click_to_center = True
         self._focus_requested = False
+        # NGL 页面就绪后仍要等结构解析完成；首帧渲染前继续显示占位页，
+        # 避免用户看到一块全黑的画布。
+        self._show_timer = QTimer(self)
+        self._show_timer.setSingleShot(True)
+        self._show_timer.timeout.connect(self._show_view)
 
         self._layout = QHBoxLayout(self)
         self._layout.setContentsMargins(0, 0, 0, 0)
@@ -1596,7 +1602,23 @@ class BoxViewer(QWidget):
         self._placeholder = self._make_loading_placeholder()
         self._view_stack.addWidget(self._placeholder)
         self._layout.addWidget(self._view_stack, 3)
-        self._layout.addWidget(self._build_panel(), 0)
+        self._panel = self._build_panel()
+        # 洞察模式会在上方增加参考信息卡片，右侧面板可能因此放不下。
+        # 放进滚动区，保证文字保持可读高度，而不是被压扁或裁掉。
+        self._panel_scroll = QScrollArea()
+        self._panel_scroll.setObjectName("BoxPanelScroll")
+        self._panel_scroll.setWidgetResizable(True)
+        self._panel_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self._panel_scroll.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
+        self._panel_scroll.setVerticalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAsNeeded
+        )
+        self._panel_scroll.setMinimumWidth(310)
+        self._panel_scroll.setMaximumWidth(376)
+        self._panel_scroll.setWidget(self._panel)
+        self._layout.addWidget(self._panel_scroll, 0)
         self.start_view()
 
     # -- 视图创建与降级 ---------------------------------------------------
@@ -1631,8 +1653,9 @@ class BoxViewer(QWidget):
         self.view = view
         self._view_stack.addWidget(view)
         if NglBoxView is not None and isinstance(view, NglBoxView):
-            # 保留深色占位页，直到 NGL 真正完成初始化。
-            view.ready.connect(self._on_view_ready)
+            # 保留深色占位页，直到结构和首帧都准备好。
+            view.ready.connect(self._on_ngl_ready)
+            view.structure_ready.connect(self._on_structure_ready)
             self._view_stack.setCurrentWidget(self._placeholder)
         else:
             self._view_stack.setCurrentWidget(view)
@@ -1654,11 +1677,31 @@ class BoxViewer(QWidget):
         if self._focus_requested or self._box is not None:
             view.focus_box()
 
-    def _on_view_ready(self) -> None:
-        """NGL 初始化完成，换掉占位页。"""
+    def _on_ngl_ready(self) -> None:
+        """NGL 页面就绪：等首帧结构渲染完成后再揭开占位页。"""
         if self.view is None:
             return
-        self._view_stack.setCurrentWidget(self.view)
+        if self._structure is not None:
+            # 结构已提交，等 structure_ready；大结构给足时间。
+            self._show_timer.start(4000)
+        elif self._placeholder_message:
+            # 没有结构可显示，直接展示 NGL 的提示文字。
+            self._show_view()
+        else:
+            # 结构可能还在解析，稍等一下；structure_ready 会提前揭开。
+            self._show_timer.start(3000)
+
+    def _on_structure_ready(self) -> None:
+        # structureReady 在渲染请求发出时到达，Chromium 还要把第一帧合成到
+        # 窗口上（首次渲染需编译着色器，约半秒）。先保留占位页，避免露出黑屏。
+        self._show_timer.start(500)
+
+    def _show_view(self) -> None:
+        """用真正的 3D 视图替换占位页。"""
+        if self.view is None:
+            return
+        if self._view_stack.currentWidget() is not self.view:
+            self._view_stack.setCurrentWidget(self.view)
         if self._placeholder is not None:
             placeholder = self._placeholder
             self._placeholder = None
@@ -1719,6 +1762,7 @@ class BoxViewer(QWidget):
         """NGL 初始化失败时换成 OpenGL 回退视图，保留当前结构与盒子。"""
         if NglBoxView is None or not isinstance(self.view, NglBoxView):
             return
+        self._show_timer.stop()
         old = self.view
         self.view = None
         try:

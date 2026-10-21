@@ -739,6 +739,14 @@
     },
     focusBox: focusBox,
     resetView: resetView,
+    // NGL 不会监听窗口尺寸变化。内嵌视图在完成初始化后才拿到最终大小，
+    // 或对话框切换洞察模式后高度改变时，必须显式让 NGL 重算画布尺寸，
+    // 否则画布会停留在初始的最小尺寸，只显示左上角一块。
+    syncSize: function () {
+      if (!stage) return;
+      stage.handleResize();
+      stage.viewer.requestRender();
+    },
     setAtomsVisible: function (value) {
       setAtomsVisible(Boolean(value));
     },
