@@ -1,0 +1,722 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DockFlowLab 3D 盒子视图</title>
+<style>
+  html, body {
+    margin: 0;
+    height: 100%;
+    overflow: hidden;
+    background: #0b0f16;
+    font-family: "Microsoft YaHei", "PingFang SC", system-ui, sans-serif;
+  }
+  #viewport { position: absolute; inset: 0; }
+  #overlay { position: absolute; inset: 0; pointer-events: none; }
+  #handles { position: absolute; inset: 0; pointer-events: none; }
+  .handle {
+    position: absolute;
+    width: 15px;
+    height: 15px;
+    box-sizing: border-box;
+    border: 2px solid rgba(255, 255, 255, .9);
+    border-radius: 50%;
+    box-shadow: 0 0 5px rgba(0, 0, 0, .9);
+    transform: translate(-50%, -50%);
+    pointer-events: auto;
+    cursor: grab;
+  }
+  .handle.negative { border-color: rgba(255, 255, 255, .45); }
+  .handle.center {
+    width: 18px;
+    height: 18px;
+    z-index: 3;
+    border-width: 2.5px;
+    /* 中空圆环：盒子中心常常与配体/口袋重合，实心会挡住结构。 */
+    background: transparent;
+    border-color: rgba(255, 255, 255, .8);
+  }
+  .handle.dragging { cursor: grabbing; }
+  #message {
+    position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
+    display: none; max-width: 72%; padding: 18px 22px;
+    color: #aab4c4; font-size: 13px; line-height: 1.75; text-align: center;
+    background: rgba(11, 16, 22, .88);
+    border: 1px solid #1d2836; border-radius: 10px;
+    white-space: pre-wrap;
+  }
+  #hint {
+    position: absolute; left: 14px; bottom: 12px;
+    color: #66738a; font-size: 12px; line-height: 1.5;
+    text-shadow: 0 1px 3px rgba(0, 0, 0, .8);
+  }
+</style>
+<script src="qrc:///qtwebchannel/qwebchannel.js"></script>
+<script src="ngl.js"></script>
+</head>
+<body>
+<div id="viewport"></div>
+<div id="overlay">
+  <div id="message"></div>
+  <div id="hint">左键旋转 · 滚轮缩放 · 右键平移 · 拖动彩色手柄调整盒子</div>
+</div>
+<div id="handles"></div>
+<script>
+(function () {
+  "use strict";
+
+  // ------------------------------------------------------------------
+  // 常量：与 Python 端 box_view.py 保持一致
+  // ------------------------------------------------------------------
+  const MIN_SIZE = 5.0;
+  const MAX_SIZE = 150.0;
+  const HANDLE_COLORS = [
+    [1.00, 1.00, 1.00],  // 中心
+    [0.95, 0.30, 0.30],  // +X
+    [0.62, 0.18, 0.18],  // -X
+    [0.34, 0.88, 0.42],  // +Y
+    [0.16, 0.55, 0.24],  // -Y
+    [0.36, 0.58, 1.00],  // +Z
+    [0.18, 0.34, 0.68]   // -Z
+  ];
+  const EDGES = [
+    [0, 1], [0, 2], [1, 3], [2, 3],
+    [4, 5], [4, 6], [5, 7], [6, 7],
+    [0, 4], [1, 5], [2, 6], [3, 7]
+  ];
+
+  let stage = null;
+  let bridge = null;
+  let structureComp = null;
+  let boxComp = null;
+  let atomRep = null;
+  let box = { center: [0, 0, 0], size: [22, 22, 22] };
+  let clickToCenter = true;
+  let showAtoms = false;
+  let pendingStructure = null;
+  let drag = null;
+  let suppressClickUntil = 0;
+  let boxFrame = 0;
+  let pendingFocus = false;
+  let handleEls = [];
+  let handleScreen = [];
+
+  const messageEl = document.getElementById("message");
+  const hintEl = document.getElementById("hint");
+  const handlesEl = document.getElementById("handles");
+
+  // ------------------------------------------------------------------
+  // 与 Python 的通信
+  // ------------------------------------------------------------------
+  function post(name, payload) {
+    if (!bridge || typeof bridge[name] !== "function") return;
+    try {
+      bridge[name](JSON.stringify(payload || {}));
+    } catch (err) {
+      // 桥接断开（窗口关闭）时忽略
+    }
+  }
+
+  function fail(message) {
+    post("viewerFailed", { message: String(message || "未知错误") });
+  }
+
+  function showMessage(text) {
+    messageEl.textContent = text;
+    messageEl.style.display = "block";
+    hintEl.style.display = "none";
+  }
+
+  function hideMessage() {
+    messageEl.style.display = "none";
+    hintEl.style.display = "";
+  }
+
+  // ------------------------------------------------------------------
+  // 基础几何
+  // ------------------------------------------------------------------
+  function clamp(value, low, high) {
+    return Math.min(high, Math.max(low, value));
+  }
+
+  function round3(values) {
+    return values.map(function (value) {
+      return Math.round(Number(value) * 1000) / 1000;
+    });
+  }
+
+  function round2(values) {
+    return values.map(function (value) {
+      return Math.round(Number(value) * 100) / 100;
+    });
+  }
+
+  function corners(center, size) {
+    const h = [size[0] / 2, size[1] / 2, size[2] / 2];
+    const signs = [
+      [-1, -1, -1], [1, -1, -1], [-1, 1, -1], [1, 1, -1],
+      [-1, -1, 1], [1, -1, 1], [-1, 1, 1], [1, 1, 1]
+    ];
+    return signs.map(function (s) {
+      return [
+        center[0] + s[0] * h[0],
+        center[1] + s[1] * h[1],
+        center[2] + s[2] * h[2]
+      ];
+    });
+  }
+
+  // 索引 0 为中心，1..6 依次为 +X/-X/+Y/-Y/+Z/-Z
+  function handlePositions(center, size) {
+    const h = [size[0] / 2, size[1] / 2, size[2] / 2];
+    return [
+      [center[0], center[1], center[2]],
+      [center[0] + h[0], center[1], center[2]],
+      [center[0] - h[0], center[1], center[2]],
+      [center[0], center[1] + h[1], center[2]],
+      [center[0], center[1] - h[1], center[2]],
+      [center[0], center[1], center[2] + h[2]],
+      [center[0], center[1], center[2] - h[2]]
+    ];
+  }
+
+  function vec(values) {
+    return new NGL.Vector3(values[0], values[1], values[2]);
+  }
+
+  // ------------------------------------------------------------------
+  // 盒子渲染
+  // ------------------------------------------------------------------
+  function rebuildBox() {
+    if (!stage) return;
+    if (boxComp) {
+      stage.removeComponent(boxComp);
+      boxComp = null;
+    }
+    const shape = new NGL.Shape("docking-box", { radialSegments: 12 });
+    const points = corners(box.center, box.size);
+    const maxSize = Math.max(box.size[0], box.size[1], box.size[2]);
+    const edgeRadius = clamp(maxSize * 0.011, 0.14, 0.55);
+    EDGES.forEach(function (edge) {
+      shape.addCylinder(points[edge[0]], points[edge[1]], [1.00, 0.66, 0.18], edgeRadius);
+    });
+    // 手柄用屏幕上的 DOM 圆点绘制，大小不随缩放变化，也不会挡住结构。
+    const component = stage.addComponentFromObject(shape);
+    if (!component) return;
+    component.addRepresentation("buffer", { opacity: 1.0 });
+    boxComp = component;
+  }
+
+  function requestBoxRebuild() {
+    if (boxFrame) return;
+    boxFrame = window.requestAnimationFrame(function () {
+      boxFrame = 0;
+      rebuildBox();
+    });
+  }
+
+  function sameNumberList(a, b, tolerance) {
+    if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false;
+    for (let i = 0; i < a.length; i++) {
+      if (Math.abs(Number(a[i]) - Number(b[i])) > tolerance) return false;
+    }
+    return true;
+  }
+
+  function applyBox(center, size) {
+    box = { center: round3(center), size: round2(size) };
+    requestBoxRebuild();
+  }
+
+  function commitBox(center, size, note) {
+    applyBox(center, size);
+    post("boxEdited", {
+      center: box.center,
+      size: box.size,
+      note: note || "在 3D 视图中拖动调整"
+    });
+  }
+
+  // ------------------------------------------------------------------
+  // 相机与拾取
+  // ------------------------------------------------------------------
+  function mouseToCanvas(event) {
+    const canvas = document.querySelector("#viewport canvas");
+    const rect = canvas.getBoundingClientRect();
+    // NGL 的 CanvasPosition 以左下角为原点、单位为 CSS 像素
+    return {
+      x: event.clientX - rect.left,
+      y: rect.height - (event.clientY - rect.top)
+    };
+  }
+
+  function toCanvas(position) {
+    const point = stage.viewerControls.getPositionOnCanvas(vec(position));
+    return { x: point.x, y: point.y };
+  }
+
+  // 手柄是覆盖在画布上的 DOM 元素，每帧按相机投影更新位置。
+  function buildHandleElements() {
+    handlesEl.innerHTML = "";
+    handleEls = HANDLE_COLORS.map(function (color, index) {
+      const element = document.createElement("div");
+      element.className = "handle";
+      if (index === 0) {
+        element.classList.add("center");
+      } else if (index % 2 === 0) {
+        element.classList.add("negative");
+      }
+      if (index > 0) {
+        // 中心手柄保持中空（CSS 控制），避免实心圆挡住中心的配体。
+        element.style.background =
+          "rgb(" +
+          Math.round(color[0] * 255) + "," +
+          Math.round(color[1] * 255) + "," +
+          Math.round(color[2] * 255) + ")";
+      }
+      element.dataset.handle = String(index);
+      handlesEl.appendChild(element);
+      return element;
+    });
+    handleScreen = handleEls.map(function () { return null; });
+  }
+
+  function updateHandlePositions() {
+    if (!stage || !handleEls.length) return;
+    const canvas = document.querySelector("#viewport canvas");
+    if (!canvas) return;
+    const rect = canvas.getBoundingClientRect();
+    const handles = handlePositions(box.center, box.size);
+    const points = handles.map(toCanvas);
+    const centerPoint = points[0];
+    for (let i = 0; i < handles.length; i++) {
+      const point = points[i];
+      if (!isFinite(point.x) || !isFinite(point.y)) {
+        handleEls[i].style.display = "none";
+        handleScreen[i] = null;
+        continue;
+      }
+      const x = rect.left + point.x;
+      const y = rect.top + rect.height - point.y;
+      let visible = !(
+        x < -24 || y < -24 ||
+        x > window.innerWidth + 24 ||
+        y > window.innerHeight + 24
+      );
+      // 正对某个面时（默认视角 +Z），面手柄会与中心完全重叠；
+      // 隐藏它们，旋转视角后自然出现，避免点不到或看不清。
+      if (
+        i > 0 && isFinite(centerPoint.x) && isFinite(centerPoint.y) &&
+        Math.hypot(point.x - centerPoint.x, point.y - centerPoint.y) < 9
+      ) {
+        visible = false;
+      }
+      const previous = handleScreen[i];
+      if (
+        previous &&
+        previous[2] === visible &&
+        Math.abs(previous[0] - x) < 0.25 &&
+        Math.abs(previous[1] - y) < 0.25
+      ) {
+        continue;
+      }
+      handleScreen[i] = [x, y, visible];
+      if (!visible) {
+        handleEls[i].style.display = "none";
+        continue;
+      }
+      handleEls[i].style.display = "";
+      handleEls[i].style.left = x.toFixed(1) + "px";
+      handleEls[i].style.top = y.toFixed(1) + "px";
+    }
+  }
+
+  function startHandleLoop() {
+    function frame() {
+      updateHandlePositions();
+      window.requestAnimationFrame(frame);
+    }
+    window.requestAnimationFrame(frame);
+  }
+
+  function inverseRotation() {
+    return stage.viewer.rotationGroup.matrix.clone().invert();
+  }
+
+  function cameraForward() {
+    // 相机在自身的观察空间中朝 -Z 方向看
+    return new NGL.Vector3(0, 0, -1)
+      .transformDirection(inverseRotation())
+      .normalize();
+  }
+
+  function rayFrom(position) {
+    const viewer = stage.viewer;
+    viewer.camera.updateMatrixWorld();
+    const ndc = new NGL.Vector3(
+      (position.x / Math.max(1, viewer.width)) * 2 - 1,
+      (position.y / Math.max(1, viewer.height)) * 2 - 1,
+      0.5
+    );
+    ndc.unproject(viewer.camera);
+    const cameraPosition = viewer.camera.position.clone();
+    const directionViewer = ndc.clone().sub(cameraPosition).normalize();
+    const inverse = inverseRotation();
+    const origin = cameraPosition
+      .applyMatrix4(inverse)
+      .sub(viewer.translationGroup.position);
+    const direction = directionViewer.transformDirection(inverse).normalize();
+    return { origin: origin, direction: direction };
+  }
+
+  function rayPlane(origin, direction, planePoint, normal) {
+    const denominator = direction.dot(normal);
+    if (Math.abs(denominator) < 1e-8) return null;
+    const t = planePoint.clone().sub(origin).dot(normal) / denominator;
+    if (t <= 0) return null;
+    return origin.clone().addScaledVector(direction, t);
+  }
+
+  function closestAxisParameter(rayOrigin, rayDirection, axisOrigin, axisDirection) {
+    const w0 = rayOrigin.clone().sub(axisOrigin);
+    const a = rayDirection.dot(rayDirection);
+    const b = rayDirection.dot(axisDirection);
+    const c = axisDirection.dot(axisDirection);
+    const d = rayDirection.dot(w0);
+    const e = axisDirection.dot(w0);
+    const denominator = a * c - b * b;
+    if (Math.abs(denominator) < 1e-8) return 0;
+    return (a * e - b * d) / denominator;
+  }
+
+  // ------------------------------------------------------------------
+  // 拖拽
+  // ------------------------------------------------------------------
+  function beginDrag(handle, position) {
+    if (handle < 0 || handle >= 7) return false;
+    const ray = rayFrom(position);
+    const center = vec(box.center);
+    const size = box.size.slice();
+    if (handle === 0) {
+      const normal = cameraForward();
+      const hit = rayPlane(ray.origin, ray.direction, center, normal);
+      if (!hit) return false;
+      drag = {
+        kind: "move",
+        center: center,
+        size: size,
+        normal: normal,
+        hit: hit
+      };
+    } else {
+      const axisIndex = (handle - 1) >> 1;
+      const sign = ((handle - 1) % 2 === 0) ? 1 : -1;
+      const axis = new NGL.Vector3(0, 0, 0);
+      axis.setComponent(axisIndex, 1);
+      drag = {
+        kind: "resize",
+        center: center,
+        size: size,
+        axisIndex: axisIndex,
+        sign: sign,
+        axis: axis,
+        start: closestAxisParameter(ray.origin, ray.direction, center, axis)
+      };
+    }
+    return true;
+  }
+
+  function updateDrag(position, shiftKey) {
+    if (!drag) return;
+    const ray = rayFrom(position);
+    if (drag.kind === "move") {
+      const hit = rayPlane(ray.origin, ray.direction, drag.center, drag.normal);
+      if (!hit) return;
+      const center = drag.center.clone().add(hit.sub(drag.hit));
+      commitBox(center.toArray(), drag.size);
+    } else {
+      const parameter = closestAxisParameter(
+        ray.origin, ray.direction, drag.center, drag.axis
+      );
+      const delta = parameter - drag.start;
+      const size = drag.size.slice();
+      // 负方向手柄沿 +axis 移动时，面是在向里收，因此尺寸增量要乘 sign。
+      // Shift 时两侧同时伸缩，尺寸变化是单侧的两倍。
+      const change = (shiftKey ? 2 : 1) * drag.sign * delta;
+      const value = clamp(size[drag.axisIndex] + change, MIN_SIZE, MAX_SIZE);
+      const actual = value - size[drag.axisIndex];
+      size[drag.axisIndex] = value;
+      const center = drag.center.clone();
+      if (!shiftKey) {
+        center.setComponent(
+          drag.axisIndex,
+          center.getComponent(drag.axisIndex) + drag.sign * actual / 2
+        );
+      }
+      commitBox(center.toArray(), size);
+    }
+  }
+
+  function endDrag() {
+    if (!drag) return;
+    drag = null;
+    // 手柄点击也会被 NGL 的 mouseup 当作 click，短暂屏蔽点击取中心
+    suppressClickUntil = window.performance.now() + 350;
+  }
+
+  // ------------------------------------------------------------------
+  // 结构
+  // ------------------------------------------------------------------
+  function setStructure(pdbText) {
+    pendingStructure = String(pdbText || "");
+    loadPendingStructure();
+  }
+
+  function loadPendingStructure() {
+    if (!stage || pendingStructure === null) return;
+    const text = pendingStructure;
+    pendingStructure = null;
+
+    if (structureComp) {
+      stage.removeComponent(structureComp);
+      structureComp = null;
+    }
+    atomRep = null;
+
+    if (!text.trim()) {
+      showMessage("没有可显示的结构。\n仍可在右侧输入盒子中心与边长。");
+      return;
+    }
+
+    const blob = new Blob([text], { type: "text/plain" });
+    stage.loadFile(blob, { ext: "pdb", defaultRepresentation: false }).then(function (component) {
+      if (!component) {
+        showMessage("结构加载失败：没有可显示的原子。");
+        return;
+      }
+      structureComp = component;
+      component.addRepresentation("cartoon", {
+        colorScheme: "uniform",
+        colorValue: 0xb8c2d2,
+        aspectRatio: 4.5,
+        subdiv: 8,
+        smoothSheet: true
+      });
+      // 配体、辅因子与离子用球棍模型，元素着色。
+      // 不能只选 hetero：PDBQT 转出的配体使用 ATOM 记录，NGL 会把它归为
+      // 非聚合物而不是 hetero；纯配体结构因此会什么都画不出来。
+      component.addRepresentation("ball+stick", {
+        sele: "not polymer and not water",
+        colorScheme: "element",
+        aspectRatio: 2.0,
+        scale: 1.4
+      });
+      if (showAtoms) {
+        atomRep = component.addRepresentation("point", {
+          sele: "*",
+          colorScheme: "element",
+          pointSize: 1.2
+        });
+      }
+      hideMessage();
+      component.autoView();
+      if (pendingFocus) focusBox();
+      post("structureReady", { atoms: component.structure.atomCount });
+    }).catch(function (error) {
+      showMessage("无法显示结构：" + String(error));
+      post("viewerMessage", { message: String(error) });
+    });
+  }
+
+  function focusBox() {
+    // 结构加载是异步的，加载完成后的 autoView 会覆盖镜头，因此先记下来。
+    if (!stage || !structureComp) {
+      pendingFocus = true;
+      return;
+    }
+    pendingFocus = false;
+    const viewer = stage.viewer;
+    const fov = viewer.camera.fov * Math.PI / 180;
+    const radius = Math.max(box.size[0], box.size[1], box.size[2]) * 0.75;
+    const distance = Math.max(6.0, (radius / Math.tan(fov / 2)) * 1.45);
+    stage.viewerControls.center(vec(box.center));
+    stage.viewerControls.distance(distance);
+  }
+
+  function resetView() {
+    if (!stage) return;
+    pendingFocus = false;
+    if (structureComp) {
+      // 只框选结构，避免盒子被拖远后把镜头拉得很远
+      structureComp.autoView();
+    } else {
+      focusBox();
+    }
+  }
+
+  function setAtomsVisible(value) {
+    showAtoms = Boolean(value);
+    if (!structureComp) return;
+    if (showAtoms && !atomRep) {
+      atomRep = structureComp.addRepresentation("point", {
+        sele: "*",
+        colorScheme: "element",
+        pointSize: 1.2
+      });
+    } else if (atomRep) {
+      atomRep.setVisibility(showAtoms);
+    }
+  }
+
+  // ------------------------------------------------------------------
+  // 鼠标事件：手柄是 DOM 元素，拖动时用捕获阶段拦截，避免 NGL 旋转
+  // ------------------------------------------------------------------
+  function onHandleDragMove(event) {
+    if (!drag) return;
+    event.preventDefault();
+    event.stopPropagation();
+    updateDrag(mouseToCanvas(event), event.shiftKey);
+  }
+
+  function onHandleDragEnd(event) {
+    if (!drag) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const element = drag.element;
+    if (element) element.classList.remove("dragging");
+    endDrag();
+    document.removeEventListener("mousemove", onHandleDragMove, true);
+    document.removeEventListener("mouseup", onHandleDragEnd, true);
+  }
+
+  function installHandleHandlers() {
+    handleEls.forEach(function (element, index) {
+      element.addEventListener("mousedown", function (event) {
+        if (event.button !== 0) return;
+        if (!beginDrag(index, mouseToCanvas(event))) return;
+        event.preventDefault();
+        event.stopPropagation();
+        drag.element = element;
+        element.classList.add("dragging");
+        document.addEventListener("mousemove", onHandleDragMove, true);
+        document.addEventListener("mouseup", onHandleDragEnd, true);
+      });
+      element.addEventListener("contextmenu", function (event) {
+        event.preventDefault();
+      });
+    });
+  }
+
+  // ------------------------------------------------------------------
+  // 初始化
+  // ------------------------------------------------------------------
+  function init() {
+    try {
+      stage = new NGL.Stage("viewport", {
+        backgroundColor: "#0b0f16",
+        quality: "high",
+        sampleLevel: 2,
+        cameraFov: 40,
+        ambientIntensity: 0.42,
+        lightIntensity: 1.15,
+        tooltip: false
+      });
+      stage.mouseControls.remove("clickPick-left");
+
+      stage.signals.clicked.add(function (pickingProxy) {
+        if (!clickToCenter || !pickingProxy || !pickingProxy.atom) return;
+        if (window.performance.now() < suppressClickUntil) return;
+        const atom = pickingProxy.atom;
+        const position = atom.positionToVector3();
+        commitBox(
+          [position.x, position.y, position.z],
+          box.size,
+          "在 3D 视图中点击结构设置中心"
+        );
+      });
+
+      buildHandleElements();
+      installHandleHandlers();
+      startHandleLoop();
+      rebuildBox();
+      loadPendingStructure();
+      window.dflViewerReady = true;
+      post("viewerReady", { webgl: true });
+    } catch (error) {
+      showMessage("3D 视图初始化失败：" + String(error));
+      fail(error);
+    }
+  }
+
+  // ------------------------------------------------------------------
+  // 暴露给 Python 的 API
+  // ------------------------------------------------------------------
+  // Python 端通过 runJavaScript 注入的是 JSON 字面量（数组/数值/字符串），
+  // 这里直接接收实际值，不要再做一次 JSON.parse。
+  window.dfl = {
+    setStructure: function (text) {
+      setStructure(String(text == null ? "" : text));
+    },
+    setBox: function (center, size) {
+      if (drag) return;
+      if (!Array.isArray(center) || !Array.isArray(size)) return;
+      if (center.length !== 3 || size.length !== 3) return;
+      if (sameNumberList(center, box.center, 1e-3) &&
+          sameNumberList(size, box.size, 1e-2)) {
+        return;
+      }
+      applyBox(center, size);
+    },
+    focusBox: focusBox,
+    resetView: resetView,
+    setAtomsVisible: function (value) {
+      setAtomsVisible(Boolean(value));
+    },
+    setClickToCenter: function (value) {
+      clickToCenter = Boolean(value);
+    },
+    showMessage: function (text) {
+      if (text) showMessage(String(text)); else hideMessage();
+    },
+    clearStructure: function () {
+      pendingStructure = "";
+      if (structureComp) {
+        stage.removeComponent(structureComp);
+        structureComp = null;
+      }
+      atomRep = null;
+    }
+  };
+
+  window.addEventListener("error", function (event) {
+    post("viewerMessage", { message: String(event.message || event.error || "脚本错误") });
+  });
+
+  function start() {
+    if (typeof NGL === "undefined") {
+      showMessage("NGL Viewer 未能加载（ngl.js 缺失）。");
+      fail("NGL 未加载");
+      return;
+    }
+    if (typeof QWebChannel === "undefined" || typeof qt === "undefined" ||
+        !qt.webChannelTransport) {
+      // 没有 Qt 通道时仍然渲染，只是无法回传盒子
+      init();
+      return;
+    }
+    new QWebChannel(qt.webChannelTransport, function (channel) {
+      bridge = channel.objects.bridge;
+      init();
+    });
+  }
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", start);
+  } else {
+    start();
+  }
+})();
+</script>
+</body>
+</html>

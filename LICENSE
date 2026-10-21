@@ -36,6 +36,17 @@ DockFlowLab 使用了以下开源项目：
 - Copyright: OpenBabel Development Team
 - URL: http://openbabel.org/
 
+### NGL Viewer
+- License: MIT License
+- Copyright: Alexander S. Rose
+- URL: https://github.com/nglviewer/ngl
+- 说明：2.5.0 版本原样打包于 `src/dockflowlab/resources/ngl/`
+
+### Qt / PySide6（含 QtWebEngine）
+- License: GNU Lesser General Public License v3
+- Copyright: The Qt Company and Qt for Python contributors
+- URL: https://www.qt.io/
+
 ### NumPy
 - License: BSD 3-Clause License
 - Copyright: NumPy Developers

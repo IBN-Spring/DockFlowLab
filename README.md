@@ -8,8 +8,8 @@
 - 支持导入 PDB / mmCIF / PDBQT / MOL2 / SDF / MOL 等结构
 - 自动修复缺失原子、按生理 pH 加氢、生成 PDBQT
 - 几何口袋检测自动定位结合位点，并用共晶配体 / 已知位点校验与兜底
-- 内置 3D 盒子编辑器：蛋白卡通模型（螺旋/折叠/loop）中显示盒子位置，
-  可拖动中心/面点或点击原子调整
+- 内置 3D 盒子编辑器：NGL Viewer 渲染接近 PyMOL 的蛋白卡通模型，盒子与
+  结合位点一目了然；可拖动中心/面点或点击原子调整
 - 输出结合能表、热图、柱状图和可离线打开的中文 HTML 报告
 - 项目目录自动整理，输入文件与计算产物分开保存
 
@@ -168,8 +168,11 @@ docs/               用户、架构与打包文档
 本项目使用 MIT License。内置的 AutoDock Vina 1.2.7 由 The Scripps Research
 Institute 以 Apache License 2.0 发布，许可见
 [src/dockflowlab/resources/vina/LICENSE](src/dockflowlab/resources/vina/LICENSE)。
+3D 盒子视图使用 NGL Viewer 2.5.0（MIT），许可见
+[src/dockflowlab/resources/ngl/LICENSE](src/dockflowlab/resources/ngl/LICENSE)。
+完整的第三方依赖列表见 [LICENSE](LICENSE)。
 
 ## 致谢
 
-AutoDock Vina、Meeko、RDKit、OpenBabel、OpenMM、PDBFixer、PySide6、
-matplotlib 与 pandas 的开发者与维护者。
+AutoDock Vina、NGL Viewer、Meeko、RDKit、OpenBabel、OpenMM、PDBFixer、
+PySide6 / QtWebEngine、matplotlib 与 pandas 的开发者与维护者。

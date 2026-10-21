@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import locale
 from pathlib import Path
 
@@ -16,6 +17,7 @@ from dockflowlab.ui.box_view import (
     BOX_FACES,
     _SSE_COLORS,
     assign_secondary_structure,
+    atoms_to_pdb_text,
     box_corners,
     box_handle_positions,
     cartoon_geometry,
@@ -205,6 +207,33 @@ def test_load_view_structure_reads_pdbqt(tmp_path):
     assert structure.atom_count == 6  # 两个 MODEL，各 3 个重原子
     assert structure.cartoon_faces.shape == (0, 3)
     assert len(structure.hetero_bonds) > 0
+    # PDBQT 不能直接交给 NGL，需重新生成标准 PDB 文本。
+    assert structure.pdb_text.startswith(("ATOM", "HETATM"))
+    assert structure.pdb_text.rstrip().endswith("END")
+    assert len(structure.pdb_text.splitlines()) == 7
+
+
+def test_load_view_structure_keeps_original_pdb_text(tmp_path):
+    path = make_protein_pdb(tmp_path / "protein.pdb", residues=3)
+    original = path.read_text(encoding="utf-8")
+    structure = load_view_structure(path)
+    assert structure.pdb_text == original
+
+
+def test_atoms_to_pdb_text_builds_columns(tmp_path):
+    path = make_ligand_pdbqt(tmp_path / "ligand.pdbqt")
+    atoms = pdbio.parse_pdbqt_atoms(path)
+    text = atoms_to_pdb_text(atoms)
+    lines = text.splitlines()
+    assert lines[-1] == "END"
+    atom_lines = lines[:-1]
+    assert len(atom_lines) == len(atoms)
+    for line, atom in zip(atom_lines, atoms):
+        assert len(line) <= 78
+        assert line.startswith(("ATOM", "HETATM"))
+        assert line[12:16].strip() == atom.name
+        assert line[17:20].strip() == atom.resname.upper()
+        assert line[76:78].strip() == atom.element.upper()
 
 
 def test_empty_structure_has_safe_defaults():
@@ -321,3 +350,47 @@ def test_viewer_tracks_manual_edits(qt_app):
     viewer.set_box(Box(center=(1.0, 2.0, 3.0), size=(10.0, 10.0, 10.0)), mark_manual=True)
     assert viewer.is_dirty
     viewer.deleteLater()
+
+
+def test_webengine_layout_uses_conda_library_tree(tmp_path):
+    from dockflowlab.ui.ngl_view import webengine_layout
+
+    prefix = tmp_path / "env"
+    paths = webengine_layout(prefix)
+    assert paths["resources"] == prefix / "Library/share/qt6/resources"
+    assert paths["locales"] == (
+        prefix / "Library/share/qt6/translations/qtwebengine_locales"
+    )
+    assert paths["process"] == prefix / "Library/lib/qt6/QtWebEngineProcess.exe"
+    assert paths["bin"] == prefix / "Library/bin"
+
+
+def test_box_bridge_validates_and_clamps_payload(qt_app):
+    from dockflowlab.ui.ngl_view import _Bridge
+
+    received: list[Box] = []
+    bridge = _Bridge()
+    bridge.box_edited.connect(received.append)
+
+    bridge.boxEdited(
+        json.dumps(
+            {
+                "center": [1.0, -2.0, 3.5],
+                "size": [1000.0, -4.0, 22.0],
+                "note": "拖动",
+            }
+        )
+    )
+    assert len(received) == 1
+    box = received[0]
+    assert box.center == (1.0, -2.0, 3.5)
+    assert box.size == (150.0, 5.0, 22.0)
+    assert box.source == "manual"
+    assert box.note == "拖动"
+
+    # 维度不足、非数值与 NaN 都应被忽略，不产生新的盒子。
+    bridge.boxEdited(json.dumps({"center": [1, 2], "size": [1, 2, 3]}))
+    bridge.boxEdited(json.dumps({"center": ["x", 2, 3], "size": [1, 2, 3]}))
+    bridge.boxEdited(json.dumps({"center": [float("nan"), 2, 3], "size": [1, 2, 3]}))
+    bridge.boxEdited("not json")
+    assert len(received) == 1

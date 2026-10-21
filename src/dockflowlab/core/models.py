@@ -23,6 +23,10 @@ STATUS_LABELS = {
     STATUS_FAILED: "需要处理",
 }
 
+# Vina 搜索盒的边长范围（Å）。界面输入、3D 视图拖拽与校验共用。
+MIN_BOX_SIZE = 5.0
+MAX_BOX_SIZE = 150.0
+
 
 @dataclass
 class ProjectFile:

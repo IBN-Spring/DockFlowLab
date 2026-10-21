@@ -159,6 +159,7 @@ xcrun stapler staple dist/DockFlowLab.app
 | Vina | `resources/vina/windows/vina.exe`；macOS/Linux 构建时按需收集 |
 | Matplotlib | PyInstaller 官方 hook，图表使用 Agg 后端 |
 | pyqtgraph / PyOpenGL | `collect_all` + 显式 hidden imports；运行时固定 `PYQTGRAPH_QT_LIB=PySide6`，并排除 PyQt5/PyQt6 |
+| QtWebEngine / NGL | PyInstaller 的 `hook-PySide6.QtWebEngineCore` 收集渲染进程、`resources/` 与语言包；`ngl_view.py` 在冻结包中从 `_internal/PySide6` 定位这些文件 |
 
 conda 把 Boost、OpenBabel、OpenMM、MKL 的共享库放在 `Library/bin` / `Library/lib`
 （Windows）或 `lib/`（macOS/Linux），而不是 Python 包目录，因此 spec 在分析前
@@ -181,6 +182,12 @@ conda 版 SciPy 依赖 MKL。Meeko 只需要 `scipy.spatial.cKDTree`，spec 收�
 - 默认 `MPLBACKEND=Agg`，避免图表依赖 Qt 后端；
 - 设置 `PYQTGRAPH_QT_LIB=PySide6`，确保 3D 盒子视图不会误用 PyQt5/PyQt6。
 
+3D 盒子编辑器内嵌 QtWebEngine。PyInstaller 会额外收集约 280 MB 的渲染进程与
+资源（主要是 `Qt6WebEngineCore.dll`、ICU 数据、`resources/` 与语言包）；
+`ngl_view.py` 在导入 QtWebEngine 前设置 `QTWEBENGINE_RESOURCES_PATH`、
+`QTWEBENGINE_LOCALES_PATH` 与 `QTWEBENGINEPROCESS_PATH`，并把 `_internal`、
+`_internal/PySide6` 加入 Windows 的 `PATH`，供子进程查找 Qt DLL。
+
 ## 常见打包问题
 
 **`ImportError: attempted relative import with no known parent package`**
@@ -195,14 +202,24 @@ PyInstaller 把入口脚本当作顶层 `__main__`。入口必须用绝对导入
 确认 `scipy` 未被 `excludes` 排除，且 `mkl_rt.2.dll` 在 `_internal` 中。回退本身
 是可用路径，但会缺少 RDKit 力场优化与 Meeko 的原子类型细节。
 
+**打包后 3D 盒子视图空白，或 `QtWebEngineProcess` 立即退出**
+检查 `_internal/PySide6/` 下是否有 `QtWebEngineProcess.exe`、`resources/` 与
+`translations/qtwebengine_locales/`，以及帮助进程旁的 `qt.conf`。缺少时查看
+PyInstaller 日志中 QtWebEngine hook 的输出。程序在 conda/冻结布局下会自动追加
+`--no-sandbox`；若手动设置 `QTWEBENGINE_CHROMIUM_FLAGS`，请保留该标志，否则渲染
+进程可能因 DLL 搜索失败而退出。若只是显卡驱动不支持 WebGL，程序会自动回退到
+原生 OpenGL 视图。
+
 **PySide6 启动时报找不到平台插件**
 确认没有手动删除 `_internal/PySide6/plugins/platforms`；conda 与 pip 混装 Qt 时
 先清理环境再重建。
 
 **安装包过大**
-onedir 中包含 Qt、RDKit、OpenMM、OpenBabel 与数据文件，Windows 版实测约
-450–500 MB，压缩后约 170 MB。可以通过排除未使用的 Qt 模块/插件进一步缩小，但不要删除
-`platforms`、`styles`、`imageformats` 与 `translations`。
+onedir 中包含 Qt、QtWebEngine、RDKit、OpenMM、OpenBabel 与数据文件，Windows
+版实测约 800 MB，压缩后约 310 MB；其中 QtWebEngine（`Qt6WebEngineCore.dll`、
+ICU、`resources/` 与语言包）约占 280 MB。可以通过排除未使用的 Qt 模块/插件
+进一步缩小，但不要删除 `platforms`、`styles`、`imageformats`、`translations`
+与 QtWebEngine 的 `resources` / `qtwebengine_locales`。
 
 ## 发布清单
 

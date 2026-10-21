@@ -15,6 +15,7 @@
 
 from __future__ import annotations
 
+import logging
 import math
 import os
 from dataclasses import dataclass
@@ -40,7 +41,21 @@ from PySide6.QtWidgets import (
 )
 
 from ..core import pdbio
-from ..core.models import Box
+from ..core.models import MAX_BOX_SIZE, MIN_BOX_SIZE, Box
+
+log = logging.getLogger("box_view")
+
+# NGL Viewer（QtWebEngine）优先；导入本模块时就会完成 QtWebEngine 的初始化，
+# 这对 PySide6 是必需的（必须在 QApplication 创建之前导入）。
+# 打包损坏、WebGL 不可用或缺少资源时自动回退到下面的 pyqtgraph 渲染。
+try:  # pragma: no cover - 取决于运行环境是否包含 QtWebEngine
+    from .ngl_view import NGL_AVAILABLE, NglBoxView
+except Exception as _ngl_exc:  # pragma: no cover - 缺少 QtWebEngine 的降级路径
+    NGL_AVAILABLE = False
+    NglBoxView = None  # type: ignore[assignment]
+    _NGL_ERROR = str(_ngl_exc)
+else:
+    _NGL_ERROR = ""
 
 try:  # pragma: no cover - 取决于运行环境是否安装 OpenGL 依赖
     import pyqtgraph.opengl as gl
@@ -57,8 +72,6 @@ except Exception as exc:  # pragma: no cover - 仅用于降级提示
     _GL_ERROR = str(exc)
 
 
-MIN_BOX_SIZE = 5.0
-MAX_BOX_SIZE = 150.0
 HANDLE_PICK_PX = 16.0
 ATOM_PICK_PX = 14.0
 
@@ -131,6 +144,8 @@ class ViewStructure:
     radius: float
     atom_count: int = 0
     is_empty: bool = False
+    # 原始 PDB 文本，供 NGL Viewer 加载；OpenGL 回退路径不使用。
+    pdb_text: str = ""
 
 
 def empty_structure() -> ViewStructure:
@@ -147,6 +162,7 @@ def empty_structure() -> ViewStructure:
         radius=20.0,
         atom_count=0,
         is_empty=True,
+        pdb_text="",
     )
 
 
@@ -777,14 +793,40 @@ def _hetero_bonds(
     return positions[np.concatenate(pairs)].astype(np.float32)
 
 
+def atoms_to_pdb_text(atoms: Sequence[pdbio.Atom]) -> str:
+    """把解析后的原子写成 PDB 文本，供 NGL 等只认 PDB 的查看器使用。
+
+    PDBQT 的原子类型与电荷位于额外列，NGL 无法直接解析；这里保留原始
+    ATOM/HETATM 记录、残基名与链，重新生成标准 PDB 行。
+    """
+    lines: list[str] = []
+    for serial, atom in enumerate(atoms, start=1):
+        line = pdbio.make_pdb_atom_line(
+            atom, serial, atom.resname, atom.chain or "A", atom.resseq
+        )
+        record = atom.record if atom.record in {"ATOM", "HETATM"} else "HETATM"
+        # 记录名固定占 6 列，不能用 4 字符的 "ATOM" 直接拼接，否则整行左移。
+        lines.append(f"{record:<6}{line[6:]}")
+    if not lines:
+        return ""
+    lines.append("END")
+    return "\n".join(lines) + "\n"
+
+
 def load_view_structure(path: str | Path) -> ViewStructure:
     """读取 PDB/PDBQT，生成卡通模型、原子点与配体线段。"""
     path = Path(path)
     fmt = pdbio.detect_format(path)
+    pdb_text = ""
     if fmt == "pdbqt":
         atoms = pdbio.parse_pdbqt_atoms(path)
+        pdb_text = atoms_to_pdb_text(atoms)
     elif fmt in {"pdb", "ent"}:
         atoms = pdbio.parse_atoms(path, first_model=True)
+        try:
+            pdb_text = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:  # pragma: no cover - 文件在解析后被删除
+            pdb_text = atoms_to_pdb_text(atoms)
     else:
         atoms = []
 
@@ -846,6 +888,7 @@ def load_view_structure(path: str | Path) -> ViewStructure:
         radius=max(radius, 5.0),
         atom_count=len(heavy),
         is_empty=False,
+        pdb_text=pdb_text,
     )
 
 
@@ -1515,7 +1558,7 @@ else:  # pragma: no cover - 仅在缺少 pyqtgraph/PyOpenGL 时使用
 # 带数值输入的面板
 # ----------------------------------------------------------------------
 class BoxViewer(QWidget):
-    """3D 视图 + 数值输入。缺 OpenGL 时只显示数值输入。"""
+    """3D 视图 + 数值输入。NGL 优先，失败时回退到 pyqtgraph。"""
 
     auto_requested = Signal()
     box_edited = Signal(object)
@@ -1525,34 +1568,97 @@ class BoxViewer(QWidget):
         self._box: Box | None = None
         self._dirty = False
         self._syncing = False
+        self._structure: ViewStructure | None = None
+        self._placeholder: QLabel | None = None
 
-        layout = QHBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(14)
+        self._layout = QHBoxLayout(self)
+        self._layout.setContentsMargins(0, 0, 0, 0)
+        self._layout.setSpacing(14)
 
-        if _HAS_GL:
-            self.view: BoxGLView | None = BoxGLView(self)
-            self.view.box_changed.connect(self._on_view_box_changed)
-            layout.addWidget(self.view, 3)
+        self.view = self._create_ngl_view()
+        if self.view is None and _HAS_GL:
+            self.view = self._create_gl_view()
+        if self.view is not None:
+            self._layout.addWidget(self.view, 3)
         else:
-            self.view = None
-            placeholder = QLabel(
-                "3D 视图不可用（缺少 pyqtgraph / PyOpenGL 或 OpenGL 驱动）。\n"
-                "仍可在右侧输入盒子中心与边长，保存与对接不受影响。\n\n"
-                f"技术信息：{_GL_ERROR}"
-            )
-            placeholder.setObjectName("Muted")
-            placeholder.setWordWrap(True)
-            placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            placeholder.setFrameShape(QFrame.Shape.StyledPanel)
-            placeholder.setMinimumWidth(420)
-            placeholder.setStyleSheet(
-                "background:#0b1016; color:#aab4c4; border:1px solid #1d2836;"
-                "border-radius:8px; padding:24px;"
-            )
-            layout.addWidget(placeholder, 3)
+            reason = _NGL_ERROR or _GL_ERROR or "缺少可用的 3D 渲染组件"
+            self._placeholder = self._make_placeholder(reason)
+            self._layout.addWidget(self._placeholder, 3)
 
-        layout.addWidget(self._build_panel(), 0)
+        self._layout.addWidget(self._build_panel(), 0)
+
+    # -- 视图创建与降级 ---------------------------------------------------
+    def _create_ngl_view(self):
+        if not NGL_AVAILABLE or NglBoxView is None:
+            return None
+        try:
+            view = NglBoxView(self)
+        except Exception as exc:  # pragma: no cover - WebEngine 运行时异常
+            log.warning("无法创建 NGL 视图：%s", exc)
+            return None
+        view.box_changed.connect(self._on_view_box_changed)
+        view.failed.connect(self._on_ngl_failed)
+        return view
+
+    def _create_gl_view(self):
+        if not _HAS_GL:
+            return None
+        try:
+            view = BoxGLView(self)
+        except Exception as exc:  # pragma: no cover - OpenGL 驱动异常
+            log.warning("无法创建 OpenGL 视图：%s", exc)
+            return None
+        view.box_changed.connect(self._on_view_box_changed)
+        return view
+
+    @staticmethod
+    def _make_placeholder(reason: str) -> QLabel:
+        placeholder = QLabel(
+            "3D 视图不可用（NGL / OpenGL 初始化失败）。\n"
+            "仍可在右侧输入盒子中心与边长，保存与对接不受影响。\n\n"
+            f"技术信息：{reason}"
+        )
+        placeholder.setObjectName("Muted")
+        placeholder.setWordWrap(True)
+        placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        placeholder.setFrameShape(QFrame.Shape.StyledPanel)
+        placeholder.setMinimumWidth(420)
+        placeholder.setStyleSheet(
+            "background:#0b1016; color:#aab4c4; border:1px solid #1d2836;"
+            "border-radius:8px; padding:24px;"
+        )
+        return placeholder
+
+    def _on_ngl_failed(self, message: str) -> None:
+        """NGL 初始化失败时换成 OpenGL 回退视图，保留当前结构与盒子。"""
+        if NglBoxView is None or not isinstance(self.view, NglBoxView):
+            return
+        old = self.view
+        index = self._layout.indexOf(old)
+        self.view = None
+        try:
+            old.shutdown()
+        except Exception:  # pragma: no cover - 关闭阶段信号已断开
+            pass
+        old.setParent(None)
+        old.deleteLater()
+
+        fallback = self._create_gl_view()
+        if fallback is not None:
+            self.view = fallback
+            self._layout.insertWidget(max(0, index), fallback, 3)
+            if self._structure is not None:
+                fallback.set_structure(self._structure)
+            if self._box is not None:
+                fallback.set_box(self._box, emit=False)
+            fallback.set_show_atoms(self.atom_checkbox.isChecked())
+            fallback.set_click_to_center(self.click_checkbox.isChecked())
+            if self._box is not None:
+                fallback.focus_box()
+            return
+
+        self._placeholder = self._make_placeholder(message)
+        self._layout.insertWidget(max(0, index), self._placeholder, 3)
 
     # -- panel ----------------------------------------------------------
     def _build_panel(self) -> QWidget:
@@ -1636,13 +1742,7 @@ class BoxViewer(QWidget):
         self.atom_checkbox.toggled.connect(self._set_show_atoms)
         layout.addWidget(self.atom_checkbox)
 
-        structure_legend = QLabel(
-            '<span style="color:#c7cfe0">■</span> 螺旋　'
-            '<span style="color:#aebacf">■</span> β 折叠　'
-            '<span style="color:#99a6ba">■</span> loop　'
-            '<span style="color:#fa9e38">●</span> 配体/辅因子'
-        )
-        structure_legend.setTextFormat(Qt.TextFormat.RichText)
+        structure_legend = QLabel("结构：卡通骨架 · 彩色球棍表示配体、辅因子与离子")
         structure_legend.setObjectName("Muted")
         structure_legend.setWordWrap(True)
         layout.addWidget(structure_legend)
@@ -1651,7 +1751,8 @@ class BoxViewer(QWidget):
             '<span style="color:#ffffff">●</span> 中心　'
             '<span style="color:#ff5a5a">●</span> X　'
             '<span style="color:#43d46a">●</span> Y　'
-            '<span style="color:#5f8dff">●</span> Z'
+            '<span style="color:#5f8dff">●</span> Z　'
+            '<span style="color:#7a7a8a">（深色为负方向）</span>'
         )
         legend.setTextFormat(Qt.TextFormat.RichText)
         legend.setObjectName("Muted")
@@ -1659,7 +1760,7 @@ class BoxViewer(QWidget):
 
         hint = QLabel(
             "左键拖动旋转 · 滚轮缩放 · 右键拖动平移\n"
-            "拖动白色中心点移动盒子，拖动彩色面点调整边长。\n"
+            "拖动白色中心圆环移动盒子，拖动彩色面点调整边长。\n"
             "按住 Shift 拖动面点时，盒子中心保持不变。"
         )
         hint.setObjectName("Muted")
@@ -1686,6 +1787,7 @@ class BoxViewer(QWidget):
         structure = load_view_structure(path)
         if structure.is_empty:
             return False
+        self._structure = structure
         if self.view is not None:
             self.view.set_structure(structure)
         return True
@@ -1737,9 +1839,13 @@ class BoxViewer(QWidget):
             self.view.reset_view()
 
     def show_placeholder(self, message: str) -> None:
-        if self.view is None:
-            return
-        self.view.set_structure(empty_structure())
+        if self._placeholder is not None:
+            self._placeholder.setText(message)
+        elif self.view is not None:
+            if NglBoxView is not None and isinstance(self.view, NglBoxView):
+                self.view.show_placeholder(message)
+            else:
+                self.view.set_structure(empty_structure())
         self._update_status(message)
 
     # -- events ---------------------------------------------------------
