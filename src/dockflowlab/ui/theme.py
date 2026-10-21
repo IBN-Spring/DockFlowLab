@@ -149,6 +149,11 @@ def _qss() -> str:
         background: {BG};
     }}
     QScrollArea {{ border: none; background: transparent; }}
+    /* 滚动区内容默认继承系统调色板；Windows 深色模式下会变成黑底。
+       设置对话框显式使用浅色背景，保证标签与输入框可读。 */
+    QScrollArea#SettingsScroll, QWidget#SettingsViewport, QWidget#SettingsBody {{
+        background: {BG};
+    }}
     QLabel {{ background: transparent; }}
 
     /* 侧栏 */

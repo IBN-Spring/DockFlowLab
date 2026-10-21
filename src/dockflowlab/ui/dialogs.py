@@ -729,10 +729,14 @@ class SettingsDialog(ScreenFittedDialog):
         # 设置项较多（三种引擎 + 路径 + 环境检查），放进滚动区，
         # 免得在字号放大后超出屏幕高度、底部按钮被裁掉。
         scroll = QScrollArea()
+        scroll.setObjectName("SettingsScroll")
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.Shape.NoFrame)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        # 视口与内容都用主题浅色，避免 Windows 深色模式下滚动区变黑。
+        scroll.viewport().setObjectName("SettingsViewport")
         content = QWidget()
+        content.setObjectName("SettingsBody")
         content_layout = QVBoxLayout(content)
         content_layout.setContentsMargins(0, 0, 0, 0)
         content_layout.setSpacing(14)
