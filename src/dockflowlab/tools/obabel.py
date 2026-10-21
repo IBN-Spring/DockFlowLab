@@ -1,7 +1,8 @@
 """OpenBabel 适配层。
 
-优先使用 OpenBabel 的 Python API（可正确处理中文路径）；若 Python 绑定不可用，
-则回退到 ``obabel`` 命令行，并在 ASCII 临时目录中转换以规避路径编码问题。
+优先使用 OpenBabel 的 Python API；若 Python 绑定不可用，则回退到 ``obabel``
+命令行，并在 ASCII 临时目录中转换以规避路径编码问题。OpenBabel 的 C++ 文件
+接口在 Windows 上不能读取非 ASCII 路径，因此遇到中文路径时直接走 CLI。
 
 支持三种安装形态：
 * conda：``<env>/Library/bin`` + ``<env>/Library/share/openbabel``（Windows）
@@ -22,7 +23,13 @@ from typing import Any, Iterable
 
 from ..errors import DependencyError
 from ..logging_setup import get_logger
-from .runtime import IS_MACOS, IS_WINDOWS, find_executable, run_process, work_directory
+from .runtime import (
+    IS_WINDOWS,
+    find_executable,
+    is_ascii_path,
+    run_process,
+    work_directory,
+)
 
 log = get_logger("obabel")
 
@@ -190,9 +197,13 @@ def _import_openbabel() -> Any | None:
 
 
 def find_obabel(executable: str = "") -> str:
+    name = "obabel.exe" if IS_WINDOWS else "obabel"
     candidates = [executable] if executable else []
     for root in _bundle_roots():
-        candidates.append(root / "bin" / ("obabel.exe" if IS_WINDOWS else "obabel"))
+        candidates.append(root / "bin" / name)
+    # openbabel-wheel 把命令行程序放在 site-packages/openbabel/bin 下。
+    for bin_dir, _ in _wheel_layouts():
+        candidates.append(bin_dir / name)
     candidates.extend(
         [
             Path(sys.prefix) / "Library" / "bin" / "obabel.exe" if IS_WINDOWS else None,
@@ -285,7 +296,12 @@ class OpenBabelAdapter:
         if not input_path.is_file():
             return False, f"输入文件不存在：{input_path.name}"
 
-        if self.has_python_api:
+        # Windows 的 OpenBabel C++ 文件接口无法打开中文路径。CLI 会先复制到
+        # ASCII 临时目录，因此这类路径直接交给 CLI，避免一次注定失败的尝试。
+        non_ascii_path = IS_WINDOWS and (
+            not is_ascii_path(input_path) or not is_ascii_path(output_path)
+        )
+        if self.has_python_api and (not non_ascii_path or not self.executable):
             ok, message = self._convert_api(
                 input_path,
                 output_path,
@@ -305,7 +321,16 @@ class OpenBabelAdapter:
                 return False, message
 
         return self._convert_cli(
-            input_path, output_path, in_format, out_format, list(options), gasteiger, rigid, gen3d
+            input_path,
+            output_path,
+            in_format,
+            out_format,
+            list(options),
+            gasteiger,
+            rigid,
+            add_hydrogens,
+            ph,
+            gen3d,
         )
 
     def _convert_api(
@@ -372,6 +397,8 @@ class OpenBabelAdapter:
         options: list[str],
         gasteiger: bool,
         rigid: bool,
+        add_hydrogens: bool,
+        ph: float,
         gen3d: bool,
     ) -> tuple[bool, str]:
         if not self.executable:
@@ -386,6 +413,9 @@ class OpenBabelAdapter:
                 args.append("-xr")
             if gasteiger:
                 args.extend(["--partialcharge", "gasteiger"])
+            if add_hydrogens:
+                # -p 按给定 pH 加氢；不能只写 -h，否则会丢掉质子化状态。
+                args.extend(["-p", f"{ph:.2f}"])
             if gen3d:
                 args.append("--gen3d")
             for option in options:
@@ -429,29 +459,6 @@ class OpenBabelAdapter:
             add_hydrogens=add_hydrogens,
             gen3d=gen3d,
         )
-
-    def minimize(self, input_path: str | Path, output_path: str | Path, *, forcefield: str = "MMFF94s", steps: int = 250) -> tuple[bool, str]:
-        """使用 OpenBabel 力场最小化（仅 Python API）。"""
-        ob = self._require()
-        with _LOCK:
-            conversion = ob.OBConversion()
-            conversion.SetInAndOutFormats(
-                Path(input_path).suffix.lstrip(".").lower(),
-                Path(output_path).suffix.lstrip(".").lower(),
-            )
-            mol = ob.OBMol()
-            if not conversion.ReadFile(mol, str(input_path)):
-                return False, "无法读取分子"
-            field = ob.OBForceField.FindForceField(forcefield)
-            if field is None or not field.Setup(mol):
-                return False, f"力场 {forcefield} 不可用"
-            field.ConjugateGradients(steps)
-            field.GetCoordinates(mol)
-            output_path = Path(output_path)
-            output_path.parent.mkdir(parents=True, exist_ok=True)
-            if not conversion.WriteFile(mol, str(output_path)):
-                return False, "无法写出最小化结果"
-        return True, f"OpenBabel {forcefield}"
 
     def doctor(self) -> dict[str, Any]:
         return {

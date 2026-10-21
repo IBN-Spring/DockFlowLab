@@ -23,6 +23,7 @@ from ..core import pdbio
 from ..core.models import Box
 from ..errors import InputError
 from ..logging_setup import get_logger
+from ..tools import rdkit_io
 from ..tools.obabel import OpenBabelAdapter, get_openbabel
 from ..tools.runtime import work_directory
 
@@ -109,15 +110,13 @@ def structure_coords(path: str | Path, obabel: OpenBabelAdapter | None = None) -
         return coords
     if fmt in {"sdf", "mol", "mol2"}:
         try:
-            from rdkit import Chem
-
             if fmt == "sdf":
-                supplier = Chem.SDMolSupplier(str(path), removeHs=True, sanitize=True)
-                mol = next((candidate for candidate in supplier if candidate is not None), None)
+                molecules, _ = rdkit_io.read_sdf_molecules(path, remove_hs=True)
+                mol = molecules[0] if molecules else None
             elif fmt == "mol":
-                mol = Chem.MolFromMolFile(str(path), removeHs=True)
+                mol, _ = rdkit_io.read_mol(path, remove_hs=True)
             else:
-                mol = Chem.MolFromMol2File(str(path), removeHs=True)
+                mol, _ = rdkit_io.read_mol2(path, remove_hs=True)
             if mol is not None and mol.GetNumConformers() > 0:
                 conformer = mol.GetConformer(0)
                 return [
@@ -126,6 +125,8 @@ def structure_coords(path: str | Path, obabel: OpenBabelAdapter | None = None) -
                 ]
         except ImportError:
             pass
+        except Exception as exc:
+            log.debug("RDKit 坐标读取失败，改用 OpenBabel：%s", exc)
         adapter = obabel or get_openbabel()
         if adapter.available:
             with work_directory("box_coords") as temp:

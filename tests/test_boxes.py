@@ -85,6 +85,18 @@ def test_structure_coords_sdf(sdf_path):
     assert all(len(point) == 3 for point in coords)
 
 
+def test_structure_coords_from_chinese_path(tmp_path, sdf_path):
+    pytest.importorskip("rdkit")
+    source = tmp_path / "桌面" / "对接 项目" / "阿司匹林.sdf"
+    source.parent.mkdir(parents=True)
+    source.write_bytes(sdf_path.read_bytes())
+
+    coords = boxes.structure_coords(source)
+
+    assert len(coords) > 10
+    assert all(len(point) == 3 for point in coords)
+
+
 def test_bad_target_raises(tmp_path, settings):
     empty = tmp_path / "empty.pdb"
     empty.write_text("END\n", encoding="utf-8")

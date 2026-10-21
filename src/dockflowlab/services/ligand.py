@@ -24,6 +24,7 @@ from ..core import pdbio
 from ..core.models import PrepOutcome
 from ..errors import DependencyError, InputError, PreparationError
 from ..logging_setup import get_logger
+from ..tools import rdkit_io
 from ..tools.obabel import OpenBabelAdapter, get_openbabel
 from ..tools.runtime import work_directory
 
@@ -78,13 +79,9 @@ def read_molecule(path: str | Path, obabel: OpenBabelAdapter | None = None) -> t
     mol = None
 
     if fmt == "sdf":
-        supplier = Chem.SDMolSupplier(str(path), removeHs=False, sanitize=True)
-        mols = [candidate for candidate in supplier if candidate is not None]
-        if not mols:
-            supplier = Chem.SDMolSupplier(str(path), removeHs=False, sanitize=False)
-            mols = [candidate for candidate in supplier if candidate is not None]
-            if mols:
-                warnings.append("SDF 结构存在化学价态问题，已按宽松模式读取")
+        mols, loose = rdkit_io.read_sdf_molecules(path, remove_hs=False)
+        if loose and mols:
+            warnings.append("SDF 结构存在化学价态问题，已按宽松模式读取")
         if mols:
             # 多记录 SDF 按文件顺序取第一条，与界面提示保持一致；需要批量
             # 筛选时请把记录拆成单独文件后分别导入。
@@ -92,17 +89,15 @@ def read_molecule(path: str | Path, obabel: OpenBabelAdapter | None = None) -> t
             if len(mols) > 1:
                 warnings.append(f"SDF 包含 {len(mols)} 条记录，已选择第一条")
     elif fmt == "mol":
-        mol = Chem.MolFromMolFile(str(path), removeHs=False, sanitize=True)
-        if mol is None:
-            mol = Chem.MolFromMolFile(str(path), removeHs=False, sanitize=False)
-            if mol is not None:
-                warnings.append("MOL 结构存在化学价态问题，已按宽松模式读取")
+        mol, loose = rdkit_io.read_mol(path, remove_hs=False)
+        if loose and mol is not None:
+            warnings.append("MOL 结构存在化学价态问题，已按宽松模式读取")
     elif fmt == "mol2":
-        mol = Chem.MolFromMol2File(str(path), removeHs=False, sanitize=True)
-        if mol is None:
-            mol = Chem.MolFromMol2File(str(path), removeHs=False, sanitize=False)
+        mol, loose = rdkit_io.read_mol2(path, remove_hs=False)
+        if loose and mol is not None:
+            warnings.append("MOL2 结构存在化学价态问题，已按宽松模式读取")
     elif fmt == "pdb":
-        mol = Chem.MolFromPDBFile(str(path), removeHs=False, sanitize=True)
+        mol, _ = rdkit_io.read_pdb(path, remove_hs=False)
         if mol is not None and mol.GetNumAtoms() > 2 and mol.GetNumBonds() == 0:
             mol = None
     elif fmt == "smi":
@@ -126,9 +121,7 @@ def read_molecule(path: str | Path, obabel: OpenBabelAdapter | None = None) -> t
                 converted = temp / "converted.sdf"
                 ok, message = adapter.convert(path, converted, out_format="sdf")
                 if ok:
-                    mol = Chem.MolFromMolFile(str(converted), removeHs=False, sanitize=True)
-                    if mol is None:
-                        mol = Chem.MolFromMolFile(str(converted), removeHs=False, sanitize=False)
+                    mol, _ = rdkit_io.read_mol(converted, remove_hs=False)
                     if mol is not None:
                         warnings.append("已通过 OpenBabel 转换后读取结构")
         if mol is None:
@@ -222,19 +215,16 @@ def _ph_correction(mol: Any, options: LigandPrepOptions, obabel: OpenBabelAdapte
     """用 OpenBabel 的 pH 模型校正质子化状态。失败时保持原分子。"""
     if not options.ph_correction or not obabel.available:
         return mol, False
-    Chem, _, (Descriptors, _) = _rdkit()
     try:
         with work_directory("ph") as temp:
             source = temp / "input.sdf"
             output = temp / "output.sdf"
-            Chem.MolToMolFile(mol, str(source))
+            rdkit_io.write_sdf(mol, source)
             ok, _ = obabel.convert(source, output, out_format="sdf", add_hydrogens=True, ph=options.ph)
             if not ok:
                 warnings.append("生理 pH 质子化校正失败，保留输入结构的质子化状态")
                 return mol, False
-            corrected = Chem.MolFromMolFile(str(output), removeHs=False, sanitize=True)
-            if corrected is None:
-                corrected = Chem.MolFromMolFile(str(output), removeHs=False, sanitize=False)
+            corrected, _ = rdkit_io.read_mol(output, remove_hs=False)
             if corrected is None or corrected.GetNumHeavyAtoms() != mol.GetNumHeavyAtoms():
                 warnings.append("质子化校正结果异常，保留原始结构")
                 return mol, False
@@ -353,10 +343,16 @@ def prepare_ligand(
         warnings.append(f"分子较大（{heavy_atoms} 个重原子），对接搜索空间和耗时都会显著增加")
 
     _notify(progress, "补全氢原子…")
-    if mol.GetNumConformers() > 0:
-        mol = Chem.AddHs(mol, addCoords=True)
-    else:
-        mol = Chem.AddHs(mol)
+    try:
+        if mol.GetNumConformers() > 0:
+            mol = Chem.AddHs(mol, addCoords=True)
+        else:
+            mol = Chem.AddHs(mol)
+    except Exception as exc:
+        raise PreparationError(
+            f"无法为分子补全氢原子：{exc}。请检查结构中是否存在异常价态或金属原子，"
+            "也可以用 OpenBabel 先转换为 SDF 后再导入。"
+        ) from exc
 
     _notify(progress, "检查三维构象…")
     mol = _ensure_3d(mol, options, warnings)
@@ -388,7 +384,7 @@ def prepare_ligand(
         if valid:
             os.replace(temp_path, output_pdbqt)
             if output_sdf:
-                Chem.MolToMolFile(mol, str(output_sdf))
+                rdkit_io.write_sdf(mol, output_sdf)
             return PrepOutcome(
                 ok=True,
                 method="RDKit + Meeko" + (" + pH 校正" if ph_corrected else ""),
@@ -408,7 +404,7 @@ def prepare_ligand(
     with work_directory("ligand_fallback") as temp:
         source = temp / "ligand.sdf"
         try:
-            Chem.MolToMolFile(mol, str(source))
+            rdkit_io.write_sdf(mol, source)
         except Exception as exc:
             raise PreparationError(f"无法写出中间结构：{exc}") from exc
         outcome = _prepare_with_openbabel(
