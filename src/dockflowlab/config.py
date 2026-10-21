@@ -79,6 +79,7 @@ class AppSettings:
     # PyMOL 渲染
     pymol_script_dir: str = ""
     pymol_render_size: int = 1200
+    pymol_label_scale: float = 1.5
 
     # 界面
     theme: str = "light"

@@ -16,6 +16,7 @@ from dockflowlab.services.pymol_render import (
     complexes_in,
     find_renderer,
     render_complex,
+    scale_label_sizes,
     style_token,
     styles_in,
 )
@@ -71,6 +72,27 @@ def test_script_is_converted_to_system_encoding(tmp_path):
         pass
     else:
         assert "中文注释" in text
+
+
+def test_scale_label_sizes_keeps_each_scope():
+    text = (
+        "# 注释\n"
+        "set label_size, 16, hbonds\n"
+        "set label_size, 20, binding_labels\n"
+        'python\ncmd.set("label_size", 18, "labels")\npython end\n'
+    )
+    scaled = scale_label_sizes(text, 2.0)
+
+    assert "set label_size, 32.0, hbonds" in scaled
+    assert "set label_size, 40.0, binding_labels" in scaled
+    assert 'cmd.set("label_size", 36.0, "labels")' in scaled
+    # 未显式设置的标签使用放大后的默认值。
+    assert scaled.startswith("set label_size, 28.0")
+
+
+def test_scale_label_sizes_is_noop_at_one():
+    text = "set label_size, 20, binding_labels\n"
+    assert scale_label_sizes(text, 1.0) == text
 
 
 def test_style_token_keeps_chinese_and_folder_name(tmp_path):
@@ -177,6 +199,7 @@ def test_render_page_payload_and_selection_order(qt_app, tmp_path):
     page.set_script_dir(scripts)
     page.set_workspace(workspace, [])
     page.set_render_size(900)
+    page.set_label_scale(2.0)
     page._select_all()
     assert [path.name for path in page.selected_scripts()] == ["全局.txt", "细节.pml"]
     assert page.render_button.isEnabled()
@@ -186,6 +209,7 @@ def test_render_page_payload_and_selection_order(qt_app, tmp_path):
     page._emit_render()
 
     assert captured["width"] == 900
+    assert captured["label_scale"] == 2.0
     assert captured["complex_path"] == str(complex_file)
     assert [item["label"] for item in captured["scripts"]] == [
         "橙色风格/全局.txt",

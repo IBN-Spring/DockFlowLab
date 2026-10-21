@@ -110,6 +110,7 @@ class MainWindow(QMainWindow):
         self.welcome_page.set_recent(self.settings.recent_workspaces)
         self.prepare_page.ph_spin.setValue(self.settings.add_hydrogens_ph)
         self.render_page.set_render_size(self.settings.pymol_render_size)
+        self.render_page.set_label_scale(self.settings.pymol_label_scale)
         if self.settings.pymol_script_dir:
             self.render_page.set_script_dir(self.settings.pymol_script_dir)
         self.render_page.set_renderer(find_renderer(self.settings.pymol_path))
@@ -282,6 +283,7 @@ class MainWindow(QMainWindow):
         self.render_page.locate_image_requested.connect(reveal_path)
         self.render_page.script_dir_changed.connect(self._remember_script_dir)
         self.render_page.render_size_changed.connect(self._remember_render_size)
+        self.render_page.label_scale_changed.connect(self._remember_label_scale)
         self.render_page.back_requested.connect(lambda: self._navigate(4))
 
     # ------------------------------------------------------------------
@@ -916,6 +918,12 @@ class MainWindow(QMainWindow):
             self.settings.pymol_render_size = int(size)
             self.settings.save()
 
+    def _remember_label_scale(self, scale: float) -> None:
+        scale = max(0.5, min(4.0, float(scale)))
+        if abs(scale - self.settings.pymol_label_scale) > 1e-6:
+            self.settings.pymol_label_scale = scale
+            self.settings.save()
+
     def _refresh_render_page(self) -> None:
         if self.workspace is None or self._busy:
             return
@@ -945,6 +953,11 @@ class MainWindow(QMainWindow):
             return
         width = max(200, min(4000, int(payload.get("width") or 1200)))
         height = max(200, min(4000, int(payload.get("height") or width)))
+        try:
+            label_scale = float(payload.get("label_scale") or 1.5)
+        except (TypeError, ValueError):
+            label_scale = 1.5
+        label_scale = max(0.5, min(4.0, label_scale))
         total = len(scripts)
         self.render_page.start_running(total)
         self._set_busy(True)
@@ -966,6 +979,7 @@ class MainWindow(QMainWindow):
                     height=height,
                     timeout=600.0,
                     renderer=renderer,
+                    label_scale=label_scale,
                     cancel=cancel,
                     on_line=line,
                 )

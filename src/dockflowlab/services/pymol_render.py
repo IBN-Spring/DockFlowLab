@@ -41,6 +41,11 @@ DEFAULT_SIZE = 900
 MAX_SIZE = 4000
 STYLE_SUFFIXES = {".pml", ".txt"}
 
+# PyMOL 的标签字号按屏幕像素绘制，不随 ray 分辨率一起放大。以 900 像素
+# 为基准补偿：1200 像素时字号需要 ×1.33，才能保持相同的视觉比例。
+LABEL_REFERENCE_SIZE = 900
+DEFAULT_LABEL_SCALE = 1.5
+
 
 @dataclass(frozen=True)
 class ComplexFile:
@@ -168,14 +173,43 @@ def _read_script_text(path: Path) -> str:
     return data.decode("latin-1", errors="replace")
 
 
-def _write_script(path: Path, source: Path, encoding: str = "") -> None:
+def scale_label_sizes(text: str, factor: float) -> str:
+    """放大脚本里的 ``label_size`` 数值，保留原有的对象/选择范围。
+
+    PyMOL 的标签是固定像素大小：渲染分辨率提高时分子会变大，文字却不变，
+    相对就越来越小。这里直接改写脚本中的字面数值，因此
+    ``set label_size, 18, binding_labels`` 和
+    ``set label_size, 16, hbonds`` 会各自按相同倍数放大，不会把残基标签和
+    氢键距离标签压成同一字号。
+
+    脚本完全没有设置 ``label_size`` 时，在最前面补一个放大后的默认值。
+    """
+    if factor <= 0 or abs(factor - 1.0) < 1e-6:
+        return text
+
+    def _grow(match: re.Match[str]) -> str:
+        prefix, value = match.group(1), float(match.group(2))
+        return f"{prefix}{value * factor:.1f}"
+
+    text = re.sub(r"(label_size\s*,\s*)(\d+(?:\.\d+)?)", _grow, text)
+    text = re.sub(r"""(label_size["']\s*,\s*)(\d+(?:\.\d+)?)""", _grow, text)
+    # PyMOL 的默认字号是 14；放在最前面，让没有显式设置的标签也一起放大。
+    return f"set label_size, {14.0 * factor:.1f}\n" + text
+
+
+def _write_script(
+    path: Path,
+    source: Path,
+    encoding: str = "",
+    label_scale: float = 1.0,
+) -> None:
     """把 UTF-8/GBK 风格脚本转成 PyMOL 能读取的编码。
 
     用户的风格脚本通常是 UTF-8；直接 ``@`` 会在中文注释处抛
     ``UnicodeDecodeError``。这里按目标编码转写，无法编码的字符只影响
-    注释/提示文字，不影响命令。
+    注释/提示文字，不影响命令。``label_scale`` 会同步放大字号。
     """
-    text = _read_script_text(source)
+    text = scale_label_sizes(_read_script_text(source), label_scale)
     path.write_text(
         text,
         encoding=encoding or _script_encodings()[0],
@@ -238,10 +272,15 @@ def render_complex(
     height: int = DEFAULT_SIZE,
     timeout: float = 300.0,
     renderer: str = "",
+    label_scale: float = DEFAULT_LABEL_SCALE,
     cancel=None,
     on_line: Callable[[str], None] | None = None,
 ) -> RenderResult:
-    """渲染一张 PNG。返回结果始终不会抛出 PyMOL 的原生错误。"""
+    """渲染一张 PNG。返回结果始终不会抛出 PyMOL 的原生错误。
+
+    ``label_scale`` 是相对 900 像素基准的标签放大倍数；服务会再乘以
+    当前分辨率 / 900，保证不同输出尺寸下文字占比一致。
+    """
     started = time.perf_counter()
     complex_path = Path(complex_path)
     style_path = Path(style_path)
@@ -260,6 +299,7 @@ def render_complex(
     width = max(200, min(MAX_SIZE, int(width)))
     height = max(200, min(MAX_SIZE, int(height)))
     output_png.parent.mkdir(parents=True, exist_ok=True)
+    scale = max(0.1, float(label_scale)) * (width / LABEL_REFERENCE_SIZE)
 
     with work_directory("pymol_render") as temp:
         structure = temp / "complex.pdb"
@@ -284,7 +324,7 @@ def render_complex(
         process: ProcessResult | None = None
         for attempt, encoding in enumerate(encodings):
             rendered.unlink(missing_ok=True)
-            _write_script(style, style_path, encoding=encoding)
+            _write_script(style, style_path, encoding=encoding, label_scale=scale)
             process = run_process(
                 command,
                 cwd=temp,

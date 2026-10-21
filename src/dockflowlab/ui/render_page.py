@@ -33,6 +33,14 @@ SIZE_PRESETS = (
     (2400, "2400 × 2400 · 打印（较慢）"),
 )
 
+# PyMOL 标签按固定像素绘制；900 像素为基准，放大倍数会再随分辨率补偿。
+LABEL_PRESETS = (
+    (1.0, "标准 · 随分辨率缩放"),
+    (1.5, "大 · 推荐"),
+    (2.0, "特大"),
+    (3.0, "超大"),
+)
+
 
 class ImagePreview(QLabel):
     """按可用空间等比缩放的预览图，避免大图把页面撑开。"""
@@ -87,6 +95,7 @@ class RenderPage(Page):
     locate_image_requested = Signal(str)
     script_dir_changed = Signal(str)
     render_size_changed = Signal(int)
+    label_scale_changed = Signal(float)
     back_requested = Signal()
 
     def __init__(self) -> None:
@@ -225,8 +234,24 @@ class RenderPage(Page):
         row.addWidget(self.size_combo)
         row.addStretch(1)
         card.add_layout(row)
+
+        label_row = QHBoxLayout()
+        label_row.setSpacing(10)
+        label_row.addWidget(QLabel("标签字号"))
+        self.label_combo = QComboBox()
+        for scale, label in LABEL_PRESETS:
+            self.label_combo.addItem(label, scale)
+        self.label_combo.setCurrentIndex(self.label_combo.findData(1.5))
+        self.label_combo.setMinimumWidth(280)
+        self.label_combo.currentIndexChanged.connect(self._on_label_scale_changed)
+        label_row.addWidget(self.label_combo)
+        label_row.addStretch(1)
+        card.add_layout(label_row)
+
         note = QLabel(
-            "无界面渲染时 PyMOL 始终使用光线追踪。900–1200 像素通常每张 1–3 秒；"
+            "PyMOL 的标签按固定像素绘制，分辨率越高相对越小；程序会按 900 像素"
+            "基准自动补偿。残基编号和氢键距离都使用同一倍数。\n"
+            "无界面渲染始终使用光线追踪：900–1200 像素通常每张 1–3 秒；"
             "带透明表面的脚本或 2400 像素可能需几十秒。"
         )
         note.setObjectName("Muted")
@@ -351,6 +376,19 @@ class RenderPage(Page):
         except (TypeError, ValueError):
             return 1200
 
+    def set_label_scale(self, scale: float) -> None:
+        index = self.label_combo.findData(float(scale))
+        if index < 0:
+            closest = min(LABEL_PRESETS, key=lambda item: abs(item[0] - float(scale)))
+            index = self.label_combo.findData(closest[0])
+        self.label_combo.setCurrentIndex(index if index >= 0 else 1)
+
+    def current_label_scale(self) -> float:
+        try:
+            return float(self.label_combo.currentData() or 1.5)
+        except (TypeError, ValueError):
+            return 1.5
+
     def current_complex(self) -> tuple[str, str, str] | None:
         data = self.complex_combo.currentData()
         if isinstance(data, (tuple, list)) and len(data) == 3:
@@ -459,6 +497,7 @@ class RenderPage(Page):
                     "output": str(output),
                 }
             )
+        label_scale = self.current_label_scale()
         self.render_size_changed.emit(size)
         self.render_requested.emit(
             {
@@ -467,6 +506,7 @@ class RenderPage(Page):
                 "ligand": ligand,
                 "width": size,
                 "height": size,
+                "label_scale": label_scale,
                 "scripts": items,
             }
         )
@@ -552,6 +592,9 @@ class RenderPage(Page):
     def _on_size_changed(self) -> None:
         self.render_size_changed.emit(self.current_size())
 
+    def _on_label_scale_changed(self) -> None:
+        self.label_scale_changed.emit(self.current_label_scale())
+
     def _update_controls(self) -> None:
         has_renderer = bool(self._renderer)
         has_complex = self.current_complex() is not None
@@ -563,6 +606,7 @@ class RenderPage(Page):
             self.folder_edit,
             self.script_list,
             self.size_combo,
+            self.label_combo,
             self.result_combo,
         ):
             widget.setEnabled(not self._busy)
