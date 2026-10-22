@@ -684,6 +684,9 @@ Apple 公证，首次打开需要这一步。若仍被拦截，可在终端执�
 问题复现所需的信息、日志位置、测试命令和代码约定。请不要上传未公开的受体结构、患者数据
 或实验室内部资料。
 
+也可以加入**生信交流群（QQ 群）：306484855**，交流结构准备、对接参数与结果解读。提问时
+请尽量附上软件版本、报错信息和复现步骤；同样请不要上传未公开的结构或隐私数据。
+
 ## 许可与致谢
 
 本项目使用 [MIT License](LICENSE)。
@@ -722,5 +725,6 @@ Apple 公证，首次打开需要这一步。若仍被拦截，可在终端执�
   <b>如果 DockFlowLab 帮你省下了一个下午的格式转换，欢迎点一个 Star ⭐</b><br><br>
   <a href="https://github.com/IBN-Spring/DockFlowLab">GitHub</a> ·
   <a href="https://gitee.com/spiral_IBN/dock-flow-lab">Gitee</a> ·
-  <a href="https://github.com/IBN-Spring/DockFlowLab/issues">问题反馈</a>
+  <a href="https://github.com/IBN-Spring/DockFlowLab/issues">问题反馈</a> ·
+  生信交流群（QQ）306484855
 </p>
