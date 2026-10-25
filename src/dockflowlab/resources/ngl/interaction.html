@@ -22,6 +22,20 @@
       "Hiragino Sans GB", system-ui, sans-serif;
   }
   #viewport { position: absolute; inset: 0; }
+  #leaders {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    overflow: visible;
+    pointer-events: none;
+  }
+  #leaders line {
+    stroke: #98a2b3;
+    stroke-width: 1.15;
+    stroke-linecap: round;
+  }
+  #leaders circle { stroke-width: 1.6; }
   #labels { position: absolute; inset: 0; pointer-events: none; overflow: hidden; }
 
   .contact-label {
@@ -41,7 +55,7 @@
     font-size: 12px;
     line-height: 1.2;
     white-space: nowrap;
-    transform: translate(-50%, -50%);
+    transform: translate(0, -50%);
     will-change: left, top;
     opacity: 0;
     transition: opacity .14s ease;
@@ -145,6 +159,7 @@
 </head>
 <body>
 <div id="viewport"></div>
+<svg id="leaders" xmlns="http://www.w3.org/2000/svg"></svg>
 <div id="labels"></div>
 <div id="legend">
   <span class="title">相互作用</span>
@@ -181,6 +196,12 @@
     hydrophobic: "疏水作用",
     vdw: "范德华接触"
   };
+
+  function kindColorCss(kind) {
+    const rgb = KIND_RGB[kind] || KIND_RGB.vdw;
+    return "rgb(" + Math.round(rgb[0] * 255) + "," +
+      Math.round(rgb[1] * 255) + "," + Math.round(rgb[2] * 255) + ")";
+  }
   const TEAL = 0x1f9d8f;
   const LIGAND_PURPLE = 0x8b5cf6;
   const PROTEIN_GRAY = 0x9daabc;
@@ -198,8 +219,10 @@
   let labelsVisible = true;
   let labelItems = [];
 
+  const SVG_NS = "http://www.w3.org/2000/svg";
   const messageEl = document.getElementById("message");
   const labelsEl = document.getElementById("labels");
+  const leadersEl = document.getElementById("leaders");
   const viewportEl = document.getElementById("viewport");
   const legendItems = Array.from(document.querySelectorAll("#legend .item"));
 
@@ -237,6 +260,7 @@
   function clearLabels() {
     labelItems = [];
     while (labelsEl.firstChild) labelsEl.removeChild(labelsEl.firstChild);
+    while (leadersEl.firstChild) leadersEl.removeChild(leadersEl.firstChild);
   }
 
   function clearScene() {
@@ -332,7 +356,27 @@
     element.appendChild(kind);
     element.appendChild(distance);
     labelsEl.appendChild(element);
-    labelItems.push({ element: element, item: item });
+
+    // 引线单独画在 SVG 层：标签固定在视图两侧，用细线指向接触原子。
+    const line = document.createElementNS(SVG_NS, "line");
+    line.style.display = "none";
+    const anchorDot = document.createElementNS(SVG_NS, "circle");
+    anchorDot.setAttribute("r", "3.2");
+    anchorDot.setAttribute("fill", "#ffffff");
+    anchorDot.setAttribute("stroke", kindColorCss(item.kind));
+    anchorDot.style.display = "none";
+    leadersEl.appendChild(line);
+    leadersEl.appendChild(anchorDot);
+
+    labelItems.push({
+      element: element,
+      item: item,
+      line: line,
+      anchorDot: anchorDot,
+      // 卡片尺寸不会随相机变化，先量一次，旋转时只更新位置。
+      width: Math.max(80, element.offsetWidth || 120),
+      height: Math.max(24, element.offsetHeight || 26)
+    });
     return element;
   }
 
@@ -530,59 +574,128 @@
     };
   }
 
+  function clamp(value, low, high) {
+    const ceiling = Math.max(low, high);
+    return Math.min(Math.max(value, low), ceiling);
+  }
+
+  function hideLeaders() {
+    labelItems.forEach(function (entry) {
+      if (entry.line) entry.line.style.display = "none";
+      if (entry.anchorDot) entry.anchorDot.style.display = "none";
+    });
+  }
+
+  function layoutColumn(entries, side, viewWidth, viewHeight) {
+    if (!entries.length) return;
+    const margin = 14;
+    const top = 16;
+    // 左下角图例、右下角操作提示不能被标签压住。
+    const bottom = Math.max(top + 40, viewHeight - (side === "left" ? 108 : 48));
+
+    entries.forEach(function (entry) {
+      entry.desiredY = clamp(
+        entry.anchor.y,
+        top + entry.height / 2,
+        bottom - entry.height / 2
+      );
+    });
+    entries.sort(function (a, b) { return a.desiredY - b.desiredY; });
+
+    if (entries.length === 1) {
+      entries[0].y = entries[0].desiredY;
+    } else {
+      const gap = 9;
+      let maxHeight = 24;
+      entries.forEach(function (entry) {
+        maxHeight = Math.max(maxHeight, entry.height);
+      });
+      const minSpan = (maxHeight + gap) * (entries.length - 1);
+      const desiredSpan =
+        entries[entries.length - 1].desiredY - entries[0].desiredY;
+      const maxSpan = Math.max(0, bottom - top - maxHeight);
+      // 先保证互不重叠；空间足够时再让标签尽量靠近各自的锚点。
+      const span = Math.max(
+        0, Math.min(maxSpan, Math.max(minSpan, desiredSpan))
+      );
+      const startLow = top + maxHeight / 2;
+      const startHigh = bottom - maxHeight / 2 - span;
+      const start = clamp(entries[0].desiredY, startLow, startHigh);
+      entries.forEach(function (entry, index) {
+        entry.y = start + (span * index) / (entries.length - 1);
+      });
+    }
+
+    entries.forEach(function (entry) {
+      let x;
+      if (side === "left") {
+        x = margin;
+        entry.leaderX = x + entry.width + 4;
+      } else {
+        x = Math.max(margin, viewWidth - margin - entry.width);
+        entry.leaderX = x - 4;
+      }
+      entry.x = x;
+      entry.element.style.left = x.toFixed(1) + "px";
+      entry.element.style.top = entry.y.toFixed(1) + "px";
+    });
+  }
+
   function updateLabels() {
+    hideLeaders();
+    labelItems.forEach(function (entry) {
+      entry.element.style.visibility = "hidden";
+    });
     if (!stage || !labelItems.length) return;
+    if (!labelsVisible) return;
+
     const scale = canvasScale();
     const viewWidth = labelsEl.clientWidth;
     const viewHeight = labelsEl.clientHeight;
-    const placed = [];
+    if (viewWidth < 20 || viewHeight < 20) return;
+
+    const entries = [];
     labelItems.forEach(function (entry) {
       const item = entry.item;
-      const element = entry.element;
-      if (!labelsVisible || !visibility[item.kind]) return;
-      const anchor = stage.viewerControls.getPositionOnCanvas(vec(item.proteinCoord));
-      const ligand = stage.viewerControls.getPositionOnCanvas(vec(item.ligandCoord));
-      let x = Number(anchor.x) * scale.x;
-      let y = Number(anchor.y) * scale.y;
+      if (!visibility[item.kind]) return;
+      const position = stage.viewerControls.getPositionOnCanvas(
+        vec(item.proteinCoord)
+      );
+      const x = Number(position.x) * scale.x;
+      const y = Number(position.y) * scale.y;
       if (!isFinite(x) || !isFinite(y)) return;
-
-      // 卡片外移一点，让虚线连接不被标签完全盖住；再限制在画布内，
-      // 底部留出图例与操作提示的空间。
-      const lx = Number(ligand.x) * scale.x;
-      const ly = Number(ligand.y) * scale.y;
-      const dx = x - lx;
-      const dy = y - ly;
-      const length = Math.sqrt(dx * dx + dy * dy);
-      if (length > 0.5) {
-        x += (dx / length) * 34;
-        y += (dy / length) * 34;
+      // 锚点转到视图外时不再画标签，避免引线贴着边缘乱跑。
+      if (x < -80 || x > viewWidth + 80 || y < -80 || y > viewHeight + 80) {
+        return;
       }
+      entry.anchor = { x: x, y: y };
+      entries.push(entry);
+    });
+    if (!entries.length) return;
 
-      const width = Math.max(80, element.offsetWidth || 120);
-      const height = Math.max(24, element.offsetHeight || 24);
-      const halfWidth = width / 2;
-      x = Math.min(
-        Math.max(x, halfWidth + 10),
-        Math.max(halfWidth + 10, viewWidth - halfWidth - 10)
-      );
-      y = Math.min(
-        Math.max(y, height / 2 + 8),
-        Math.max(height / 2 + 8, viewHeight - 92)
-      );
+    // 以所有锚点的水平中心分左右两列；标签固定在列上，引线负责指向。
+    let sumX = 0;
+    entries.forEach(function (entry) { sumX += entry.anchor.x; });
+    const centerX = sumX / entries.length;
+    const left = [];
+    const right = [];
+    entries.forEach(function (entry) {
+      (entry.anchor.x < centerX ? left : right).push(entry);
+    });
 
-      let guard = 0;
-      while (guard < 10) {
-        const hit = placed.some(function (other) {
-          return Math.abs(other.x - x) < (other.width + width) / 2 + 7 &&
-            Math.abs(other.y - y) < (other.height + height) / 2 + 5;
-        });
-        if (!hit) break;
-        y += height + 6;
-        guard += 1;
-      }
-      placed.push({ x: x, y: y, width: width, height: height });
-      element.style.left = x.toFixed(1) + "px";
-      element.style.top = y.toFixed(1) + "px";
+    layoutColumn(left, "left", viewWidth, viewHeight);
+    layoutColumn(right, "right", viewWidth, viewHeight);
+
+    entries.forEach(function (entry) {
+      entry.element.style.visibility = "";
+      entry.line.setAttribute("x1", entry.leaderX.toFixed(1));
+      entry.line.setAttribute("y1", entry.y.toFixed(1));
+      entry.line.setAttribute("x2", entry.anchor.x.toFixed(1));
+      entry.line.setAttribute("y2", entry.anchor.y.toFixed(1));
+      entry.anchorDot.setAttribute("cx", entry.anchor.x.toFixed(1));
+      entry.anchorDot.setAttribute("cy", entry.anchor.y.toFixed(1));
+      entry.line.style.display = "";
+      entry.anchorDot.style.display = "";
     });
   }
 
