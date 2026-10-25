@@ -6,7 +6,7 @@
 </p>
 
 <p align="center">
-  <img alt="release" src="https://img.shields.io/badge/release-v2.2.0-2A78D6?style=flat-square">
+  <img alt="release" src="https://img.shields.io/badge/release-v2.3.0-2A78D6?style=flat-square">
   <img alt="Windows" src="https://img.shields.io/badge/Windows-10%2F11%20x64-0E2A4D?style=flat-square&logo=windows&logoColor=white">
   <img alt="macOS" src="https://img.shields.io/badge/macOS-Apple%20Silicon-0E2A4D?style=flat-square&logo=apple&logoColor=white">
   <img alt="Python" src="https://img.shields.io/badge/Python-3.10--3.12-17A897?style=flat-square&logo=python&logoColor=white">
@@ -735,7 +735,7 @@ PyMOL 是 Schrödinger, LLC 的商标，分发时请保留相应许可与声明�
   title        = {DockFlowLab: 面向非专业用户的跨平台分子对接桌面工作台},
   author       = {{IBN-Spring}},
   year         = {2026},
-  version      = {2.2.0},
+  version      = {2.3.0},
   url          = {https://github.com/IBN-Spring/DockFlowLab},
   license      = {GPL-2.0-only}
 }
