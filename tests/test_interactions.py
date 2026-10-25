@@ -15,6 +15,14 @@ def _non_zero(counts: dict[str, int]) -> dict[str, int]:
     return {kind: count for kind, count in counts.items() if count}
 
 
+def test_kind_metadata_covers_all_kinds() -> None:
+    """界面按 KIND_ORDER 列出类型，标签与提示必须齐全。"""
+    kinds = set(interactions.KIND_LABELS)
+    assert set(interactions.KIND_ORDER) == kinds
+    assert set(interactions.KIND_HINTS) == kinds
+    assert set(interactions.KIND_PRIORITY) == kinds
+
+
 def _make_contact_complex(path: Path) -> Path:
     """构造三种接触各一条、外加一个超出截断值残基的最小复合物。"""
     lines = ["HEADER    INTERACTION TEST"]

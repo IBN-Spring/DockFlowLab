@@ -9,7 +9,6 @@ from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
     QFrame,
-    QGridLayout,
     QHBoxLayout,
     QLabel,
     QPushButton,
@@ -20,6 +19,7 @@ from PySide6.QtWidgets import (
 )
 
 from ..services.interactions import (
+    KIND_HINTS,
     KIND_LABELS,
     KIND_ORDER,
     Interaction,
@@ -201,7 +201,9 @@ class InteractionDialog(ScreenFittedDialog):
         for kind in self._present_kinds:
             count = self._analysis.counts.get(kind, 0)
             check = QCheckBox(f"{KIND_LABELS[kind]} {count}")
-            check.setToolTip(f"显示或隐藏{KIND_LABELS[kind]}")
+            check.setToolTip(
+                f"显示或隐藏{KIND_LABELS[kind]}\n{KIND_HINTS[kind]}"
+            )
             check.setChecked(True)
             check.toggled.connect(
                 lambda checked, key=kind: self._toggle_kind(key, checked)
@@ -305,18 +307,42 @@ class InteractionDialog(ScreenFittedDialog):
             select_hint.setWordWrap(True)
             layout.addWidget(select_hint)
 
-        if self._present_kinds:
-            counts = QGridLayout()
-            counts.setHorizontalSpacing(10)
-            counts.setVerticalSpacing(4)
-            for index, kind in enumerate(self._present_kinds):
-                count = self._analysis.counts.get(kind, 0)
-                chip = QLabel(f"● {KIND_LABELS[kind]} {count}")
-                chip.setStyleSheet(
-                    f"color: {KIND_COLORS[kind]}; font-size: {theme.px(12)};"
+        # PLIP 能识别七种类型，全部列出：计数为 0 表示结构里没有满足条件的
+        # 接触，而不是没有分析。几何回退只覆盖它真正会判定的三类。
+        if self._analysis.engine == "plip":
+            listed_kinds = KIND_ORDER
+        else:
+            listed_kinds = ("hbond", "hydrophobic", "vdw")
+        chips: list[str] = []
+        for kind in listed_kinds:
+            count = self._analysis.counts.get(kind, 0)
+            color = KIND_COLORS[kind] if count else theme.MUTED
+            # 不换行连字符，避免「π-」与「堆积」被拆到两行。
+            label = KIND_LABELS[kind].replace("-", "‑")
+            chips.append(
+                f'<span style="color:{color};">● {label} {count}</span>'
+            )
+        counts_label = QLabel("&nbsp;&nbsp;".join(chips))
+        counts_label.setTextFormat(Qt.TextFormat.RichText)
+        counts_label.setWordWrap(True)
+        counts_label.setStyleSheet(f"font-size: {theme.px(12)};")
+        if self._analysis.engine == "plip":
+            # 几何回退的阈值与 PLIP 不同，不显示这组提示。
+            counts_label.setToolTip(
+                "\n".join(
+                    f"{KIND_LABELS[kind]}：{KIND_HINTS[kind]}"
+                    for kind in listed_kinds
                 )
-                counts.addWidget(chip, index // 3, index % 3)
-            layout.addLayout(counts)
+            )
+        layout.addWidget(counts_label)
+
+        if self._analysis.engine == "plip":
+            coverage_hint = QLabel(
+                "计数为 0 表示本次未识别到该类型；悬停可查看判定条件。"
+            )
+            coverage_hint.setObjectName("Muted")
+            coverage_hint.setWordWrap(True)
+            layout.addWidget(coverage_hint)
 
         separator = QFrame()
         separator.setFrameShape(QFrame.Shape.HLine)
