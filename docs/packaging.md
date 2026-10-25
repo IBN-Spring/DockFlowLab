@@ -7,7 +7,7 @@ DockFlowLab 使用 **PyInstaller onedir** 打包：启动速度快、DLL 与数�
 
 - Python 3.10–3.12（推荐 3.12）
 - PyInstaller 6.x
-- 与运行环境一致的化学依赖：RDKit、Meeko、OpenBabel、OpenMM、PDBFixer
+- 与运行环境一致的化学依赖：RDKit、Meeko、OpenBabel、OpenMM、PDBFixer、PLIP
 - Windows 需要 MSVC 运行库（conda 环境通常已带）
 
 推荐直接使用开发用的 conda 环境：
@@ -15,12 +15,15 @@ DockFlowLab 使用 **PyInstaller onedir** 打包：启动速度快、DLL 与数�
 ```bash
 conda create -n DockFlowLab python=3.12 -y
 conda activate DockFlowLab
-conda install -c conda-forge rdkit openbabel openmm pdbfixer pymol-open-source -y
+conda install -c conda-forge rdkit openbabel openmm pdbfixer pymol-open-source lxml -y
 pip install -e ".[dev]" meeko pyinstaller
+# PLIP 声明依赖 pip 版 openbabel；conda 已提供 OpenBabel，跳过依赖解析即可。
+pip install --no-deps plip==3.0.1
 ```
 
 构建环境需要 `pymol` / `pymol2` Python 包；缺少时安装包仍可构建，但“PyMOL 渲染”
-页会回退到查找本机 PyMOL。
+页会回退到查找本机 PyMOL。缺少 PLIP 时也能构建，但相互作用视图只会使用本地
+几何判定；spec 会在构建日志中打印是否收集到 PLIP 模块。
 
 pip 环境（macOS/Linux 更容易成功）：
 
@@ -171,6 +174,7 @@ xcrun stapler staple dist/DockFlowLab.app
 | OpenBabel | wheel 的 `openbabel/bin`；Windows conda 的 DLL、`obabel.exe`、`formats_*.obf`、`plugin_*.obf`、数据目录；macOS/Linux conda 的 `bin/obabel`、`lib/libopenbabel*`、`lib/openbabel/*` 插件与 `share/openbabel` 数据 |
 | OpenMM | `collect_all("openmm")`；Windows conda 的 `OpenMM*.dll`；macOS/Linux conda 的 `lib/libOpenMM*`；以及 CPU/Reference 插件 |
 | PDBFixer / Meeko | `collect_all` 的 Python 数据文件 |
+| PLIP | `collect_submodules("plip")`（排除 `plip.test`、`plip.visualization`、`plip.plipcmd`）+ 包元数据；主程序排除 PyMOL，避免 PLIP 辅助模块的函数级导入把 PyMOL 带进界面进程 |
 | 对接引擎 | `resources/{vina,qvina2,smina}/windows/*.exe`；macOS/Linux 构建时按 `PATH` 或 `DOCKFLOWLAB_VINA` / `DOCKFLOWLAB_QVINA2` / `DOCKFLOWLAB_SMINA` 收集 |
 | Matplotlib | PyInstaller 官方 hook，图表使用 Agg 后端 |
 | pyqtgraph / PyOpenGL | `collect_all` + 显式 hidden imports；运行时固定 `PYQTGRAPH_QT_LIB=PySide6`，并排除 PyQt5/PyQt6 |

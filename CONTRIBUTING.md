@@ -45,13 +45,18 @@
 ```bash
 conda create -n DockFlowLab python=3.12 -y
 conda activate DockFlowLab
-conda install -c conda-forge rdkit openbabel openmm pdbfixer -y
+conda install -c conda-forge rdkit openbabel openmm pdbfixer lxml -y
 pip install -e ".[dev]" meeko
+# PLIP 声明依赖 pip 版 openbabel；conda 已提供 OpenBabel，跳过依赖解析。
+pip install --no-deps plip==3.0.1
 PYTHONPATH=src python -m dockflowlab
 ```
+
+没有安装 PLIP 时，相互作用视图会自动回退到几何判定，相关测试会自动跳过。
 
 打包与平台细节见 [docs/packaging.md](docs/packaging.md)，架构说明见 [docs/architecture.md](docs/architecture.md)。
 
 ## 许可证
 
-提交代码即表示你同意以本项目的 MIT License 发布你的贡献。第三方代码或数据请单独说明许可证。
+提交代码即表示你同意以本项目的 GPL-2.0 许可发布你的贡献。第三方代码或数据请单独说明许可证，
+并确认与 GPL-2.0 兼容。

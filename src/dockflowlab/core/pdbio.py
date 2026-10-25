@@ -262,6 +262,41 @@ def infer_element(atom_name: str, resname: str, record: str) -> str:
     return ""
 
 
+# PDBQT 的元素列实际写的是 AutoDock 原子类型（如芳香碳 A、受体氧 OA）。
+# 这些类型不是元素符号：直接交给 OpenBabel/PLIP 会让它们把芳香碳当成未知
+# 元素，盐桥、疏水作用等随之漏判。读入与写出 PDB 时统一还原成元素符号。
+_AUTODOCK_ELEMENTS = {
+    "A": "C",
+    "OA": "O",
+    "OS": "O",
+    "NA": "N",
+    "NS": "N",
+    "SA": "S",
+    "HD": "H",
+    "HS": "H",
+}
+
+
+def normalize_element(
+    element: str,
+    atom_name: str = "",
+    resname: str = "",
+    record: str = "HETATM",
+) -> str:
+    """把元素列规范成元素符号；空白时按原子名推断。"""
+    raw = (element or "").strip()
+    if not raw:
+        return infer_element(atom_name, resname, record)
+    upper = raw.upper()
+    if upper in _AUTODOCK_ELEMENTS:
+        residue = (resname or "").strip().upper()
+        # ``NA`` 既是 AutoDock 的受体氮，也可能是钠离子，用残基名区分。
+        if upper == "NA" and (residue in IONS or residue in {"NA", "SOD"}):
+            return "Na"
+        return _AUTODOCK_ELEMENTS[upper]
+    return raw
+
+
 def parse_atoms(path: str | Path, *, first_model: bool = False) -> list[Atom]:
     """解析 PDB 的 ATOM/HETATM 记录，保留第一个 altloc。
 
@@ -285,9 +320,7 @@ def parse_atoms(path: str | Path, *, first_model: bool = False) -> list[Atom]:
             continue
         atom_name = line[12:16].strip()
         resname = line[17:20].strip().upper()
-        element = line[76:78].strip()
-        if not element:
-            element = infer_element(atom_name, resname, record)
+        element = normalize_element(line[76:78].strip(), atom_name, resname, record)
         atoms.append(
             Atom(
                 record=record,
@@ -324,9 +357,7 @@ def parse_pdbqt_atoms(path: str | Path) -> list[Atom]:
             continue
         atom_name = line[12:16].strip()
         resname = line[17:20].strip().upper()
-        element = line[76:78].strip()
-        if not element:
-            element = infer_element(atom_name, resname, record)
+        element = normalize_element(line[76:78].strip(), atom_name, resname, record)
         atoms.append(
             Atom(
                 record=record,
@@ -377,7 +408,7 @@ def parse_first_pose_atoms(path: str | Path) -> list[Atom]:
             continue
         atom_name = line[12:16].strip()
         resname = line[17:20].strip().upper()
-        element = line[76:78].strip() or infer_element(atom_name, resname, record)
+        element = normalize_element(line[76:78].strip(), atom_name, resname, record)
         atoms.append(
             Atom(
                 record=record,
@@ -932,9 +963,9 @@ def site_residue_coords(path: str | Path, site: Sequence[SiteResidue]) -> list[t
 # 文件写出
 # ----------------------------------------------------------------------
 def _element_for_pdb(atom: Atom) -> str:
-    element = atom.element.strip()
-    if not element:
-        element = infer_element(atom.name, atom.resname, atom.record)
+    element = normalize_element(
+        atom.element, atom.name, atom.resname, atom.record
+    )
     return element[:2].upper().rjust(2)[-2:]
 
 

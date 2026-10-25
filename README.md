@@ -10,7 +10,7 @@
   <img alt="Windows" src="https://img.shields.io/badge/Windows-10%2F11%20x64-0E2A4D?style=flat-square&logo=windows&logoColor=white">
   <img alt="macOS" src="https://img.shields.io/badge/macOS-Apple%20Silicon-0E2A4D?style=flat-square&logo=apple&logoColor=white">
   <img alt="Python" src="https://img.shields.io/badge/Python-3.10--3.12-17A897?style=flat-square&logo=python&logoColor=white">
-  <img alt="license" src="https://img.shields.io/badge/license-MIT-1F6B3A?style=flat-square">
+  <img alt="license" src="https://img.shields.io/badge/license-GPL--2.0-1F6B3A?style=flat-square">
   <a href="https://github.com/IBN-Spring/DockFlowLab/stargazers"><img alt="stars" src="https://img.shields.io/github/stars/IBN-Spring/DockFlowLab?style=flat-square&color=2A78D6&label=stars"></a>
 </p>
 
@@ -62,7 +62,8 @@ DockFlowLab 的定位是**轻量、开源、离线、打开即用**的桌面工�
 单机运行，不需要服务器、数据库、账号、授权码或联网激活；安装包内置对接引擎和 PyMOL，
 体积较大，但解压后即可使用，不需要再配置 Python 环境。
 
-- **完全免费**：MIT 许可，源码公开，个人、教学与商业使用均不收费。
+- **完全免费**：GPL-2.0 许可，源码公开，个人、教学与商业使用均不收费；
+  修改后再分发时需按 GPL-2.0 开放对应源码。
 - **数据留在本机**：结构、结果和日志只写入你选择的工作目录，不上传服务器。
 - **欢迎一起改进**：遇到问题、想要新功能，欢迎提交
   [Issue](https://github.com/IBN-Spring/DockFlowLab/issues)；能复现的问题会优先处理。
@@ -217,10 +218,14 @@ DockFlowLab 的定位是**轻量、开源、离线、打开即用**的桌面工�
 
 - 结果表包含靶点、候选分子、对接类型、最佳打分、盒子来源、状态与说明。
 - 成功结果可点 **细节** 打开 3D 相互作用视图：蛋白背景半透明显示，配体与接触残基突出标记，
-  并用虚线连接氢键、疏水作用与范德华接触；右侧同步列出残基、原子与距离。点击列表条目或
-  3D 标签会加粗对应的金色虚线并定位该残基，也可分别隐藏三类接触、3D 标签或整个右侧列表。
-- 相互作用按重原子距离与元素类型做几何判定，用于快速复核构象；没有计算氢键 D–H…A 角度，
-  正式分析建议使用 PLIP 等专门工具。
+  并用虚线连接氢键、疏水作用、盐桥、π-堆积、π-阳离子、卤键与范德华接触；右侧同步列出残基、
+  原子与距离。点击列表条目或 3D 标签会加粗对应的金色虚线并定位该残基，也可按类型隐藏接触、
+  3D 标签或整个右侧列表。
+- 相互作用由内置 **PLIP 3.0.1** 分析：自动补全极性氢后按供体/受体几何识别氢键、盐桥与
+  π 相互作用，疏水作用与卤键按 PLIP 规则判定；范德华接触由本地几何判定补充。PLIP 不可用
+  或分析失败时自动回退到纯几何判定，界面仍可正常使用。
+- 复合物由 PDBQT 转换而来时缺少键级与形式电荷，盐桥和 π 相互作用可能被低估；结果适合
+  快速复核构象，定量结论仍建议结合实验或更高精度方法。
 - 结合能热图与柱状图使用统一的科学配色；支持修改标题、靶点显示名称、配色方案。
 - 热图可导出 **PNG / SVG / PDF**：PNG 用于报告与预览，SVG 可继续编辑，PDF 适合打印。
 - 一键生成**可离线打开的中文 HTML 报告**，包含参数、结果、图表与评分含义说明。
@@ -406,7 +411,7 @@ DockFlowLab 的 Python 代码为独立实现，未直接复制 fpocket、P2Rank�
 的桌面工作流。底层物理模型、评分函数和文件格式并不是本项目发明的。
 
 如果你认为某段实现与现有项目过于相似、或某篇文献应被补充引用，欢迎提交 Issue 指出；
-我们会核对代码来源并更新署名。MIT 许可只覆盖本项目的原创代码，内置第三方组件仍遵循各自
+我们会核对代码来源并更新署名。GPL-2.0 覆盖本项目的原创代码，内置第三方组件仍遵循各自
 的许可证，详见[许可与致谢](#许可与致谢)。
 
 ### 主要参考文献
@@ -521,7 +526,10 @@ dockflowlab-cli fetch D:/docking/demo pubchem "aspirin" --kind ligand
 conda create -n DockFlowLab python=3.12 -y
 conda activate DockFlowLab
 conda install -c conda-forge rdkit openbabel openmm pdbfixer -y
-pip install -e ".[dev]" meeko
+pip install -e ".[dev]" meeko lxml
+# PLIP 声明依赖 pip 版 openbabel（会尝试源码编译）；conda 已提供 OpenBabel，
+# 因此这里跳过它的依赖解析。
+pip install --no-deps plip==3.0.1
 python -m dockflowlab
 ```
 
@@ -529,10 +537,12 @@ python -m dockflowlab
 
 ```bash
 python -m pip install -e ".[chem,dev]"
+pip install --no-deps plip==3.0.1
 python -m dockflowlab
 ```
 
-Windows 上若 `openmm` 没有可用的 wheel，请改用上面的 conda 命令。
+Windows 上若 `openmm` 没有可用的 wheel，请改用上面的 conda 命令。没有安装 PLIP 时程序
+仍然可用，相互作用视图会回退到本地几何判定。
 
 运行测试：
 
@@ -669,8 +679,9 @@ Apple 公证，首次打开需要这一步。若仍被拦截，可在终端执�
 <details>
 <summary><b>可以用于商业项目吗？</b></summary>
 
-本项目使用 MIT License，可以商用。内置的 Vina / QuickVina 2 / Smina 以 Apache License 2.0
-发布，PyMOL 是 Schrödinger, LLC 的商标，分发时请保留相应许可与声明。
+本项目使用 GPL-2.0，允许商用；修改后再分发时需要按 GPL-2.0 提供对应源码。内置的
+Vina / QuickVina 2 / Smina 以 Apache License 2.0 发布，PLIP 以 GPL-2.0 发布，
+PyMOL 是 Schrödinger, LLC 的商标，分发时请保留相应许可与声明。
 
 </details>
 
@@ -694,17 +705,19 @@ Apple 公证，首次打开需要这一步。若仍被拦截，可在终端执�
 
 ## 许可与致谢
 
-本项目使用 [MIT License](LICENSE)。
+本项目使用 [GNU General Public License v2](LICENSE)（GPL-2.0）。
 
 - 内置 **AutoDock Vina 1.2.7**、**QuickVina 2.1**、**Smina 2020.12.10** 均由
   The Scripps Research Institute 以 Apache License 2.0 发布，许可文件见
   [vina](src/dockflowlab/resources/vina/LICENSE)、
   [qvina2](src/dockflowlab/resources/qvina2/LICENSE)、
   [smina](src/dockflowlab/resources/smina/LICENSE)。
+- 相互作用分析使用 **PLIP 3.0.1**（GPL-2.0，PharmAI GmbH / 原开发团队），
+  许可见 [PLIP 仓库](https://github.com/pharmai/plip)。
 - 3D 盒子视图使用 **NGL Viewer 2.5.0**（MIT），许可见
   [ngl](src/dockflowlab/resources/ngl/LICENSE)。
-- 感谢 AutoDock Vina、QuickVina 2、Smina、NGL Viewer、Meeko、RDKit、OpenBabel、OpenMM、
-  PDBFixer、PySide6 / QtWebEngine、matplotlib 与 pandas 的开发者与维护者。
+- 感谢 AutoDock Vina、QuickVina 2、Smina、PLIP、NGL Viewer、Meeko、RDKit、OpenBabel、
+  OpenMM、PDBFixer、PySide6 / QtWebEngine、matplotlib 与 pandas 的开发者与维护者。
 
 > Includes PyMOL(TM). PyMOL is a trademark of Schrodinger, LLC.
 
@@ -720,7 +733,7 @@ Apple 公证，首次打开需要这一步。若仍被拦截，可在终端执�
   year         = {2026},
   version      = {2.2.0},
   url          = {https://github.com/IBN-Spring/DockFlowLab},
-  license      = {MIT}
+  license      = {GPL-2.0-only}
 }
 ```
 

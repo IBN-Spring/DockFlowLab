@@ -10,6 +10,10 @@
     --ink: #172033;
     --muted: #6b7280;
     --hbond: #2a78d6;
+    --saltbridge: #7c3aed;
+    --pistacking: #0e8a6e;
+    --pication: #c0268a;
+    --halogen: #6b7f00;
     --hydrophobic: #d97706;
     --vdw: #7c8799;
   }
@@ -101,6 +105,10 @@
       0 4px 14px rgba(23, 32, 51, .14);
   }
   .contact-label.hbond { --c: var(--hbond); }
+  .contact-label.saltbridge { --c: var(--saltbridge); }
+  .contact-label.pistacking { --c: var(--pistacking); }
+  .contact-label.pication { --c: var(--pication); }
+  .contact-label.halogen { --c: var(--halogen); }
   .contact-label.hydrophobic { --c: var(--hydrophobic); }
   .contact-label.vdw { --c: var(--vdw); }
   .contact-label.visible { opacity: 1; }
@@ -147,6 +155,7 @@
     margin-right: 12px;
   }
   #legend .item[data-visible="false"] { opacity: .35; }
+  #legend .item[data-present="false"] { display: none; }
   #legend .swatch {
     display: inline-block;
     width: 16px;
@@ -212,6 +221,18 @@
   <span class="item" data-kind="hbond" style="--c: var(--hbond)">
     <span class="swatch"></span>氢键
   </span>
+  <span class="item" data-kind="saltbridge" style="--c: var(--saltbridge)">
+    <span class="swatch"></span>盐桥
+  </span>
+  <span class="item" data-kind="pistacking" style="--c: var(--pistacking)">
+    <span class="swatch"></span>π-堆积
+  </span>
+  <span class="item" data-kind="pication" style="--c: var(--pication)">
+    <span class="swatch"></span>π-阳离子
+  </span>
+  <span class="item" data-kind="halogen" style="--c: var(--halogen)">
+    <span class="swatch"></span>卤键
+  </span>
   <span class="item" data-kind="hydrophobic" style="--c: var(--hydrophobic)">
     <span class="swatch"></span>疏水作用
   </span>
@@ -226,22 +247,26 @@
 (function () {
   "use strict";
 
-  const KIND_COLORS = {
-    hbond: 0x2a78d6,
-    hydrophobic: 0xd97706,
-    vdw: 0x7c8799
-  };
   // NGL.Shape 的颜色参数是 0–1 的 RGB 数组，不接受整理后的整数。
   const KIND_RGB = {
     hbond: [0.165, 0.471, 0.839],
+    saltbridge: [0.486, 0.227, 0.929],
+    pistacking: [0.055, 0.541, 0.431],
+    pication: [0.753, 0.149, 0.541],
+    halogen: [0.420, 0.498, 0.000],
     hydrophobic: [0.851, 0.467, 0.024],
     vdw: [0.486, 0.529, 0.600]
   };
   const KIND_LABELS = {
     hbond: "氢键",
+    saltbridge: "盐桥",
+    pistacking: "π-堆积",
+    pication: "π-阳离子",
+    halogen: "卤键",
     hydrophobic: "疏水作用",
     vdw: "范德华接触"
   };
+  const KIND_KEYS = Object.keys(KIND_LABELS);
 
   function kindColorCss(kind) {
     const rgb = KIND_RGB[kind] || KIND_RGB.vdw;
@@ -259,9 +284,14 @@
   let data = null;
   let pendingData = null;
   let failed = false;
-  const residueReps = { hbond: [], hydrophobic: [], vdw: [] };
-  const lineComponents = { hbond: null, hydrophobic: null, vdw: null };
-  const visibility = { hbond: true, hydrophobic: true, vdw: true };
+  const residueReps = {};
+  const lineComponents = {};
+  const visibility = {};
+  KIND_KEYS.forEach(function (kind) {
+    residueReps[kind] = [];
+    lineComponents[kind] = null;
+    visibility[kind] = true;
+  });
   let labelsVisible = true;
   let labelItems = [];
   let selectedIndex = -1;
@@ -364,9 +394,9 @@
       stage.removeComponent(structureComp);
       structureComp = null;
     }
-    residueReps.hbond = [];
-    residueReps.hydrophobic = [];
-    residueReps.vdw = [];
+    KIND_KEYS.forEach(function (kind) {
+      residueReps[kind] = [];
+    });
     Object.keys(lineComponents).forEach(function (kind) {
       if (lineComponents[kind]) {
         stage.removeComponent(lineComponents[kind]);
@@ -531,6 +561,18 @@
     });
   }
 
+  // 图例只为实际出现的类型留位置，避免七种颜色全列出来。
+  function updateLegendPresence() {
+    const counts = {};
+    ((data && data.interactions) || []).forEach(function (item) {
+      counts[item.kind] = (counts[item.kind] || 0) + 1;
+    });
+    legendItems.forEach(function (item) {
+      const kind = item.getAttribute("data-kind");
+      item.setAttribute("data-present", String(Boolean(counts[kind])));
+    });
+  }
+
   function applyVisibility() {
     Object.keys(residueReps).forEach(function (kind) {
       residueReps[kind].forEach(function (rep) {
@@ -566,9 +608,10 @@
       return;
     }
 
-    visibility.hbond = true;
-    visibility.hydrophobic = true;
-    visibility.vdw = true;
+    KIND_KEYS.forEach(function (kind) {
+      visibility[kind] = true;
+    });
+    updateLegendPresence();
     applyVisibility();
 
     const blob = new Blob([pdb], { type: "text/plain" });
@@ -605,7 +648,7 @@
       buildResidues();
       buildLabels();
 
-      Object.keys(KIND_COLORS).forEach(function (kind) {
+      KIND_KEYS.forEach(function (kind) {
         lineComponents[kind] = buildInteractionShape(kind);
       });
 

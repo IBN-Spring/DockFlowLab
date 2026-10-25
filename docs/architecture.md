@@ -84,6 +84,14 @@ config.py    用户偏好（与项目无关）
   PyMOL 在中文 Windows 上按系统区域编码读取脚本，且部分构建遇到非 ASCII
   字符会崩溃，因此脚本正文保持纯 ASCII；中文路径优先转成相对路径或 8.3 短路径，
   仍不可用时复制到 ASCII 临时目录。
+- `interactions.py` / `plip_analysis.py`：对接细节视图的相互作用分析。优先用
+  内置 PLIP（补全极性氢后识别氢键、盐桥、π 堆积、π-阳离子、卤键与疏水作用）；
+  PLIP 不可用、没有识别到配体或分析失败时回退到 `interactions.py` 的纯几何
+  判定，界面始终可用。范德华接触不是 PLIP 的输出类型，由几何判定补充。两者
+  共用 `Interaction` / `InteractionAnalysis` 数据模型（按残基去重并按类型
+  优先级排序），`engine` 字段标明本次结果来自哪种方式。输入结构会先去掉已有
+  氢原子并规范元素列（旧复合物把 AutoDock 类型 ``A`` / ``OA`` 写进了元素列），
+  避免 OpenBabel 把芳香碳当成未知元素。
 - `pymol_render.py`：把用户风格脚本套用到复合物并输出 PNG。PyMOL 始终以
   `-cq` 独立进程运行，不导入主进程，也不长期驻留；安装包使用内置的
   `PyMOLRunner.exe`（`packaging/pymol_runner.py`，`pymol2` 无界面会话），
@@ -185,9 +193,10 @@ logs/session.log
 ## 打包集成
 
 `packaging/dockflowlab.spec` 收集 Python 包、Qt、RDKit/Boost、OpenMM 插件、
-OpenBabel DLL/格式插件/数据、PyMOL 与 Vina 等资源。PyMOL 通过第二个
+OpenBabel DLL/格式插件/数据、PLIP 模块、PyMOL 与 Vina 等资源。PyMOL 通过第二个
 `Analysis` 生成 `PyMOLRunner.exe`，与主程序共用 `_internal`，避免把 PyMOL
-载入界面进程。运行时钩子 `rthook_dockflowlab.py` 设置：
+载入界面进程；主程序则排除 PyMOL，防止 PLIP 辅助模块里的函数级导入把它带进
+界面进程。运行时钩子 `rthook_dockflowlab.py` 设置：
 
 - `BABEL_DATADIR`、`BABEL_LIBDIR`
 - `OPENMM_PLUGIN_DIR`
@@ -207,6 +216,9 @@ OpenBabel DLL/格式插件/数据、PyMOL 与 Vina 等资源。PyMOL 通过第�
   网格、结构加载、PDBQT → PDB 文本转换、NGL 桥接参数校验与钳制、QtWebEngine
   路径探测、PyMOL 脚本的 ASCII 与中文路径处理、数值输入与自动推荐的状态同步。
 - `tests/test_analysis_report.py`：结果汇总与自包含报告。
+- `tests/test_interactions.py` / `tests/test_plip_analysis.py`：几何分类与按残基
+  去重、PLIP 输入文本整理（元素规范化与去氢）、去重/截断、未安装 PLIP 时的
+  回退，以及 PLIP 可用时的端到端分析（未安装则跳过）。
 - `tests/test_engines.py`：三种引擎的命令构建、Smina 输出解析、卡死检测、
   自动回退与打包环境的 OpenBabel 搜索路径。
 - `tests/test_download.py`：用 mock 网络验证格式回退。

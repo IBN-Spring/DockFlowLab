@@ -11,6 +11,10 @@ from dockflowlab.services import interactions
 from .factories import atom_line
 
 
+def _non_zero(counts: dict[str, int]) -> dict[str, int]:
+    return {kind: count for kind, count in counts.items() if count}
+
+
 def _make_contact_complex(path: Path) -> Path:
     """构造三种接触各一条、外加一个超出截断值残基的最小复合物。"""
     lines = ["HEADER    INTERACTION TEST"]
@@ -63,7 +67,7 @@ def test_classifies_hbond_hydrophobic_and_vdw(tmp_path):
     assert result.interactions[0].distance == pytest.approx(3.2, abs=1e-6)
     assert result.interactions[1].distance == pytest.approx(3.5, abs=1e-6)
     assert result.interactions[2].distance == pytest.approx(3.9, abs=1e-6)
-    assert result.counts == {"hbond": 1, "hydrophobic": 1, "vdw": 1}
+    assert _non_zero(result.counts) == {"hbond": 1, "hydrophobic": 1, "vdw": 1}
     assert "氢键 1" in result.summary
     assert result.ligand_atoms == 2
     assert result.ligand_selection == "[LIG] and :L"
@@ -102,7 +106,7 @@ def test_truncates_and_reports(tmp_path):
     assert len(result.interactions) == 2
     assert result.total_residues == 3
     assert result.truncated is True
-    assert result.counts == {"hbond": 1, "hydrophobic": 1, "vdw": 0}
+    assert _non_zero(result.counts) == {"hbond": 1, "hydrophobic": 1}
     assert any("仅展示" in warning for warning in result.warnings)
     assert "仅显示前 2 条" in result.summary
 

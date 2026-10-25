@@ -7,9 +7,9 @@
 * 范德华接触：其余重原子对，距离 ≤ 4.2 Å。
 
 没有氢原子坐标时无法计算 D–H…A 角度，因此氢键只按重原子距离和元素类型
-判定。结果用于 3D 展示和结果复核，不替代 PLIP、Discovery Studio 等专门的
-相互作用分析工具。每个残基只保留一条最具代表性的接触，避免几十条线把
-视图淹没。
+判定。这里的几何判定是 PLIP 不可用时的回退路径；正常安装会优先使用
+:mod:`dockflowlab.services.plip_analysis` 中的 PLIP 分析。每个残基只保留
+一条最具代表性的接触，避免几十条线把视图淹没。
 """
 
 from __future__ import annotations
@@ -32,9 +32,32 @@ HYDROPHOBIC_ELEMENTS = {"C", "S"}
 KIND_LABELS = {
     "hbond": "氢键",
     "hydrophobic": "疏水作用",
+    "saltbridge": "盐桥",
+    "pistacking": "π-堆积",
+    "pication": "π-阳离子",
+    "halogen": "卤键",
     "vdw": "范德华接触",
 }
-KIND_PRIORITY = {"hbond": 0, "hydrophobic": 1, "vdw": 2}
+# 界面上的排列顺序：先保留原有的三类，再展示 PLIP 扩展类型。
+KIND_ORDER = (
+    "hbond",
+    "hydrophobic",
+    "saltbridge",
+    "pistacking",
+    "pication",
+    "halogen",
+    "vdw",
+)
+# 同一残基有多条相互作用时，保留优先级最高的一条。
+KIND_PRIORITY = {
+    "hbond": 0,
+    "saltbridge": 1,
+    "pistacking": 2,
+    "pication": 3,
+    "halogen": 4,
+    "hydrophobic": 5,
+    "vdw": 6,
+}
 
 
 @dataclass(frozen=True)
@@ -102,6 +125,8 @@ class InteractionAnalysis:
     ligand_atoms: int = 0
     receptor_residues: int = 0
     warnings: list[str] = field(default_factory=list)
+    # "plip" 表示主体结果由 PLIP 给出，"geometric" 表示本地几何判定。
+    engine: str = "geometric"
 
     @property
     def ok(self) -> bool:
@@ -113,7 +138,7 @@ class InteractionAnalysis:
             return "未检测到可展示的相互作用"
         parts = [
             f"{KIND_LABELS[key]} {self.counts[key]}"
-            for key in ("hbond", "hydrophobic", "vdw")
+            for key in KIND_ORDER
             if self.counts.get(key)
         ]
         text = f"{len(self.interactions)} 条相互作用"
@@ -133,6 +158,7 @@ class InteractionAnalysis:
             "ligandAtoms": self.ligand_atoms,
             "receptorResidues": self.receptor_residues,
             "warnings": list(self.warnings),
+            "engine": self.engine,
         }
 
 
@@ -165,6 +191,11 @@ def _ligand_atoms(atoms: Sequence[pdbio.Atom]) -> list[pdbio.Atom]:
         and atom.resname not in pdbio.IONS
         and atom.resname not in pdbio.ADDITIVES
     ]
+
+
+def find_ligand_atoms(atoms: Sequence[pdbio.Atom]) -> list[pdbio.Atom]:
+    """公开的配体识别入口，供 PLIP 分析复用。"""
+    return _ligand_atoms(atoms)
 
 
 def _receptor_atoms(

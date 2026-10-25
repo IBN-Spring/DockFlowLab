@@ -27,7 +27,7 @@ import shutil
 import sys
 from pathlib import Path
 
-from PyInstaller.utils.hooks import collect_all, copy_metadata
+from PyInstaller.utils.hooks import collect_all, collect_submodules, copy_metadata
 
 ROOT = Path(SPECPATH).resolve().parent
 SRC = ROOT / "src"
@@ -72,11 +72,33 @@ for distribution in (
     "requests",
     "psutil",
     "pymol",
+    "plip",
 ):
     try:
         datas += copy_metadata(distribution)
     except Exception:
         pass
+
+
+# ----------------------------------------------------------------------
+# PLIP：相互作用分析（GPL-2.0）
+# ----------------------------------------------------------------------
+# PLIP 是运行时按需导入的纯 Python 包，PyInstaller 看不到引用，必须显式
+# 收集。可视化/命令行/测试模块不参与分析，排除以减小体积；它们内部的
+# ``import pymol`` 由主程序的 excludes 挡住（渲染在 PyMOLRunner 中完成）。
+try:
+    plip_hidden = collect_submodules(
+        "plip",
+        filter=lambda name: not (
+            name.startswith("plip.test")
+            or name.startswith("plip.visualization")
+            or name == "plip.plipcmd"
+        ),
+    )
+    hiddenimports += plip_hidden
+    print(f"[spec] PLIP：收集 {len(plip_hidden)} 个模块")
+except Exception as exc:  # pragma: no cover - 构建期诊断
+    print(f"[spec] 提示：未找到 PLIP，安装包将回退到几何判定：{exc}")
 
 
 # ----------------------------------------------------------------------
@@ -423,7 +445,9 @@ a = Analysis(
     hiddenimports=hiddenimports,
     hookspath=[str(ROOT / "packaging" / "hooks")],
     runtime_hooks=[str(ROOT / "packaging" / "runtime_hooks" / "rthook_dockflowlab.py")],
-    excludes=excludes,
+    # PLIP 的辅助模块里有函数级 ``import pymol``，主程序用不到；排除后
+    # 避免把整套 PyMOL 再塞进界面进程（渲染由 PyMOLRunner 负责）。
+    excludes=excludes + ["pymol", "pymol2", "chempy"],
     noarchive=False,
 )
 

@@ -6,8 +6,10 @@ from pathlib import Path
 
 from PySide6.QtCore import QSize, Qt, Signal
 from PySide6.QtWidgets import (
+    QApplication,
     QCheckBox,
     QFrame,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
     QPushButton,
@@ -19,20 +21,24 @@ from PySide6.QtWidgets import (
 
 from ..services.interactions import (
     KIND_LABELS,
+    KIND_ORDER,
     Interaction,
     InteractionAnalysis,
-    analyze_complex,
 )
+from ..services.plip_analysis import analyze_complex_precise
 from . import theme
 from .geometry import ScreenFittedDialog
 from .interaction_view import NGL_AVAILABLE, NGL_UNAVAILABLE_REASON, InteractionView
 
 KIND_COLORS = {
     "hbond": "#2a78d6",
+    "saltbridge": "#7c3aed",
+    "pistacking": "#0e8a6e",
+    "pication": "#c0268a",
+    "halogen": "#6b7f00",
     "hydrophobic": "#d97706",
     "vdw": "#7c8799",
 }
-KIND_ORDER = ("hbond", "hydrophobic", "vdw")
 
 
 class _InteractionRow(QFrame):
@@ -72,7 +78,7 @@ class _InteractionRow(QFrame):
 
 
 class InteractionDialog(ScreenFittedDialog):
-    """显示一个对接复合物的氢键、疏水作用与范德华接触。"""
+    """显示一个对接复合物的相互作用详情。"""
 
     def __init__(
         self,
@@ -87,7 +93,14 @@ class InteractionDialog(ScreenFittedDialog):
         self._view: InteractionView | None = None
         self._shutdown_done = False
         self._complex_path = Path(complex_path)
-        self._analysis: InteractionAnalysis = analyze_complex(self._complex_path)
+        # PLIP 需要补氢和识别键级，复杂体系要一两秒；先给出等待光标。
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        try:
+            self._analysis: InteractionAnalysis = analyze_complex_precise(
+                self._complex_path
+            )
+        finally:
+            QApplication.restoreOverrideCursor()
         self._selected_index = -1
         self._rows: list[_InteractionRow] = []
         self._scroll: QScrollArea | None = None
@@ -116,10 +129,12 @@ class InteractionDialog(ScreenFittedDialog):
         title.setWordWrap(True)
         root.addWidget(title)
 
-        subtitle = QLabel(
-            self._analysis.summary
-            + " · 基于配体周围 4.4 Å 内的重原子几何接触"
+        basis = (
+            "PLIP 结构分析"
+            if self._analysis.engine == "plip"
+            else "基于配体周围 4.4 Å 内的重原子几何接触"
         )
+        subtitle = QLabel(f"{self._analysis.summary} · {basis}")
         subtitle.setObjectName("PageSubtitle")
         subtitle.setWordWrap(True)
         root.addWidget(subtitle)
@@ -172,45 +187,57 @@ class InteractionDialog(ScreenFittedDialog):
         frame_layout.addWidget(self._view_error)
         panel.addWidget(frame, 1)
 
-        controls = QHBoxLayout()
-        controls.setSpacing(10)
+        controls = QVBoxLayout()
+        controls.setSpacing(8)
+
+        # 只给实际出现的类型留开关；PLIP 新增的盐桥、π 相互作用等通常只有
+        # 少数几条，全部排出来反而让工具条显得拥挤。
+        self._present_kinds = [
+            kind for kind in KIND_ORDER if self._analysis.counts.get(kind, 0)
+        ]
+        kind_row = QHBoxLayout()
+        kind_row.setSpacing(10)
         self._checks: dict[str, QCheckBox] = {}
-        for kind in KIND_ORDER:
+        for kind in self._present_kinds:
             count = self._analysis.counts.get(kind, 0)
             check = QCheckBox(f"{KIND_LABELS[kind]} {count}")
             check.setToolTip(f"显示或隐藏{KIND_LABELS[kind]}")
-            check.setChecked(count > 0)
-            check.setEnabled(count > 0)
+            check.setChecked(True)
             check.toggled.connect(
                 lambda checked, key=kind: self._toggle_kind(key, checked)
             )
             self._checks[kind] = check
-            controls.addWidget(check)
-        controls.addStretch(1)
+            kind_row.addWidget(check)
+        kind_row.addStretch(1)
+        controls.addLayout(kind_row)
 
+        action_row = QHBoxLayout()
+        action_row.setSpacing(10)
         self._labels_check = QCheckBox("显示 3D 标签")
         self._labels_check.setToolTip("隐藏后只保留结构与接触连线")
         self._labels_check.setChecked(True)
         self._labels_check.toggled.connect(self._toggle_labels)
-        controls.addWidget(self._labels_check)
+        action_row.addWidget(self._labels_check)
 
         self._list_check = QCheckBox("显示列表")
         self._list_check.setToolTip("隐藏右侧列表，给 3D 视图更多空间")
         self._list_check.setChecked(True)
         self._list_check.toggled.connect(self._toggle_list)
-        controls.addWidget(self._list_check)
+        action_row.addWidget(self._list_check)
 
+        action_row.addStretch(1)
         reset = QPushButton("重置视角")
         reset.setObjectName("Small")
         reset.clicked.connect(self._reset_view)
-        controls.addWidget(reset)
+        action_row.addWidget(reset)
 
         # 右侧列表隐藏后，用这个按钮代替列表底部的“关闭”。
         self._fallback_close = QPushButton("关闭")
         self._fallback_close.setObjectName("Small")
         self._fallback_close.clicked.connect(self._close)
         self._fallback_close.setVisible(False)
-        controls.addWidget(self._fallback_close)
+        action_row.addWidget(self._fallback_close)
+        controls.addLayout(action_row)
         panel.addLayout(controls)
 
         self._view_hint = QLabel(
@@ -278,17 +305,18 @@ class InteractionDialog(ScreenFittedDialog):
             select_hint.setWordWrap(True)
             layout.addWidget(select_hint)
 
-        counts = QHBoxLayout()
-        counts.setSpacing(10)
-        for kind in KIND_ORDER:
-            count = self._analysis.counts.get(kind, 0)
-            chip = QLabel(f"● {KIND_LABELS[kind]} {count}")
-            chip.setStyleSheet(
-                f"color: {KIND_COLORS[kind]}; font-size: {theme.px(12)};"
-            )
-            counts.addWidget(chip)
-        counts.addStretch(1)
-        layout.addLayout(counts)
+        if self._present_kinds:
+            counts = QGridLayout()
+            counts.setHorizontalSpacing(10)
+            counts.setVerticalSpacing(4)
+            for index, kind in enumerate(self._present_kinds):
+                count = self._analysis.counts.get(kind, 0)
+                chip = QLabel(f"● {KIND_LABELS[kind]} {count}")
+                chip.setStyleSheet(
+                    f"color: {KIND_COLORS[kind]}; font-size: {theme.px(12)};"
+                )
+                counts.addWidget(chip, index // 3, index % 3)
+            layout.addLayout(counts)
 
         separator = QFrame()
         separator.setFrameShape(QFrame.Shape.HLine)
@@ -317,10 +345,17 @@ class InteractionDialog(ScreenFittedDialog):
                 self._rows.append(row)
                 body_layout.addWidget(row)
         else:
-            empty = QLabel(
-                "配体周围 4.4 Å 内没有可展示的蛋白残基接触。\n"
-                "请检查对接构象或盒子位置，必要时重新对接。"
-            )
+            if self._analysis.engine == "plip":
+                empty_text = (
+                    "PLIP 未在该复合物中检测到可展示的相互作用。\n"
+                    "请检查对接构象或盒子位置，必要时重新对接。"
+                )
+            else:
+                empty_text = (
+                    "配体周围 4.4 Å 内没有可展示的蛋白残基接触。\n"
+                    "请检查对接构象或盒子位置，必要时重新对接。"
+                )
+            empty = QLabel(empty_text)
             empty.setObjectName("Muted")
             empty.setWordWrap(True)
             body_layout.addWidget(empty)
@@ -334,12 +369,20 @@ class InteractionDialog(ScreenFittedDialog):
             warning_label.setWordWrap(True)
             layout.addWidget(warning_label)
 
-        caveat = QLabel(
-            "判定方式：氢键按 N/O/S 重原子距离 ≤ 3.6 Å 判定，"
-            "疏水作用与范德华接触按元素和距离近似。"
-            "未计算氢键 D–H…A 角度，结果适合快速复核，"
-            "正式分析建议使用 PLIP 等专门工具。"
-        )
+        if self._analysis.engine == "plip":
+            caveat_text = (
+                "判定方式：PLIP 3.0.1 补全极性氢后识别氢键、疏水作用、盐桥、"
+                "π 相互作用与卤键，范德华接触由本地几何判定补充。"
+                "复合物由 PDBQT 转换而来时缺少键级与形式电荷，"
+                "盐桥和 π 相互作用可能被低估。"
+            )
+        else:
+            caveat_text = (
+                "判定方式：氢键按 N/O/S 重原子距离 ≤ 3.6 Å 判定，"
+                "疏水作用与范德华接触按元素和距离近似。"
+                "当前使用本地几何回退（PLIP 不可用），结果适合快速复核。"
+            )
+        caveat = QLabel(caveat_text)
         caveat.setObjectName("Muted")
         caveat.setWordWrap(True)
         layout.addWidget(caveat)
@@ -376,7 +419,8 @@ class InteractionDialog(ScreenFittedDialog):
         bar = QLabel()
         bar.setFixedSize(4, 30)
         bar.setStyleSheet(
-            f"background: {KIND_COLORS[interaction.kind]}; border-radius: 2px;"
+            f"background: {KIND_COLORS.get(interaction.kind, '#7c8799')};"
+            " border-radius: 2px;"
         )
         layout.addWidget(bar)
 

@@ -10,7 +10,7 @@ authors:
     email: "3929555374@qq.com"
 version: 2.2.0
 date-released: 2026-10-22
-license: MIT
+license: GPL-2.0-only
 repository-code: "https://github.com/IBN-Spring/DockFlowLab"
 url: "https://github.com/IBN-Spring/DockFlowLab"
 keywords:

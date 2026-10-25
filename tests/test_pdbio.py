@@ -62,6 +62,36 @@ def test_synthetic_protein_and_ligand_site(tmp_path):
     assert pdbio.infer_element("CA", "CA", "HETATM") == "Ca"
 
 
+def test_normalize_autodock_element_types():
+    # PDBQT 的元素列会把芳香碳写成 A；交给 OpenBabel/PLIP 前必须还原。
+    assert pdbio.normalize_element("A", "C1", "LIG") == "C"
+    assert pdbio.normalize_element("OA", "O1", "LIG") == "O"
+    assert pdbio.normalize_element("SA", "S1", "LIG") == "S"
+    assert pdbio.normalize_element("HD", "H1", "LIG") == "H"
+    assert pdbio.normalize_element("NA", "N1", "LIG") == "N"
+    assert pdbio.normalize_element("NA", "NA", "NA") == "Na"
+    assert pdbio.normalize_element("", "CA", "ALA", "ATOM") == "C"
+
+
+def test_parse_pdbqt_normalizes_aromatic_carbon(tmp_path):
+    path = tmp_path / "ligand.pdbqt"
+    path.write_text(
+        "MODEL 1\n"
+        "ATOM      1  C1  LIG L   1      12.000  21.000  31.000"
+        "  1.00  0.00     0.000 A\n"
+        "ATOM      2  N1  LIG L   1      13.200  21.000  31.000"
+        "  1.00  0.00     0.000 NA\n"
+        "ENDMDL\n",
+        encoding="utf-8",
+    )
+
+    atoms = pdbio.parse_pdbqt_atoms(path)
+
+    assert [atom.element for atom in atoms] == ["C", "N"]
+    # 原始 AutoDock 类型仍保留在 atom_type 中，方便需要它的调用方。
+    assert [atom.atom_type for atom in atoms] == ["A", "NA"]
+
+
 def test_structure_kind_uses_first_model(tmp_path):
     """多模型 PDB（如 NMR 结构）只按第一个模型统计，不能累加成蛋白质。"""
     single = make_protein_pdb(tmp_path / "peptide.pdb", residues=10)
