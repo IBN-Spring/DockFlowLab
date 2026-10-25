@@ -40,6 +40,7 @@ class _Bridge(QObject):
     structure_ready = Signal()
     failed = Signal(str)
     message = Signal(str)
+    interaction_selected = Signal(int)
 
     @Slot(str)
     def viewerReady(self, payload: str) -> None:  # noqa: N802 - JS 端命名
@@ -59,6 +60,14 @@ class _Bridge(QObject):
         if message:
             log.debug("NGL：%s", message)
             self.message.emit(message)
+
+    @Slot(str)
+    def interactionSelected(self, payload: str) -> None:  # noqa: N802 - JS 端命名
+        try:
+            index = int(json.loads(payload).get("index", -1))
+        except (TypeError, ValueError, AttributeError):
+            index = -1
+        self.interaction_selected.emit(index)
 
 
 def _payload_message(payload: str, fallback: str) -> str:
@@ -99,6 +108,7 @@ class InteractionView(QWidget):
     failed = Signal(str)
     ready = Signal()
     structure_ready = Signal()
+    interaction_selected = Signal(int)
 
     READY_TIMEOUT_MS = 20000
 
@@ -128,6 +138,9 @@ class InteractionView(QWidget):
         self._bridge.structure_ready.connect(self.structure_ready)
         self._bridge.failed.connect(self._on_failed)
         self._bridge.message.connect(lambda message: log.debug("NGL：%s", message))
+        self._bridge.interaction_selected.connect(
+            self.interaction_selected.emit
+        )
         self._channel = QWebChannel(self.web_view.page())
         self._channel.registerObject("bridge", self._bridge)
         self.web_view.page().setWebChannel(self._channel)
@@ -185,6 +198,10 @@ class InteractionView(QWidget):
     def set_labels_visible(self, visible: bool) -> None:
         self._call("setLabelsVisible", bool(visible))
 
+    def select_interaction(self, index: int) -> None:
+        """高亮并定位一条接触；传入 -1 取消选中。"""
+        self._call("selectInteraction", int(index))
+
     def reset_view(self) -> None:
         self._call("resetView")
 
@@ -211,6 +228,10 @@ class InteractionView(QWidget):
             (self._bridge.ready, self._on_ready),
             (self._bridge.structure_ready, self.structure_ready),
             (self._bridge.failed, self._on_failed),
+            (
+                self._bridge.interaction_selected,
+                self.interaction_selected.emit,
+            ),
         ):
             try:
                 signal.disconnect(slot)

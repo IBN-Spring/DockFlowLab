@@ -91,6 +91,23 @@ def test_results_offer_interaction_details(qt_app, tmp_path):
     assert emitted == [("target", "ligand")]
 
 
+def test_interaction_row_is_clickable(qt_app):
+    from PySide6.QtCore import Qt
+    from PySide6.QtTest import QTest
+
+    from dockflowlab.ui.interaction_dialog import _InteractionRow
+
+    row = _InteractionRow(4)
+    emitted: list[int] = []
+    row.clicked.connect(emitted.append)
+
+    QTest.mouseClick(row, Qt.MouseButton.LeftButton)
+
+    assert emitted == [4]
+    row.set_selected(True)
+    assert row.property("selected") is True
+
+
 def test_dock_page_offers_cancel_while_busy(qt_app):
     from dockflowlab.ui.pages import DockPage
 

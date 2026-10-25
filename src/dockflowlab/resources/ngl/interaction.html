@@ -58,7 +58,20 @@
     transform: translate(0, -50%);
     will-change: left, top;
     opacity: 0;
-    transition: opacity .14s ease;
+    transition: opacity .14s ease, border-color .14s ease, box-shadow .14s ease;
+    pointer-events: auto;
+    cursor: pointer;
+  }
+  .contact-label:hover { border-color: rgba(23, 32, 51, .28); }
+  .contact-label:focus-visible {
+    outline: 2px solid #e9a13b;
+    outline-offset: 2px;
+  }
+  .contact-label.selected {
+    border-color: #e9a13b;
+    box-shadow:
+      0 0 0 2px rgba(233, 161, 59, .26),
+      0 4px 14px rgba(23, 32, 51, .14);
   }
   .contact-label.hbond { --c: var(--hbond); }
   .contact-label.hydrophobic { --c: var(--hydrophobic); }
@@ -172,9 +185,9 @@
   <span class="item" data-kind="vdw" style="--c: var(--vdw)">
     <span class="swatch"></span>范德华接触
   </span>
-  <span class="meta">蛋白背景 · 30% 不透明度</span>
+  <span class="meta">蛋白背景 · 30% 不透明度 · 金色 = 当前选中</span>
 </div>
-<div id="hint">左键旋转 · 滚轮缩放 · 右键平移 · 双击重置</div>
+<div id="hint">点击标签定位 · 双击重置</div>
 <div id="message"></div>
 <script>
 (function () {
@@ -218,12 +231,16 @@
   const visibility = { hbond: true, hydrophobic: true, vdw: true };
   let labelsVisible = true;
   let labelItems = [];
+  let selectedIndex = -1;
+  let highlightComp = null;
+  const highlightReps = [];
 
   const SVG_NS = "http://www.w3.org/2000/svg";
   const messageEl = document.getElementById("message");
   const labelsEl = document.getElementById("labels");
   const leadersEl = document.getElementById("leaders");
   const viewportEl = document.getElementById("viewport");
+  const hintEl = document.getElementById("hint");
   const legendItems = Array.from(document.querySelectorAll("#legend .item"));
 
   function post(name, payload) {
@@ -263,8 +280,89 @@
     while (leadersEl.firstChild) leadersEl.removeChild(leadersEl.firstChild);
   }
 
+  function clearHighlight() {
+    selectedIndex = -1;
+    if (stage && highlightComp) stage.removeComponent(highlightComp);
+    highlightComp = null;
+    if (structureComp) {
+      highlightReps.forEach(function (rep) {
+        try {
+          structureComp.removeRepresentation(rep);
+        } catch (err) {
+          // 结构已卸载时忽略。
+        }
+      });
+    }
+    highlightReps.length = 0;
+    labelItems.forEach(function (entry) {
+      entry.element.classList.remove("selected");
+    });
+  }
+
+  function selectInteraction(index) {
+    if (!stage || !data || !data.interactions) return;
+    const next = Number(index);
+    const valid =
+      Number.isInteger(next) && next >= 0 && next < data.interactions.length;
+    if (!valid || next === selectedIndex) {
+      clearHighlight();
+      updateLabels();
+      stage.viewer.requestRender();
+      return;
+    }
+
+    clearHighlight();
+    selectedIndex = next;
+    const item = data.interactions[next];
+
+    // 金色光点标出两端的原子，再用金色实线连起来。
+    const shape = new NGL.Shape("selected-contact", { radialSegments: 16 });
+    shape.addSphere(vec(item.proteinCoord), [1.0, 0.69, 0.13], 0.55);
+    shape.addSphere(vec(item.ligandCoord), [1.0, 0.69, 0.13], 0.42);
+    shape.addCylinder(
+      vec(item.ligandCoord),
+      vec(item.proteinCoord),
+      [1.0, 0.69, 0.13],
+      0.085
+    );
+    highlightComp = stage.addComponentFromObject(shape);
+    if (highlightComp) {
+      highlightComp.addRepresentation("buffer", { opacity: 1.0 });
+    }
+
+    // 残基叠加金色球棍，旋转时仍能一眼认出选中的位置。
+    if (structureComp && item.selection) {
+      const rep = structureComp.addRepresentation("ball+stick", {
+        sele: item.selection,
+        colorScheme: "uniform",
+        colorValue: 0xffb020,
+        radius: 0.17,
+        scale: 1.25,
+        aspectRatio: 2.2,
+        multipleBond: "symmetric"
+      });
+      if (rep) highlightReps.push(rep);
+    }
+
+    labelItems.forEach(function (entry) {
+      entry.element.classList.toggle("selected", entry.index === next);
+    });
+
+    // 镜头移到接触中心，但保留当前观察方向。
+    const mid = [
+      (Number(item.proteinCoord[0]) + Number(item.ligandCoord[0])) / 2,
+      (Number(item.proteinCoord[1]) + Number(item.ligandCoord[1])) / 2,
+      (Number(item.proteinCoord[2]) + Number(item.ligandCoord[2])) / 2
+    ];
+    stage.viewerControls.center(vec(mid));
+    stage.viewerControls.distance(24);
+    stage.viewer.requestRender();
+    updateLabels();
+  }
+
   function clearScene() {
     if (!stage) return;
+    clearHighlight();
     clearLabels();
     if (structureComp) {
       stage.removeComponent(structureComp);
@@ -337,9 +435,11 @@
     return component;
   }
 
-  function buildLabel(item) {
+  function buildLabel(item, index) {
     const element = document.createElement("div");
     element.className = "contact-label " + item.kind;
+    element.title = "点击在 3D 中高亮并定位该残基";
+    element.tabIndex = 0;
     const dot = document.createElement("span");
     dot.className = "dot";
     const residue = document.createElement("span");
@@ -355,6 +455,22 @@
     element.appendChild(residue);
     element.appendChild(kind);
     element.appendChild(distance);
+
+    function activate() {
+      selectInteraction(index);
+      post("interactionSelected", { index: selectedIndex });
+    }
+    element.addEventListener("click", function (event) {
+      event.preventDefault();
+      event.stopPropagation();
+      activate();
+    });
+    element.addEventListener("keydown", function (event) {
+      if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        activate();
+      }
+    });
     labelsEl.appendChild(element);
 
     // 引线单独画在 SVG 层：标签固定在视图两侧，用细线指向接触原子。
@@ -371,6 +487,7 @@
     labelItems.push({
       element: element,
       item: item,
+      index: index,
       line: line,
       anchorDot: anchorDot,
       // 卡片尺寸不会随相机变化，先量一次，旋转时只更新位置。
@@ -413,8 +530,8 @@
   function buildLabels() {
     clearLabels();
     if (!data || !data.interactions) return;
-    data.interactions.forEach(function (item) {
-      buildLabel(item);
+    data.interactions.forEach(function (item, index) {
+      buildLabel(item, index);
     });
   }
 
@@ -518,6 +635,7 @@
   // ------------------------------------------------------------------
   function focusScene() {
     if (!stage || !structureComp) return;
+    clearHighlight();
     const items = (data && data.interactions) || [];
     if (!items.length) {
       structureComp.autoView();
@@ -711,6 +829,9 @@
 
   function setLabelsVisible(value) {
     labelsVisible = Boolean(value);
+    hintEl.textContent = labelsVisible
+      ? "点击标签定位 · 双击重置"
+      : "双击重置";
     applyVisibility();
     updateLabels();
   }
@@ -759,12 +880,16 @@
     });
   }
 
-  viewportEl.addEventListener("dblclick", focusScene);
+  viewportEl.addEventListener("dblclick", function () {
+    focusScene();
+    post("interactionSelected", { index: -1 });
+  });
 
   window.dflInteractions = {
     setData: setData,
     setKindVisible: setKindVisible,
     setLabelsVisible: setLabelsVisible,
+    selectInteraction: selectInteraction,
     resetView: focusScene,
     syncSize: function () {
       if (!stage) return;

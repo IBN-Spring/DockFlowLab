@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import QSize, Qt
+from PySide6.QtCore import QSize, Qt, Signal
 from PySide6.QtWidgets import (
     QCheckBox,
     QFrame,
@@ -35,6 +35,42 @@ KIND_COLORS = {
 KIND_ORDER = ("hbond", "hydrophobic", "vdw")
 
 
+class _InteractionRow(QFrame):
+    """可点击的接触条目；点击后在 3D 视图中高亮对应残基。"""
+
+    clicked = Signal(int)
+
+    def __init__(self, index: int, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.index = index
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self.setAttribute(Qt.WidgetAttribute.WA_Hover, True)
+        self.setProperty("selected", False)
+
+    def set_selected(self, selected: bool) -> None:
+        if bool(self.property("selected")) == bool(selected):
+            return
+        self.setProperty("selected", bool(selected))
+        self.style().unpolish(self)
+        self.style().polish(self)
+
+    def mouseReleaseEvent(self, event) -> None:  # noqa: N802
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.clicked.emit(self.index)
+        super().mouseReleaseEvent(event)
+
+    def keyPressEvent(self, event) -> None:  # noqa: N802
+        if event.key() in (
+            Qt.Key.Key_Return,
+            Qt.Key.Key_Enter,
+            Qt.Key.Key_Space,
+        ):
+            self.clicked.emit(self.index)
+            return
+        super().keyPressEvent(event)
+
+
 class InteractionDialog(ScreenFittedDialog):
     """显示一个对接复合物的氢键、疏水作用与范德华接触。"""
 
@@ -52,6 +88,10 @@ class InteractionDialog(ScreenFittedDialog):
         self._shutdown_done = False
         self._complex_path = Path(complex_path)
         self._analysis: InteractionAnalysis = analyze_complex(self._complex_path)
+        self._selected_index = -1
+        self._rows: list[_InteractionRow] = []
+        self._scroll: QScrollArea | None = None
+        self._side_panel: QWidget | None = None
         self._pdb_text = ""
         try:
             self._pdb_text = self._complex_path.read_text(
@@ -95,6 +135,7 @@ class InteractionDialog(ScreenFittedDialog):
                 self._view = InteractionView(self)
                 self._view_holder_layout.addWidget(self._view)
                 self._view.failed.connect(self._on_view_failed)
+                self._view.interaction_selected.connect(self._on_view_selection)
                 self._view.set_data(self._analysis, self._pdb_text)
                 self._view.setVisible(True)
             except Exception as exc:  # pragma: no cover - 运行环境差异
@@ -147,20 +188,36 @@ class InteractionDialog(ScreenFittedDialog):
             controls.addWidget(check)
         controls.addStretch(1)
 
-        self._labels_check = QCheckBox("显示残基标签")
+        self._labels_check = QCheckBox("显示 3D 标签")
+        self._labels_check.setToolTip("隐藏后只保留结构与接触连线")
         self._labels_check.setChecked(True)
         self._labels_check.toggled.connect(self._toggle_labels)
         controls.addWidget(self._labels_check)
+
+        self._list_check = QCheckBox("显示列表")
+        self._list_check.setToolTip("隐藏右侧列表，给 3D 视图更多空间")
+        self._list_check.setChecked(True)
+        self._list_check.toggled.connect(self._toggle_list)
+        controls.addWidget(self._list_check)
 
         reset = QPushButton("重置视角")
         reset.setObjectName("Small")
         reset.clicked.connect(self._reset_view)
         controls.addWidget(reset)
+
+        # 右侧列表隐藏后，用这个按钮代替列表底部的“关闭”。
+        self._fallback_close = QPushButton("关闭")
+        self._fallback_close.setObjectName("Small")
+        self._fallback_close.clicked.connect(self._close)
+        self._fallback_close.setVisible(False)
+        controls.addWidget(self._fallback_close)
         panel.addLayout(controls)
 
-        hint = QLabel("左键旋转 · 滚轮缩放 · 右键平移 · 双击视图重置视角")
-        hint.setObjectName("Muted")
-        panel.addWidget(hint)
+        self._view_hint = QLabel(
+            "左键旋转 · 滚轮缩放 · 右键平移 · 点击 3D 标签也可定位"
+        )
+        self._view_hint.setObjectName("Muted")
+        panel.addWidget(self._view_hint)
         return panel
 
     def _show_view_error(self, message: str) -> None:
@@ -174,12 +231,14 @@ class InteractionDialog(ScreenFittedDialog):
         )
         self._view_error.setVisible(True)
         self._labels_check.setEnabled(False)
+        self._view_hint.setText("3D 视图不可用，仍可查看右侧接触列表。")
 
     def _on_view_failed(self, message: str) -> None:
         if self._view is not None:
             self._view.setVisible(False)
             self._view.shutdown()
             self._view = None
+        self._apply_selection(-1, notify_view=False)
         self._show_view_error(message)
 
     # ------------------------------------------------------------------
@@ -188,6 +247,7 @@ class InteractionDialog(ScreenFittedDialog):
     def _build_side_panel(self) -> QWidget:
         panel = QFrame()
         panel.setObjectName("Card")
+        self._side_panel = panel
         panel.setMinimumWidth(310)
         panel.setMaximumWidth(380)
         layout = QVBoxLayout(panel)
@@ -210,6 +270,12 @@ class InteractionDialog(ScreenFittedDialog):
         summary_label.setWordWrap(True)
         layout.addWidget(summary_label)
 
+        if total:
+            select_hint = QLabel("点击条目可在 3D 中金色高亮并定位，再次点击取消")
+            select_hint.setObjectName("Muted")
+            select_hint.setWordWrap(True)
+            layout.addWidget(select_hint)
+
         counts = QHBoxLayout()
         counts.setSpacing(10)
         for kind in KIND_ORDER:
@@ -227,7 +293,8 @@ class InteractionDialog(ScreenFittedDialog):
         separator.setStyleSheet(f"color: {theme.BORDER};")
         layout.addWidget(separator)
 
-        scroll = QScrollArea()
+        self._scroll = QScrollArea()
+        scroll = self._scroll
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.Shape.NoFrame)
         scroll.setHorizontalScrollBarPolicy(
@@ -243,8 +310,10 @@ class InteractionDialog(ScreenFittedDialog):
         body_layout.setContentsMargins(0, 0, 2, 0)
         body_layout.setSpacing(7)
         if self._analysis.interactions:
-            for interaction in self._analysis.interactions:
-                body_layout.addWidget(self._interaction_row(interaction))
+            for index, interaction in enumerate(self._analysis.interactions):
+                row = self._interaction_row(index, interaction)
+                self._rows.append(row)
+                body_layout.addWidget(row)
         else:
             empty = QLabel(
                 "配体周围 4.4 Å 内没有可展示的蛋白残基接触。\n"
@@ -279,14 +348,22 @@ class InteractionDialog(ScreenFittedDialog):
         layout.addWidget(close_button)
         return panel
 
-    def _interaction_row(self, interaction: Interaction) -> QWidget:
-        row = QFrame()
+    def _interaction_row(
+        self, index: int, interaction: Interaction
+    ) -> _InteractionRow:
+        row = _InteractionRow(index)
         row.setObjectName("InteractionRow")
         row.setStyleSheet(
             "QFrame#InteractionRow {"
             " background: #fbfbf9; border: 1px solid #ecebe5;"
             " border-radius: 8px; }"
+            "QFrame#InteractionRow:hover {"
+            " background: #f5f5ef; border-color: #d8d6cb; }"
+            "QFrame#InteractionRow[selected=\"true\"] {"
+            " background: #fff7e6; border: 1px solid #e9a13b; }"
         )
+        row.setToolTip("点击在 3D 视图中高亮并定位该残基")
+        row.clicked.connect(self._on_row_clicked)
         row.setSizePolicy(
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum
         )
@@ -328,17 +405,64 @@ class InteractionDialog(ScreenFittedDialog):
         return row
 
     # ------------------------------------------------------------------
+    # 选中与高亮
+    # ------------------------------------------------------------------
+    def _on_row_clicked(self, index: int) -> None:
+        target = -1 if index == self._selected_index else index
+        if target >= 0:
+            # 点中已隐藏的类型时自动重新显示，避免“选中了却看不到”。
+            kind = self._analysis.interactions[target].kind
+            check = self._checks.get(kind)
+            if check is not None and not check.isChecked():
+                check.setChecked(True)
+        self._apply_selection(target, notify_view=True)
+
+    def _on_view_selection(self, index: int) -> None:
+        # 从 3D 标签点击发起，只同步列表，不再回传给视图。
+        self._apply_selection(index, notify_view=False)
+
+    def _apply_selection(self, index: int, *, notify_view: bool) -> None:
+        if not 0 <= index < len(self._rows):
+            index = -1
+        if index == self._selected_index and not notify_view:
+            return
+        self._selected_index = index
+        for row_index, row in enumerate(self._rows):
+            row.set_selected(row_index == index)
+        if index >= 0 and self._scroll is not None:
+            self._scroll.ensureWidgetVisible(self._rows[index], 0, 12)
+        if notify_view and self._view is not None:
+            self._view.select_interaction(index)
+
+    # ------------------------------------------------------------------
     # 控件行为
     # ------------------------------------------------------------------
     def _toggle_kind(self, kind: str, checked: bool) -> None:
         if self._view is not None:
             self._view.set_kind_visible(kind, checked)
+        if not checked and 0 <= self._selected_index < len(
+            self._analysis.interactions
+        ):
+            selected = self._analysis.interactions[self._selected_index]
+            if selected.kind == kind:
+                self._apply_selection(-1, notify_view=True)
 
     def _toggle_labels(self, checked: bool) -> None:
         if self._view is not None:
             self._view.set_labels_visible(checked)
+        self._view_hint.setText(
+            "左键旋转 · 滚轮缩放 · 右键平移 · 点击 3D 标签也可定位"
+            if checked
+            else "左键旋转 · 滚轮缩放 · 右键平移 · 双击视图重置视角"
+        )
+
+    def _toggle_list(self, checked: bool) -> None:
+        if self._side_panel is not None:
+            self._side_panel.setVisible(checked)
+        self._fallback_close.setVisible(not checked)
 
     def _reset_view(self) -> None:
+        self._apply_selection(-1, notify_view=True)
         if self._view is not None:
             self._view.reset_view()
 
