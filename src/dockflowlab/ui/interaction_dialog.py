@@ -271,7 +271,9 @@ class InteractionDialog(ScreenFittedDialog):
         layout.addWidget(summary_label)
 
         if total:
-            select_hint = QLabel("点击条目可在 3D 中金色高亮并定位，再次点击取消")
+            select_hint = QLabel(
+                "点击条目会在 3D 中加粗金色虚线并定位，再次点击取消"
+            )
             select_hint.setObjectName("Muted")
             select_hint.setWordWrap(True)
             layout.addWidget(select_hint)
@@ -362,7 +364,7 @@ class InteractionDialog(ScreenFittedDialog):
             "QFrame#InteractionRow[selected=\"true\"] {"
             " background: #fff7e6; border: 1px solid #e9a13b; }"
         )
-        row.setToolTip("点击在 3D 视图中高亮并定位该残基")
+        row.setToolTip("点击在 3D 视图中加粗对应虚线并定位")
         row.clicked.connect(self._on_row_clicked)
         row.setSizePolicy(
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum
