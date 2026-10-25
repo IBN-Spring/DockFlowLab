@@ -417,16 +417,27 @@ class PreparePage(Page):
         self.ph_spin.setValue(7.4)
         self.ph_spin.setMaximumWidth(110)
         _plain_number(self.ph_spin)
+        self.keep_metals_check = QCheckBox("保留金属离子")
+        self.keep_metals_check.setToolTip(
+            "金属酶或金属结合位点：保留 Zn/Mg/Fe/Mn/Cu 等金属离子，"
+            "水、添加剂和共晶配体仍会移除。\n"
+            "Vina 没有专门的金属配位评分项，保留金属只影响结构环境；"
+            "配位作用请在对接细节中查看。"
+        )
         self.force_check = QCheckBox("重新准备所有条目")
         self.force_check.toggled.connect(self._update_action_state)
         option_row.addWidget(ph_label)
         option_row.addWidget(self.ph_spin)
+        option_row.addSpacing(8)
+        option_row.addWidget(self.keep_metals_check)
         option_row.addSpacing(8)
         option_row.addWidget(self.force_check)
         option_row.addStretch(1)
         options.add_layout(option_row)
         note = QLabel(
             "默认会移除结晶水、离子和添加剂，保留聚合物链；缺失的残基与原子会被补全。"
+            "研究金属酶时可勾选“保留金属离子”，此时 Zn/Mg/Fe 等金属会留在受体中，"
+            "水、添加剂和共晶配体仍会移除，配位作用会在对接细节里单独标出。"
             "蛋白、多肽与核酸使用同一套修复流程。若候选分子被识别为蛋白质或多肽，"
             "程序会提示改用专门的大分子对接工具，而不是给出不可靠的 Vina 分数。"
         )
@@ -523,6 +534,7 @@ class PreparePage(Page):
         self.prepare_button.setEnabled(False)
         self.next_button.setEnabled(False)
         self.ph_spin.setEnabled(False)
+        self.keep_metals_check.setEnabled(False)
         self.force_check.setEnabled(False)
 
     def finish_running(self, message: str, ok: bool) -> None:
@@ -531,6 +543,7 @@ class PreparePage(Page):
         # 准备失败时工作区状态可能没有变化，但“下一步”不能一直保持禁用。
         self.next_button.setEnabled(self._can_continue)
         self.ph_spin.setEnabled(True)
+        self.keep_metals_check.setEnabled(True)
         self.force_check.setEnabled(True)
 
 

@@ -119,6 +119,39 @@ def test_truncates_and_reports(tmp_path):
     assert "仅显示前 2 条" in result.summary
 
 
+def test_detects_metal_coordination_from_ligand_heteroatoms(tmp_path):
+    path = tmp_path / "metal.pdb"
+    path.write_text(
+        "\n".join(
+            [
+                atom_line("ATOM", 1, "CA", "ALA", "A", 1, 10.0, 10.0, 10.0, "C"),
+                atom_line("HETATM", 2, "ZN", "ZN", "A", 301, 0.0, 0.0, 0.0, "ZN"),
+                atom_line("HETATM", 3, "N1", "LIG", "L", 1, 1.95, 0.0, 0.0, "N"),
+                # 更近的碳原子不应形成金属配位
+                atom_line("HETATM", 4, "C1", "LIG", "L", 1, 0.0, -2.5, 0.0, "C"),
+                # 同一金属的第二个 N/O/S 配位原子也保留，但每个金属只输出一条
+                atom_line("HETATM", 5, "O2", "LIG", "L", 1, 0.0, 2.8, 0.0, "O"),
+                "END",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    result = interactions.analyze_complex(path)
+
+    assert result.ok
+    assert result.total_residues == 1
+    interaction = result.interactions[0]
+    assert interaction.kind == "metal"
+    assert interaction.residue_label == "ZN301"
+    assert interaction.protein_atom == "ZN"
+    assert interaction.ligand_atom == "N1"
+    assert interaction.distance == pytest.approx(1.95, abs=1e-6)
+    assert interaction.residue_selection == "[ZN] and 301 and :A"
+    assert _non_zero(result.counts) == {"metal": 1}
+
+
 def test_missing_complex_returns_warning(tmp_path):
     result = interactions.analyze_complex(tmp_path / "missing.pdb")
 

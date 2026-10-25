@@ -25,6 +25,7 @@ def test_settings_roundtrip_and_unknown_fields(tmp_path):
         exhaustiveness=8,
         num_modes=3,
         proxy="7897",
+        keep_metals=True,
         recent_workspaces=["/tmp/a", 123, "/tmp/b"],
         last_workspace="/tmp/a",
     )
@@ -36,6 +37,7 @@ def test_settings_roundtrip_and_unknown_fields(tmp_path):
     loaded = AppSettings.load(path)
     assert loaded.exhaustiveness == 8
     assert loaded.num_modes == 3
+    assert loaded.keep_metals is True
     assert loaded.proxy_url() == "http://127.0.0.1:7897"
     assert loaded.recent_workspaces == ["/tmp/a", "/tmp/b"]
 

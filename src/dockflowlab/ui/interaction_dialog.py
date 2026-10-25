@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
 )
 
 from ..services.interactions import (
+    GEOMETRIC_KINDS,
     KIND_HINTS,
     KIND_LABELS,
     KIND_ORDER,
@@ -32,6 +33,7 @@ from .interaction_view import NGL_AVAILABLE, NGL_UNAVAILABLE_REASON, Interaction
 
 KIND_COLORS = {
     "hbond": "#2a78d6",
+    "metal": "#0891b2",
     "saltbridge": "#7c3aed",
     "pistacking": "#0e8a6e",
     "pication": "#c0268a",
@@ -132,7 +134,7 @@ class InteractionDialog(ScreenFittedDialog):
         basis = (
             "PLIP 结构分析"
             if self._analysis.engine == "plip"
-            else "基于配体周围 4.4 Å 内的重原子几何接触"
+            else "基于配体周围 4.4 Å 内的重原子几何接触（含金属配位）"
         )
         subtitle = QLabel(f"{self._analysis.summary} · {basis}")
         subtitle.setObjectName("PageSubtitle")
@@ -307,12 +309,12 @@ class InteractionDialog(ScreenFittedDialog):
             select_hint.setWordWrap(True)
             layout.addWidget(select_hint)
 
-        # PLIP 能识别七种类型，全部列出：计数为 0 表示结构里没有满足条件的
-        # 接触，而不是没有分析。几何回退只覆盖它真正会判定的三类。
+        # PLIP 能识别八种类型，全部列出：计数为 0 表示结构里没有满足条件的
+        # 接触，而不是没有分析。几何回退只覆盖它真正会判定的类型。
         if self._analysis.engine == "plip":
             listed_kinds = KIND_ORDER
         else:
-            listed_kinds = ("hbond", "hydrophobic", "vdw")
+            listed_kinds = GEOMETRIC_KINDS
         chips: list[str] = []
         for kind in listed_kinds:
             count = self._analysis.counts.get(kind, 0)
@@ -398,13 +400,15 @@ class InteractionDialog(ScreenFittedDialog):
         if self._analysis.engine == "plip":
             caveat_text = (
                 "判定方式：PLIP 3.0.1 补全极性氢后识别氢键、疏水作用、盐桥、"
-                "π 相互作用与卤键，范德华接触由本地几何判定补充。"
+                "π 相互作用、卤键与金属配位；范德华接触和 PLIP 漏检的"
+                "配体–金属接触由本地几何判定补充（金属–N/O/S ≤ 3.0 Å）。"
                 "复合物由 PDBQT 转换而来时缺少键级与形式电荷，"
                 "盐桥和 π 相互作用可能被低估。"
             )
         else:
             caveat_text = (
                 "判定方式：氢键按 N/O/S 重原子距离 ≤ 3.6 Å 判定，"
+                "金属配位按金属–N/O/S ≤ 3.0 Å 判定，"
                 "疏水作用与范德华接触按元素和距离近似。"
                 "当前使用本地几何回退（PLIP 不可用），结果适合快速复核。"
             )

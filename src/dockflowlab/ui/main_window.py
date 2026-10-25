@@ -145,6 +145,7 @@ class MainWindow(QMainWindow):
         self._connect_signals()
         self.welcome_page.set_recent(self.settings.recent_workspaces)
         self.prepare_page.ph_spin.setValue(self.settings.add_hydrogens_ph)
+        self.prepare_page.keep_metals_check.setChecked(self.settings.keep_metals)
         self.render_page.set_render_size(self.settings.pymol_render_size)
         self.render_page.set_label_scale(self.settings.pymol_label_scale)
         if self.settings.pymol_script_dir:
@@ -468,6 +469,7 @@ class MainWindow(QMainWindow):
         self.settings.remember_workspace(root)
         self.welcome_page.set_recent(self.settings.recent_workspaces)
         self.prepare_page.ph_spin.setValue(self.settings.add_hydrogens_ph)
+        self.prepare_page.keep_metals_check.setChecked(self.settings.keep_metals)
         self._apply_settings_to_controls()
         self._refresh_all()
         self._navigate(1)
@@ -639,6 +641,9 @@ class MainWindow(QMainWindow):
         if self.workspace is None or self._busy_notice():
             return
         self.settings.add_hydrogens_ph = float(self.prepare_page.ph_spin.value())
+        self.settings.keep_metals = bool(
+            self.prepare_page.keep_metals_check.isChecked()
+        )
         self.settings.save()
         obabel = self._get_obabel()
         workspace = self.workspace

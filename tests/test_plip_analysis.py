@@ -2,12 +2,41 @@
 
 from __future__ import annotations
 
+from collections import namedtuple
+
 import pytest
 
 from dockflowlab.services import plip_analysis
 from dockflowlab.services.interactions import Interaction
 
 from .test_interactions import _make_contact_complex
+
+_Atom = namedtuple("_Atom", "type coords")
+_TargetAtom = namedtuple(
+    "_TargetAtom", "atom type location restype resnr reschain"
+)
+_MetalRecord = namedtuple(
+    "_MetalRecord",
+    "metal target restype_l resnr_l reschain_l distance",
+)
+
+
+def _metal_record(location: str = "ligand") -> _MetalRecord:
+    return _MetalRecord(
+        metal=_Atom("Zn", (0.0, 0.0, 0.0)),
+        target=_TargetAtom(
+            atom=_Atom("O", (2.05, 0.0, 0.0)),
+            type="O",
+            location=location,
+            restype="LIG",
+            resnr=1,
+            reschain="L",
+        ),
+        restype_l="ZN",
+        resnr_l=301,
+        reschain_l="A",
+        distance=2.05,
+    )
 
 
 def _interaction(
@@ -50,6 +79,26 @@ def test_prepare_complex_text_normalizes_elements_and_strips_hydrogens():
     ligand = [line for line in lines if "LIG" in line]
     assert len(ligand) == 1
     assert ligand[0][76:78].strip() == "C"
+
+
+def test_metal_converter_uses_metal_residue_for_ligand_coordination():
+    item = plip_analysis._metal(_metal_record("ligand"))
+
+    assert item is not None
+    assert item.kind == "metal"
+    assert item.residue_label == "ZN301"
+    assert item.chain == "A"
+    assert item.resseq == 301
+    assert item.protein_atom == "Zn"
+    assert item.ligand_atom == "O"
+    assert item.protein_coord == (0.0, 0.0, 0.0)
+    assert item.ligand_coord == (2.05, 0.0, 0.0)
+    assert item.distance == pytest.approx(2.05)
+
+
+def test_metal_converter_skips_protein_coordination():
+    # 金属–蛋白配位不是配体相互作用，不应进入列表。
+    assert plip_analysis._metal(_metal_record("protein.sidechain")) is None
 
 
 def test_dedupe_keeps_highest_priority_per_residue():

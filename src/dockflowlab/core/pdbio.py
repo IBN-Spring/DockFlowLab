@@ -33,6 +33,13 @@ IONS = {
     "SR", "BA", "AL", "SI", "AG", "AU", "PB", "PT", "MO", "W", "SE",
 }
 
+# 可能参与配位或催化、准备受体时值得保留的金属离子。碱金属/卤素
+# （Na、K、Cl 等）通常只是结晶条件，不在这里；它们仍属于 ``IONS``。
+METAL_IONS = {
+    "MG", "CA", "ZN", "FE", "FE2", "FE3", "MN", "CU", "CU1", "CO",
+    "NI", "CD", "HG", "SR", "BA", "AL", "AG", "AU", "PB", "PT", "MO", "W",
+}
+
 # 结晶添加剂、缓冲液、冷冻保护剂、常见糖链
 ADDITIVES = {
     "SO4", "PO4", "GOL", "EDO", "PEG", "PG4", "P6G", "1PE", "2PE", "MPD",

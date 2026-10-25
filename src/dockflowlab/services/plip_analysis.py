@@ -2,9 +2,10 @@
 
 PLIP（Protein-Ligand Interaction Profiler）以 GPL-2.0 发布：
 https://github.com/pharmai/plip 。它使用 OpenBabel 解析结构并自动补极性氢，
-能给出氢键、疏水作用、盐桥、π-堆积、π-阳离子、卤键等相互作用；范德华接触
-不是 PLIP 的输出类型，仍由 :mod:`dockflowlab.services.interactions` 的几何
-判定补充。
+能给出氢键、疏水作用、盐桥、π-堆积、π-阳离子、卤键和金属配位等相互作用；
+范德华接触不是 PLIP 的输出类型，仍由
+:mod:`dockflowlab.services.interactions` 的几何判定补充。PLIP 对金属配体
+基团的识别不完整（例如磺酰胺氮），因此几何判定还会补充配体–金属接触。
 
 PLIP 是可选依赖：未安装、结构无法识别或分析抛错时，自动回退到纯几何判定，
 界面仍然可用。
@@ -205,6 +206,46 @@ def _halogen(record: Any) -> Interaction:
     )
 
 
+def _metal(record: Any) -> Interaction | None:
+    """把 PLIP 的 metal_complex 转成配体–金属接触。
+
+    PLIP 的 ``metal_complexes`` 同时包含金属与蛋白残基、水、配体的配位。
+    这里只保留目标原子属于配体的记录；金属–蛋白配位不是配体相互作用，
+    放在“蛋白–配体相互作用”列表里会造成误解。
+    """
+    target = getattr(record, "target", None)
+    metal = getattr(record, "metal", None)
+    if target is None or metal is None:
+        return None
+    if str(getattr(target, "location", "")).strip().lower() != "ligand":
+        return None
+    target_atom = getattr(target, "atom", target)
+
+    # restype_l/resnr_l/reschain_l 描述的是金属离子本身，而不是被配位的
+    # 配体原子；列表里以 ZN301 这样的标签展示金属更直观。
+    resname = str(getattr(record, "restype_l", "") or "").strip().upper() or "MET"
+    raw_resseq = getattr(record, "resnr_l", 0)
+    try:
+        resseq = int(raw_resseq)
+    except (TypeError, ValueError):
+        resseq = 0
+    chain = str(getattr(record, "reschain_l", "") or "").strip()
+
+    return Interaction(
+        kind="metal",
+        residue_label=f"{resname}{resseq}",
+        chain=chain,
+        resseq=resseq,
+        icode="",
+        resname=resname,
+        protein_atom=_atom_name(metal),
+        ligand_atom=_atom_name(target_atom),
+        protein_coord=_coords(metal),
+        ligand_coord=_coords(target_atom),
+        distance=_distance(record, "distance"),
+    )
+
+
 _CONVERTERS = {
     "hbond_ldon": (_hbond, "hbonds_ldon"),
     "hbond_pdon": (_hbond, "hbonds_pdon"),
@@ -215,6 +256,7 @@ _CONVERTERS = {
     "pication_laro": (_pication, "pication_laro"),
     "pication_paro": (_pication, "pication_paro"),
     "halogen": (_halogen, "halogen_bonds"),
+    "metal": (_metal, "metal_complexes"),
 }
 
 
@@ -304,9 +346,12 @@ def _plip_interactions(complex_path: Path) -> list[Interaction] | None:
             records = getattr(site, attribute, None) or []
             for record in records:
                 try:
-                    interactions.append(converter(record))
+                    converted = converter(record)
                 except Exception as exc:  # pragma: no cover - 单条记录异常不影响整体
                     log.debug("跳过无法转换的 PLIP 记录 %s：%s", attribute, exc)
+                    continue
+                if converted is not None:
+                    interactions.append(converted)
         return interactions
 
 
@@ -343,16 +388,17 @@ def _with_geometry(
     items: list[Interaction],
     geometric: InteractionAnalysis,
 ) -> list[Interaction]:
-    """用几何判定补上范德华接触。
+    """用几何判定补上范德华接触和漏检的金属配位。
 
-    范德华接触不是 PLIP 的输出类型；未与 PLIP 结果覆盖同一残基的几何接触
-    会补进来，保证视图里始终能看出配体周围还有哪些残基靠得较近。
+    范德华接触不是 PLIP 的输出类型；PLIP 的金属结合基团规则也不完整
+    （例如不识别磺酰胺氮）。未与 PLIP 结果覆盖同一残基的这两类几何接触
+    会补进来。
     """
     covered = {
         (item.chain, item.resseq, item.icode, item.resname) for item in items
     }
     for item in geometric.interactions:
-        if item.kind != "vdw":
+        if item.kind not in {"vdw", "metal"}:
             continue
         key = (item.chain, item.resseq, item.icode, item.resname)
         if key in covered:

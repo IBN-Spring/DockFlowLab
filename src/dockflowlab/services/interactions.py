@@ -3,6 +3,7 @@
 这里分析的是**几何接触**，不是量子化学或实验测定的相互作用：
 
 * 氢键：两侧都是 N/O/S，且至少一侧是 N/O，重原子距离 ≤ 3.6 Å；
+* 金属配位：受体金属离子与配体 N/O/S 距离 ≤ 3.0 Å；
 * 疏水作用：两侧都是 C/S，距离 ≤ 4.4 Å；
 * 范德华接触：其余重原子对，距离 ≤ 4.2 Å。
 
@@ -24,13 +25,16 @@ from ..core import pdbio
 HBOND_MAX = 3.6
 HYDROPHOBIC_MAX = 4.4
 VDW_MAX = 4.2
+METAL_MAX = 3.0
 MAX_INTERACTIONS = 12
 
 POLAR_ELEMENTS = {"N", "O", "S"}
 HYDROPHOBIC_ELEMENTS = {"C", "S"}
+METAL_COORD_ELEMENTS = {"N", "O", "S"}
 
 KIND_LABELS = {
     "hbond": "氢键",
+    "metal": "金属配位",
     "hydrophobic": "疏水作用",
     "saltbridge": "盐桥",
     "pistacking": "π-堆积",
@@ -41,6 +45,7 @@ KIND_LABELS = {
 # 界面上的排列顺序：先保留原有的三类，再展示 PLIP 扩展类型。
 KIND_ORDER = (
     "hbond",
+    "metal",
     "hydrophobic",
     "saltbridge",
     "pistacking",
@@ -48,10 +53,13 @@ KIND_ORDER = (
     "halogen",
     "vdw",
 )
+# 几何回退真正会判定的类型（金属配位也由几何规则补充）。
+GEOMETRIC_KINDS = ("hbond", "metal", "hydrophobic", "vdw")
 # 各类型的判定要点，用作界面提示：某种类型计数为 0 表示本次结构里没有
 # 满足条件的接触，而不是没有分析。
 KIND_HINTS = {
     "hbond": "供体与受体的 N/O/S 之间符合距离与角度要求",
+    "metal": "金属离子与配体 N/O/S 原子距离 ≤ 3.0 Å；金属酶建议保留离子后对接",
     "hydrophobic": "疏水或芳香碳原子在 4.0 Å 内相互靠近",
     "saltbridge": "带相反电荷的基团中心距离在 5.5 Å 内",
     "pistacking": "两个芳香环平行或呈 T 型，中心距 3.5–5.5 Å",
@@ -62,12 +70,13 @@ KIND_HINTS = {
 # 同一残基有多条相互作用时，保留优先级最高的一条。
 KIND_PRIORITY = {
     "hbond": 0,
-    "saltbridge": 1,
-    "pistacking": 2,
-    "pication": 3,
-    "halogen": 4,
-    "hydrophobic": 5,
-    "vdw": 6,
+    "metal": 1,
+    "saltbridge": 2,
+    "pistacking": 3,
+    "pication": 4,
+    "halogen": 5,
+    "hydrophobic": 6,
+    "vdw": 7,
 }
 
 
@@ -225,6 +234,21 @@ def _receptor_atoms(
     return heavy
 
 
+def _receptor_metals(
+    atoms: Sequence[pdbio.Atom],
+    ligand: Sequence[pdbio.Atom],
+) -> list[pdbio.Atom]:
+    """找出受体一侧的金属离子；配体自身携带的金属不算。"""
+    ligand_serials = {atom.serial for atom in ligand}
+    return [
+        atom
+        for atom in atoms
+        if not atom.is_hydrogen
+        and atom.serial not in ligand_serials
+        and atom.resname.upper() in pdbio.METAL_IONS
+    ]
+
+
 def _ligand_selection(ligand: Sequence[pdbio.Atom]) -> str:
     """生成 NGL 选择表达式。
 
@@ -297,6 +321,7 @@ def analyze_complex(
     receptor = _receptor_atoms(atoms, ligand)
     if not receptor:
         return InteractionAnalysis(warnings=["没有在复合物中识别到受体原子"])
+    metals = _receptor_metals(atoms, ligand)
 
     try:
         import numpy as np
@@ -345,6 +370,37 @@ def analyze_complex(
                 distance=distance,
             )
             rank = (KIND_PRIORITY[kind], distance)
+            previous = best.get(key)
+            if previous is None or rank < previous[0]:
+                best[key] = (rank, candidate)
+
+    # 金属配位：PLIP 对配体金属结合基团的识别并不完整（例如磺酰胺 N
+    # 不会被当作 metal-binding），这里直接按金属–配体 N/O/S 距离补充。
+    for metal_atom in metals:
+        key = metal_atom.residue_key
+        for ligand_atom in ligand:
+            ligand_element = _element(ligand_atom)
+            if ligand_element not in METAL_COORD_ELEMENTS:
+                continue
+            distance = float(math.dist(metal_atom.coord, ligand_atom.coord))
+            if distance > METAL_MAX:
+                continue
+            candidate = Interaction(
+                kind="metal",
+                residue_label=(
+                    f"{metal_atom.resname}{metal_atom.resseq}{metal_atom.icode}"
+                ).strip(),
+                chain=metal_atom.chain,
+                resseq=metal_atom.resseq,
+                icode=metal_atom.icode,
+                resname=metal_atom.resname,
+                protein_atom=metal_atom.name or _element(metal_atom),
+                ligand_atom=ligand_atom.name or ligand_element,
+                protein_coord=metal_atom.coord,
+                ligand_coord=ligand_atom.coord,
+                distance=distance,
+            )
+            rank = (KIND_PRIORITY["metal"], distance)
             previous = best.get(key)
             if previous is None or rank < previous[0]:
                 best[key] = (rank, candidate)

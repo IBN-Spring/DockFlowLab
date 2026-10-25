@@ -4,6 +4,10 @@
     PDBFixer 替换非标准残基 → 移除水和小分子配体 → 补全缺失残基和原子
     → 按 pH 7.4 加氢 → OpenBabel 生成刚性 PDBQT（Gasteiger 电荷）
 
+需要金属酶研究时，可以保留金属离子（Zn/Mg/Fe/Mn/Cu 等）；水、结晶添加剂
+和共晶配体仍会移除。Vina 评分没有专门的金属配位项，保留金属只是让结构
+更接近真实结合位点，配位作用应结合 PLIP 细节视图单独判断。
+
 小分子靶点（分子-分子对接）走 :func:`prepare_rigid_target`。
 
 若 PDBFixer 不可用，会退化到 OpenBabel 的加氢与格式转换，并在结果中明确警告。
@@ -37,6 +41,8 @@ class ReceptorPrepOptions:
     add_hydrogens: bool = True
     remove_heterogens: bool = True
     keep_cofactors: bool = False
+    # 保留金属离子（金属酶/金属结合位点）。水、添加剂和共晶配体仍移除。
+    keep_metals: bool = False
     chains: tuple[str, ...] = ()
     seed: int = 42
     minimize: bool = True
@@ -102,6 +108,35 @@ def _filter_heterogens_for_cofactors(pdb_path: Path, output_path: Path) -> tuple
     return output_path, removed
 
 
+def _filter_for_metal_retention(
+    pdb_path: Path, output_path: Path
+) -> tuple[Path, int, int]:
+    """只保留聚合物、修饰残基和金属离子。
+
+    PDBFixer 的 ``removeHeterogens`` 无法只删水而不删离子，因此保留金属时
+    先把水、缓冲液、糖链和共晶配体从输入中过滤掉，再交给 PDBFixer。
+    这样金属离子不会进入“杂原子清理”路径，坐标也保持原样。
+    """
+    kept_metals = 0
+    removed_other = 0
+    lines: list[str] = []
+    for line in pdb_path.read_text(encoding="utf-8", errors="replace").splitlines():
+        if line.startswith("HETATM"):
+            resname = line[17:20].strip().upper()
+            if resname in pdbio.METAL_IONS:
+                kept_metals += 1
+                lines.append(line)
+                continue
+            if resname in pdbio.MODIFIED_AMINO_ACIDS:
+                lines.append(line)
+                continue
+            removed_other += 1
+            continue
+        lines.append(line)
+    output_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return output_path, kept_metals, removed_other
+
+
 def _prepare_with_pdbfixer(
     source: Path,
     output_pdb: Path,
@@ -149,7 +184,11 @@ def _prepare_with_pdbfixer(
 
     removed_metals = 0
     removed_ligands = 0
-    if options.keep_cofactors:
+    if options.keep_metals:
+        # 输入已在 prepare_receptor 中过滤为“聚合物 + 金属离子”，不能再次
+        # 调用 removeHeterogens，否则金属会被一并删掉。
+        pass
+    elif options.keep_cofactors:
         warnings.append("已保留非水小分子辅因子；请确认它们确实应作为受体的一部分")
     elif options.remove_heterogens:
         # 与 PDBFixer 一致，只统计第一个模型，避免多模型结构重复计数。
@@ -208,7 +247,7 @@ def _prepare_with_pdbfixer(
     residue_count = sum(1 for _ in fixer.topology.residues())
     if atom_count < 10:
         raise PreparationError("修复后的结构原子数过少，可能不是有效的蛋白结构")
-    return {
+    details = {
         "atoms": atom_count,
         "residues": residue_count,
         "added_residues": added_residues,
@@ -217,6 +256,13 @@ def _prepare_with_pdbfixer(
         "method": "PDBFixer",
         "nonstandard": len(nonstandard),
     }
+    if options.keep_metals:
+        details["kept_metals"] = sum(
+            1
+            for atom in pdbio.parse_atoms(output_pdb, first_model=True)
+            if atom.resname in pdbio.METAL_IONS
+        )
+    return details
 
 
 def _prepare_with_openbabel(
@@ -386,7 +432,7 @@ def prepare_receptor(
                     "若需要集合对接，请先把模型拆分为单独文件分别导入。"
                 )
             source = _first_model(input_path, temp / "first_model.pdb")
-            if options.keep_cofactors:
+            if options.keep_cofactors and not options.keep_metals:
                 source, removed = _filter_heterogens_for_cofactors(source, temp / "with_cofactors.pdb")
                 if removed:
                     warnings.append(f"保留辅因子时移除了 {removed} 个水/离子原子")
@@ -412,6 +458,27 @@ def prepare_receptor(
                         kind, detail = detected, detected_detail
                 else:
                     warnings.append(f"mmCIF 转 PDB 失败（{message}），将直接交给 PDBFixer")
+
+        if options.keep_metals and options.remove_heterogens:
+            source, kept_metals, removed_other = _filter_for_metal_retention(
+                source, temp / "with_metals.pdb"
+            )
+            if kept_metals:
+                warnings.append(
+                    f"已保留 {kept_metals} 个金属离子原子；水、添加剂和共晶配体仍会移除。"
+                )
+            else:
+                warnings.append(
+                    "已勾选保留金属离子，但结构中没有识别到 Zn/Mg/Fe 等金属离子。"
+                )
+            if removed_other:
+                warnings.append(
+                    f"已移除 {removed_other} 个非金属杂原子（水、添加剂、共晶配体等）。"
+                )
+            warnings.append(
+                "Vina 评分没有专门的金属配位项，金属参与的结合只能近似评价；"
+                "建议在对接细节中查看金属配位。"
+            )
 
         # 肽类共晶配体可能同时包含 ATOM 与 HETATM 残基，必须在修复前整链移除。
         source, options = _exclude_ligand_chains(source, temp, options, warnings)

@@ -10,6 +10,7 @@
     --ink: #172033;
     --muted: #6b7280;
     --hbond: #2a78d6;
+    --metal: #0891b2;
     --saltbridge: #7c3aed;
     --pistacking: #0e8a6e;
     --pication: #c0268a;
@@ -105,6 +106,7 @@
       0 4px 14px rgba(23, 32, 51, .14);
   }
   .contact-label.hbond { --c: var(--hbond); }
+  .contact-label.metal { --c: var(--metal); }
   .contact-label.saltbridge { --c: var(--saltbridge); }
   .contact-label.pistacking { --c: var(--pistacking); }
   .contact-label.pication { --c: var(--pication); }
@@ -221,6 +223,9 @@
   <span class="item" data-kind="hbond" style="--c: var(--hbond)">
     <span class="swatch"></span>氢键
   </span>
+  <span class="item" data-kind="metal" style="--c: var(--metal)">
+    <span class="swatch"></span>金属配位
+  </span>
   <span class="item" data-kind="saltbridge" style="--c: var(--saltbridge)">
     <span class="swatch"></span>盐桥
   </span>
@@ -250,6 +255,7 @@
   // NGL.Shape 的颜色参数是 0–1 的 RGB 数组，不接受整理后的整数。
   const KIND_RGB = {
     hbond: [0.165, 0.471, 0.839],
+    metal: [0.031, 0.569, 0.698],
     saltbridge: [0.486, 0.227, 0.929],
     pistacking: [0.055, 0.541, 0.431],
     pication: [0.753, 0.149, 0.541],
@@ -259,6 +265,7 @@
   };
   const KIND_LABELS = {
     hbond: "氢键",
+    metal: "金属配位",
     saltbridge: "盐桥",
     pistacking: "π-堆积",
     pication: "π-阳离子",
@@ -542,13 +549,20 @@
       residueReps[kind] = [];
       const selection = kindSelection(kind);
       if (!selection) return;
-      const rep = structureComp.addRepresentation("licorice", {
+      // 金属离子是孤立原子，licorice 依赖成键可能什么都不画；改用球棍。
+      const options = {
         sele: selection,
         colorScheme: "uniform",
         colorValue: TEAL,
         radius: 0.19,
         multipleBond: "symmetric"
-      });
+      };
+      const rep = structureComp.addRepresentation(
+        kind === "metal" ? "ball+stick" : "licorice",
+        kind === "metal"
+          ? Object.assign({}, options, { radius: 0.32, scale: 1.6 })
+          : options
+      );
       if (rep) residueReps[kind].push(rep);
     });
   }
@@ -561,7 +575,7 @@
     });
   }
 
-  // 图例只为实际出现的类型留位置，避免七种颜色全列出来。
+  // 图例只为实际出现的类型留位置，避免八种颜色全列出来。
   function updateLegendPresence() {
     const counts = {};
     ((data && data.interactions) || []).forEach(function (item) {

@@ -145,7 +145,10 @@ def prepare_entry(
                 source,
                 pdbqt,
                 pdb,
-                options=ReceptorPrepOptions(ph=settings.add_hydrogens_ph),
+                options=ReceptorPrepOptions(
+                    ph=settings.add_hydrogens_ph,
+                    keep_metals=settings.keep_metals,
+                ),
                 ligand_options=LigandPrepOptions(ph=settings.add_hydrogens_ph),
                 obabel=obabel,
                 progress=notify,

@@ -100,6 +100,8 @@ class AppSettings:
     # 预处理
     keep_ligand_names: bool = True
     add_hydrogens_ph: float = 7.4
+    # 金属酶研究：保留 Zn/Mg/Fe 等金属离子；水、添加剂和共晶配体仍移除。
+    keep_metals: bool = False
 
     def __post_init__(self) -> None:
         if self.exhaustiveness < 1:
@@ -145,6 +147,7 @@ class AppSettings:
         if settings.docking_engine not in {"vina", "qvina2", "smina"}:
             settings.docking_engine = "vina"
         settings.engine_fallback = bool(settings.engine_fallback)
+        settings.keep_metals = bool(settings.keep_metals)
         for attribute in ("vina_path", "qvina2_path", "smina_path", "obabel_path", "pymol_path"):
             if not isinstance(getattr(settings, attribute), str):
                 setattr(settings, attribute, "")
