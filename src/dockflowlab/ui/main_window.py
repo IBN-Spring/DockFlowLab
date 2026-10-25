@@ -324,6 +324,7 @@ class MainWindow(QMainWindow):
         self.results_page.refresh_requested.connect(self._refresh_results)
         self.results_page.open_pymol_requested.connect(self._open_pymol)
         self.results_page.locate_result_requested.connect(self._locate_result)
+        self.results_page.interaction_requested.connect(self._show_interactions)
         self.results_page.back_requested.connect(lambda: self._navigate(3))
 
         self.render_page.render_requested.connect(self._start_render)
@@ -1143,6 +1144,30 @@ class MainWindow(QMainWindow):
             reveal_path(complex_path)
         else:
             reveal_path(self.workspace.docking_dir(target_stem))
+
+    def _show_interactions(self, target_stem: str, ligand_stem: str) -> None:
+        """打开对接细节：氢键、疏水作用与范德华接触。"""
+        if self.workspace is None:
+            return
+        complex_path = self.workspace.complex_path(target_stem, ligand_stem)
+        if not complex_path.is_file():
+            QMessageBox.information(
+                self,
+                "还没有复合物",
+                "这组结果没有生成复合物结构，暂时无法查看对接细节。",
+            )
+            return
+        target = self.workspace.get(KIND_TARGET, target_stem)
+        ligand = self.workspace.get(KIND_LIGAND, ligand_stem)
+        target_label = target.display_name if target else target_stem
+        ligand_label = ligand.display_name if ligand else ligand_stem
+        # QtWebEngine 较重，只在用户真正打开细节时加载。
+        from .interaction_dialog import InteractionDialog
+
+        dialog = InteractionDialog(
+            complex_path, target_label, ligand_label, self
+        )
+        dialog.exec()
 
     # ------------------------------------------------------------------
     # PyMOL 渲染

@@ -1,0 +1,685 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DockFlowLab 相互作用视图</title>
+<style>
+  :root {
+    --bg: #f7f8fa;
+    --ink: #172033;
+    --muted: #6b7280;
+    --hbond: #2a78d6;
+    --hydrophobic: #d97706;
+    --vdw: #7c8799;
+  }
+  html, body {
+    margin: 0;
+    height: 100%;
+    overflow: hidden;
+    background: var(--bg);
+    font-family: "Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC",
+      "Hiragino Sans GB", system-ui, sans-serif;
+  }
+  #viewport { position: absolute; inset: 0; }
+  #labels { position: absolute; inset: 0; pointer-events: none; overflow: hidden; }
+
+  .contact-label {
+    --c: var(--vdw);
+    position: absolute;
+    left: 0;
+    top: 0;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 9px;
+    border: 1px solid rgba(23, 32, 51, .10);
+    border-radius: 8px;
+    background: rgba(255, 255, 255, .96);
+    box-shadow: 0 4px 14px rgba(23, 32, 51, .13);
+    color: var(--ink);
+    font-size: 12px;
+    line-height: 1.2;
+    white-space: nowrap;
+    transform: translate(-50%, -50%);
+    will-change: left, top;
+    opacity: 0;
+    transition: opacity .14s ease;
+  }
+  .contact-label.hbond { --c: var(--hbond); }
+  .contact-label.hydrophobic { --c: var(--hydrophobic); }
+  .contact-label.vdw { --c: var(--vdw); }
+  .contact-label.visible { opacity: 1; }
+  .contact-label .dot {
+    width: 8px;
+    height: 8px;
+    flex: 0 0 auto;
+    border-radius: 50%;
+    background: var(--c);
+  }
+  .contact-label .res { font-weight: 700; }
+  .contact-label .kind { color: var(--muted); }
+  .contact-label .dist {
+    color: #374151;
+    font-variant-numeric: tabular-nums;
+  }
+
+  #legend {
+    position: absolute;
+    left: 14px;
+    bottom: 14px;
+    padding: 9px 12px;
+    border: 1px solid rgba(23, 32, 51, .10);
+    border-radius: 10px;
+    background: rgba(255, 255, 255, .90);
+    box-shadow: 0 4px 16px rgba(23, 32, 51, .08);
+    color: var(--ink);
+    font-size: 12px;
+    line-height: 1.7;
+    backdrop-filter: blur(6px);
+  }
+  #legend .title {
+    display: block;
+    margin-bottom: 3px;
+    color: var(--muted);
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: .04em;
+  }
+  #legend .item {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    margin-right: 12px;
+  }
+  #legend .item[data-visible="false"] { opacity: .35; }
+  #legend .swatch {
+    display: inline-block;
+    width: 16px;
+    height: 0;
+    border-top: 2px dashed var(--c);
+  }
+  #legend .swatch.solid {
+    height: 8px;
+    border: none;
+    border-radius: 50%;
+  }
+  #legend .meta {
+    display: block;
+    margin-top: 2px;
+    color: var(--muted);
+    font-size: 11px;
+  }
+
+  #hint {
+    position: absolute;
+    right: 14px;
+    bottom: 16px;
+    color: #7c8799;
+    font-size: 12px;
+    line-height: 1.5;
+    text-shadow: 0 1px 2px rgba(255, 255, 255, .9);
+  }
+
+  #message {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    display: none;
+    max-width: 70%;
+    padding: 16px 20px;
+    transform: translate(-50%, -50%);
+    border: 1px solid rgba(23, 32, 51, .10);
+    border-radius: 10px;
+    background: rgba(255, 255, 255, .94);
+    box-shadow: 0 8px 28px rgba(23, 32, 51, .10);
+    color: var(--muted);
+    font-size: 13px;
+    line-height: 1.7;
+    text-align: center;
+    white-space: pre-wrap;
+  }
+</style>
+<script src="qrc:///qtwebchannel/qwebchannel.js"></script>
+<script src="ngl.js"></script>
+</head>
+<body>
+<div id="viewport"></div>
+<div id="labels"></div>
+<div id="legend">
+  <span class="title">相互作用</span>
+  <span class="item" data-kind="hbond" style="--c: var(--hbond)">
+    <span class="swatch"></span>氢键
+  </span>
+  <span class="item" data-kind="hydrophobic" style="--c: var(--hydrophobic)">
+    <span class="swatch"></span>疏水作用
+  </span>
+  <span class="item" data-kind="vdw" style="--c: var(--vdw)">
+    <span class="swatch"></span>范德华接触
+  </span>
+  <span class="meta">蛋白背景 · 30% 不透明度</span>
+</div>
+<div id="hint">左键旋转 · 滚轮缩放 · 右键平移 · 双击重置</div>
+<div id="message"></div>
+<script>
+(function () {
+  "use strict";
+
+  const KIND_COLORS = {
+    hbond: 0x2a78d6,
+    hydrophobic: 0xd97706,
+    vdw: 0x7c8799
+  };
+  // NGL.Shape 的颜色参数是 0–1 的 RGB 数组，不接受整理后的整数。
+  const KIND_RGB = {
+    hbond: [0.165, 0.471, 0.839],
+    hydrophobic: [0.851, 0.467, 0.024],
+    vdw: [0.486, 0.529, 0.600]
+  };
+  const KIND_LABELS = {
+    hbond: "氢键",
+    hydrophobic: "疏水作用",
+    vdw: "范德华接触"
+  };
+  const TEAL = 0x1f9d8f;
+  const LIGAND_PURPLE = 0x8b5cf6;
+  const PROTEIN_GRAY = 0x9daabc;
+
+  let stage = null;
+  let bridge = null;
+  let structureComp = null;
+  let initialOrientation = null;
+  let data = null;
+  let pendingData = null;
+  let failed = false;
+  const residueReps = { hbond: [], hydrophobic: [], vdw: [] };
+  const lineComponents = { hbond: null, hydrophobic: null, vdw: null };
+  const visibility = { hbond: true, hydrophobic: true, vdw: true };
+  let labelsVisible = true;
+  let labelItems = [];
+
+  const messageEl = document.getElementById("message");
+  const labelsEl = document.getElementById("labels");
+  const viewportEl = document.getElementById("viewport");
+  const legendItems = Array.from(document.querySelectorAll("#legend .item"));
+
+  function post(name, payload) {
+    if (!bridge || typeof bridge[name] !== "function") return;
+    try {
+      bridge[name](JSON.stringify(payload || {}));
+    } catch (err) {
+      // 窗口关闭后桥接对象可能失效，忽略即可。
+    }
+  }
+
+  function fail(message) {
+    if (failed) return;
+    failed = true;
+    post("viewerFailed", { message: String(message || "未知错误") });
+  }
+
+  function showMessage(text) {
+    messageEl.textContent = String(text || "");
+    messageEl.style.display = text ? "block" : "none";
+  }
+
+  function hideMessage() {
+    messageEl.style.display = "none";
+  }
+
+  function vec(coords) {
+    return new NGL.Vector3(Number(coords[0]), Number(coords[1]), Number(coords[2]));
+  }
+
+  // ------------------------------------------------------------------
+  // 场景清理与构建
+  // ------------------------------------------------------------------
+  function clearLabels() {
+    labelItems = [];
+    while (labelsEl.firstChild) labelsEl.removeChild(labelsEl.firstChild);
+  }
+
+  function clearScene() {
+    if (!stage) return;
+    clearLabels();
+    if (structureComp) {
+      stage.removeComponent(structureComp);
+      structureComp = null;
+    }
+    residueReps.hbond = [];
+    residueReps.hydrophobic = [];
+    residueReps.vdw = [];
+    Object.keys(lineComponents).forEach(function (kind) {
+      if (lineComponents[kind]) {
+        stage.removeComponent(lineComponents[kind]);
+        lineComponents[kind] = null;
+      }
+    });
+  }
+
+  function kindSelection(kind) {
+    if (!data || !data.interactions) return "";
+    const selections = data.interactions
+      .filter(function (item) { return item.kind === kind; })
+      .map(function (item) { return "(" + item.selection + ")"; });
+    return selections.length ? "(" + selections.join(" or ") + ") and not water" : "";
+  }
+
+  function addDashedLine(shape, start, end, color, radius) {
+    const a = vec(start);
+    const b = vec(end);
+    const length = a.distanceTo(b);
+    if (!isFinite(length) || length <= 0.01) return;
+    const segments = Math.max(4, Math.round(length / 0.55));
+    for (let i = 0; i < segments; i += 2) {
+      const t0 = i / segments;
+      const t1 = Math.min(1, (i + 0.62) / segments);
+      shape.addCylinder(
+        [
+          a.x + (b.x - a.x) * t0,
+          a.y + (b.y - a.y) * t0,
+          a.z + (b.z - a.z) * t0
+        ],
+        [
+          a.x + (b.x - a.x) * t1,
+          a.y + (b.y - a.y) * t1,
+          a.z + (b.z - a.z) * t1
+        ],
+        color,
+        radius
+      );
+    }
+  }
+
+  function buildInteractionShape(kind) {
+    if (!stage || !data) return null;
+    const items = data.interactions.filter(function (item) {
+      return item.kind === kind;
+    });
+    if (!items.length) return null;
+    const shape = new NGL.Shape("interaction-" + kind, { radialSegments: 8 });
+    items.forEach(function (item) {
+      addDashedLine(
+        shape,
+        item.ligandCoord,
+        item.proteinCoord,
+        KIND_RGB[kind],
+        0.08
+      );
+    });
+    const component = stage.addComponentFromObject(shape);
+    if (!component) return null;
+    component.addRepresentation("buffer", { opacity: 0.95 });
+    return component;
+  }
+
+  function buildLabel(item) {
+    const element = document.createElement("div");
+    element.className = "contact-label " + item.kind;
+    const dot = document.createElement("span");
+    dot.className = "dot";
+    const residue = document.createElement("span");
+    residue.className = "res";
+    residue.textContent = item.residue;
+    const kind = document.createElement("span");
+    kind.className = "kind";
+    kind.textContent = "· " + (item.kindLabel || KIND_LABELS[item.kind] || "");
+    const distance = document.createElement("span");
+    distance.className = "dist";
+    distance.textContent = Number(item.distance).toFixed(2) + " Å";
+    element.appendChild(dot);
+    element.appendChild(residue);
+    element.appendChild(kind);
+    element.appendChild(distance);
+    labelsEl.appendChild(element);
+    labelItems.push({ element: element, item: item });
+    return element;
+  }
+
+  function buildLigand(component) {
+    if (!data || !data.ligandSelection) return;
+    component.addRepresentation("ball+stick", {
+      sele: data.ligandSelection,
+      colorScheme: "uniform",
+      colorValue: LIGAND_PURPLE,
+      aspectRatio: 2.2,
+      scale: 1.45,
+      radius: 0.16,
+      multipleBond: "symmetric"
+    });
+  }
+
+  function buildResidues() {
+    if (!structureComp) return;
+    Object.keys(residueReps).forEach(function (kind) {
+      residueReps[kind] = [];
+      const selection = kindSelection(kind);
+      if (!selection) return;
+      const rep = structureComp.addRepresentation("licorice", {
+        sele: selection,
+        colorScheme: "uniform",
+        colorValue: TEAL,
+        radius: 0.19,
+        multipleBond: "symmetric"
+      });
+      if (rep) residueReps[kind].push(rep);
+    });
+  }
+
+  function buildLabels() {
+    clearLabels();
+    if (!data || !data.interactions) return;
+    data.interactions.forEach(function (item) {
+      buildLabel(item);
+    });
+  }
+
+  function applyVisibility() {
+    Object.keys(residueReps).forEach(function (kind) {
+      residueReps[kind].forEach(function (rep) {
+        if (rep) rep.setVisibility(visibility[kind]);
+      });
+      if (lineComponents[kind]) {
+        lineComponents[kind].setVisibility(visibility[kind]);
+      }
+    });
+    labelItems.forEach(function (entry) {
+      const visible = labelsVisible && visibility[entry.item.kind];
+      entry.element.classList.toggle("visible", visible);
+    });
+    legendItems.forEach(function (item) {
+      const kind = item.getAttribute("data-kind");
+      item.setAttribute("data-visible", String(Boolean(visibility[kind])));
+    });
+    if (stage) stage.viewer.requestRender();
+  }
+
+  function loadData() {
+    if (!stage || !pendingData) return;
+    const payload = pendingData;
+    pendingData = null;
+    data = payload;
+    clearScene();
+    initialOrientation = null;
+    hideMessage();
+
+    const pdb = String(payload.pdb || "");
+    if (!pdb.trim()) {
+      showMessage("复合物中没有可显示的结构。");
+      return;
+    }
+
+    visibility.hbond = true;
+    visibility.hydrophobic = true;
+    visibility.vdw = true;
+    applyVisibility();
+
+    const blob = new Blob([pdb], { type: "text/plain" });
+    stage.loadFile(blob, { ext: "pdb", defaultRepresentation: false }).then(function (component) {
+      if (!component) {
+        showMessage("结构加载失败：没有可显示的原子。");
+        return;
+      }
+      structureComp = component;
+
+      // 蛋白只作为空间参考，降低不透明度，让配体与接触残基更突出。
+      component.addRepresentation("cartoon", {
+        sele: "polymer",
+        colorScheme: "uniform",
+        colorValue: PROTEIN_GRAY,
+        opacity: 0.30,
+        aspectRatio: 4.5,
+        subdiv: 7,
+        smoothSheet: true
+      });
+      // 非聚合物靶点（如小分子、部分核酸修饰）没有卡通模型，用淡线框兜底。
+      const ligandSelection = String(payload.ligandSelection || "");
+      if (ligandSelection) {
+        component.addRepresentation("licorice", {
+          sele: "not polymer and not water and not (" + ligandSelection + ")",
+          colorScheme: "uniform",
+          colorValue: PROTEIN_GRAY,
+          opacity: 0.28,
+          radius: 0.10
+        });
+      }
+
+      buildLigand(component);
+      buildResidues();
+      buildLabels();
+
+      Object.keys(KIND_COLORS).forEach(function (kind) {
+        lineComponents[kind] = buildInteractionShape(kind);
+      });
+
+      // 记录一个基于完整结构的初始朝向，重置视角时复用它，避免每次重置
+      // 都跳到随机角度。
+      component.autoView();
+      initialOrientation = stage.viewerControls.getOrientation();
+      focusScene();
+      applyVisibility();
+      hideMessage();
+      post("structureReady", {
+        atoms: component.structure.atomCount,
+        interactions: data.interactions ? data.interactions.length : 0
+      });
+    }).catch(function (error) {
+      showMessage("无法显示复合物：" + String(error));
+      post("viewerMessage", { message: String(error) });
+    });
+  }
+
+  // ------------------------------------------------------------------
+  // 相机与标签
+  // ------------------------------------------------------------------
+  function focusScene() {
+    if (!stage || !structureComp) return;
+    const items = (data && data.interactions) || [];
+    if (!items.length) {
+      structureComp.autoView();
+      if (initialOrientation) stage.viewerControls.orient(initialOrientation);
+      stage.viewer.requestRender();
+      updateLabels();
+      return;
+    }
+
+    const coords = [];
+    items.forEach(function (item) {
+      coords.push(item.ligandCoord);
+      coords.push(item.proteinCoord);
+    });
+    let min = [Infinity, Infinity, Infinity];
+    let max = [-Infinity, -Infinity, -Infinity];
+    coords.forEach(function (coord) {
+      for (let i = 0; i < 3; i += 1) {
+        const value = Number(coord[i]);
+        if (value < min[i]) min[i] = value;
+        if (value > max[i]) max[i] = value;
+      }
+    });
+    if (!isFinite(min[0])) return;
+    const center = [
+      (min[0] + max[0]) / 2,
+      (min[1] + max[1]) / 2,
+      (min[2] + max[2]) / 2
+    ];
+    let radius = 0;
+    coords.forEach(function (coord) {
+      const dx = Number(coord[0]) - center[0];
+      const dy = Number(coord[1]) - center[1];
+      const dz = Number(coord[2]) - center[2];
+      radius = Math.max(radius, Math.sqrt(dx * dx + dy * dy + dz * dz));
+    });
+    radius = Math.max(radius, 5.0) + 4.0;
+
+    if (initialOrientation) stage.viewerControls.orient(initialOrientation);
+    stage.viewerControls.center(vec(center));
+    const fov = stage.viewer.camera.fov * Math.PI / 180;
+    const distance = Math.max(11, (radius / Math.tan(fov / 2)) * 1.22);
+    stage.viewerControls.distance(distance);
+    stage.viewer.requestRender();
+    updateLabels();
+  }
+
+  function canvasScale() {
+    const canvas = viewportEl.querySelector("canvas");
+    if (!canvas) return { x: 1, y: 1 };
+    return {
+      x: canvas.clientWidth / Math.max(1, canvas.width),
+      y: canvas.clientHeight / Math.max(1, canvas.height)
+    };
+  }
+
+  function updateLabels() {
+    if (!stage || !labelItems.length) return;
+    const scale = canvasScale();
+    const viewWidth = labelsEl.clientWidth;
+    const viewHeight = labelsEl.clientHeight;
+    const placed = [];
+    labelItems.forEach(function (entry) {
+      const item = entry.item;
+      const element = entry.element;
+      if (!labelsVisible || !visibility[item.kind]) return;
+      const anchor = stage.viewerControls.getPositionOnCanvas(vec(item.proteinCoord));
+      const ligand = stage.viewerControls.getPositionOnCanvas(vec(item.ligandCoord));
+      let x = Number(anchor.x) * scale.x;
+      let y = Number(anchor.y) * scale.y;
+      if (!isFinite(x) || !isFinite(y)) return;
+
+      // 卡片外移一点，让虚线连接不被标签完全盖住；再限制在画布内，
+      // 底部留出图例与操作提示的空间。
+      const lx = Number(ligand.x) * scale.x;
+      const ly = Number(ligand.y) * scale.y;
+      const dx = x - lx;
+      const dy = y - ly;
+      const length = Math.sqrt(dx * dx + dy * dy);
+      if (length > 0.5) {
+        x += (dx / length) * 34;
+        y += (dy / length) * 34;
+      }
+
+      const width = Math.max(80, element.offsetWidth || 120);
+      const height = Math.max(24, element.offsetHeight || 24);
+      const halfWidth = width / 2;
+      x = Math.min(
+        Math.max(x, halfWidth + 10),
+        Math.max(halfWidth + 10, viewWidth - halfWidth - 10)
+      );
+      y = Math.min(
+        Math.max(y, height / 2 + 8),
+        Math.max(height / 2 + 8, viewHeight - 92)
+      );
+
+      let guard = 0;
+      while (guard < 10) {
+        const hit = placed.some(function (other) {
+          return Math.abs(other.x - x) < (other.width + width) / 2 + 7 &&
+            Math.abs(other.y - y) < (other.height + height) / 2 + 5;
+        });
+        if (!hit) break;
+        y += height + 6;
+        guard += 1;
+      }
+      placed.push({ x: x, y: y, width: width, height: height });
+      element.style.left = x.toFixed(1) + "px";
+      element.style.top = y.toFixed(1) + "px";
+    });
+  }
+
+  // ------------------------------------------------------------------
+  // 对外接口
+  // ------------------------------------------------------------------
+  function setKindVisible(kind, value) {
+    if (!(kind in visibility)) return;
+    visibility[kind] = Boolean(value);
+    applyVisibility();
+    updateLabels();
+  }
+
+  function setLabelsVisible(value) {
+    labelsVisible = Boolean(value);
+    applyVisibility();
+    updateLabels();
+  }
+
+  function setData(payload) {
+    pendingData = payload || {};
+    if (stage) loadData();
+  }
+
+  function init() {
+    try {
+      stage = new NGL.Stage("viewport", {
+        backgroundColor: "#f7f8fa",
+        quality: "high",
+        sampleLevel: 2,
+        cameraFov: 40,
+        ambientIntensity: 0.52,
+        lightIntensity: 1.12,
+        tooltip: false
+      });
+      stage.mouseControls.remove("clickPick-left");
+      stage.viewer.signals.rendered.add(updateLabels);
+      loadData();
+      updateLabels();
+      post("viewerReady", { webgl: true });
+    } catch (error) {
+      showMessage("3D 视图初始化失败：" + String(error));
+      fail(error);
+    }
+  }
+
+  function start() {
+    if (typeof NGL === "undefined") {
+      showMessage("NGL Viewer 未能加载（ngl.js 缺失）。");
+      fail("NGL 未加载");
+      return;
+    }
+    if (typeof QWebChannel === "undefined" || typeof qt === "undefined" ||
+        !qt.webChannelTransport) {
+      init();
+      return;
+    }
+    new QWebChannel(qt.webChannelTransport, function (channel) {
+      bridge = channel.objects.bridge;
+      init();
+    });
+  }
+
+  viewportEl.addEventListener("dblclick", focusScene);
+
+  window.dflInteractions = {
+    setData: setData,
+    setKindVisible: setKindVisible,
+    setLabelsVisible: setLabelsVisible,
+    resetView: focusScene,
+    syncSize: function () {
+      if (!stage) return;
+      stage.handleResize();
+      stage.viewer.requestRender();
+      updateLabels();
+    }
+  };
+
+  window.addEventListener("resize", function () {
+    if (!stage) return;
+    stage.handleResize();
+    stage.viewer.requestRender();
+    updateLabels();
+  });
+
+  window.addEventListener("error", function (event) {
+    post("viewerMessage", {
+      message: String(event.message || event.error || "脚本错误")
+    });
+  });
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", start);
+  } else {
+    start();
+  }
+})();
+</script>
+</body>
+</html>

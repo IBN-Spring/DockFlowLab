@@ -831,6 +831,7 @@ class ResultsPage(Page):
     refresh_requested = Signal()
     open_pymol_requested = Signal(str, str)
     locate_result_requested = Signal(str, str)
+    interaction_requested = Signal(str, str)
     heatmap_edit_requested = Signal()
     back_requested = Signal()
 
@@ -893,7 +894,7 @@ class ResultsPage(Page):
         self.table.setColumnWidth(5, round(92 * ui_scale))
         header.setSectionResizeMode(6, QHeaderView.ResizeMode.Stretch)
         header.setSectionResizeMode(7, QHeaderView.ResizeMode.Fixed)
-        self.table.setColumnWidth(7, round(140 * ui_scale))
+        self.table.setColumnWidth(7, round(208 * ui_scale))
         self.table.setMinimumHeight(round(120 * ui_scale))
         self.table.setVisible(False)
         self.table.setToolTip("选中行后按 Ctrl+C 或右键复制，可直接粘贴到 Excel")
@@ -1075,6 +1076,14 @@ class ResultsPage(Page):
                 action_layout = QHBoxLayout(actions)
                 action_layout.setContentsMargins(0, 0, 0, 0)
                 action_layout.setSpacing(4)
+                detail = QPushButton("细节")
+                detail.setObjectName("Small")
+                detail.setToolTip("查看氢键、疏水作用与范德华接触")
+                detail.clicked.connect(
+                    lambda _=False, t=result.target, l=result.ligand: (
+                        self.interaction_requested.emit(t, l)
+                    )
+                )
                 pymol = QPushButton("PyMOL")
                 pymol.setObjectName("Small")
                 pymol.setToolTip("用 PyMOL 打开复合物（需要已安装 PyMOL）")
@@ -1086,6 +1095,7 @@ class ResultsPage(Page):
                 locate.clicked.connect(
                     lambda _=False, t=result.target, l=result.ligand: self.locate_result_requested.emit(t, l)
                 )
+                action_layout.addWidget(detail)
                 action_layout.addWidget(pymol)
                 action_layout.addWidget(locate)
                 self.table.setCellWidget(row, 7, actions)

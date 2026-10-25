@@ -60,6 +60,37 @@ def test_results_busy_disables_header_actions(qt_app):
     assert page.report_button.isEnabled()
 
 
+def test_results_offer_interaction_details(qt_app, tmp_path):
+    from PySide6.QtWidgets import QPushButton
+
+    from dockflowlab.core.models import DockingResult, Pose
+    from dockflowlab.ui.pages import ResultsPage
+    from dockflowlab.workspace import Workspace
+
+    workspace = Workspace.create(tmp_path / "结果")
+    result = DockingResult(
+        target="target",
+        ligand="ligand",
+        ok=True,
+        poses=[Pose(rank=1, affinity=-7.5)],
+        pymol_path="demo.pml",
+        complex_path="demo.pdb",
+    )
+    page = ResultsPage()
+    page.show_results(workspace, [result])
+
+    actions = page.table.cellWidget(0, 7)
+    assert actions is not None
+    buttons = {button.text(): button for button in actions.findChildren(QPushButton)}
+    assert set(buttons) == {"细节", "PyMOL", "定位"}
+
+    emitted: list[tuple[str, str]] = []
+    page.interaction_requested.connect(lambda t, l: emitted.append((t, l)))
+    buttons["细节"].click()
+
+    assert emitted == [("target", "ligand")]
+
+
 def test_dock_page_offers_cancel_while_busy(qt_app):
     from dockflowlab.ui.pages import DockPage
 
