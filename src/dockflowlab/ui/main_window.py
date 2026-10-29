@@ -38,6 +38,7 @@ from ..services.analysis import save_heatmap_config
 from ..services.boxes import suggest_box
 from ..services.docking import DockingOptions, collect_existing_results, run_batch
 from ..services.download import DownloadResult
+from ..services.pose_browser import build_pose_browser
 from ..services.preparation import prepare_all
 from ..services.pymol import open_in_pymol
 from ..services.pymol_render import find_renderer, render_complex
@@ -1151,11 +1152,24 @@ class MainWindow(QMainWindow):
             reveal_path(self.workspace.docking_dir(target_stem))
 
     def _show_interactions(self, target_stem: str, ligand_stem: str) -> None:
-        """打开对接细节：氢键、疏水作用与范德华接触。"""
+        """打开对接细节：多构象浏览 + 相互作用列表。"""
         if self.workspace is None:
             return
         complex_path = self.workspace.complex_path(target_stem, ligand_stem)
-        if not complex_path.is_file():
+        data = None
+        try:
+            data = build_pose_browser(self.workspace, target_stem, ligand_stem)
+        except Exception as exc:
+            log.warning("构象浏览准备失败：%s", exc)
+            self.statusBar().showMessage("构象列表生成失败，只显示最佳构象。", 6000)
+        options = [
+            option
+            for option in (data.options if data else [])
+            if option.complex_path is not None and Path(option.complex_path).is_file()
+        ]
+        if options:
+            complex_path = options[0].complex_path
+        if complex_path is None or not complex_path.is_file():
             QMessageBox.information(
                 self,
                 "还没有复合物",
@@ -1170,7 +1184,12 @@ class MainWindow(QMainWindow):
         from .interaction_dialog import InteractionDialog
 
         dialog = InteractionDialog(
-            complex_path, target_label, ligand_label, self
+            complex_path,
+            target_label,
+            ligand_label,
+            self,
+            pose_options=options if len(options) > 1 else [],
+            convergence_message=data.message if data else "",
         )
         dialog.exec()
 

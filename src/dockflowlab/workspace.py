@@ -544,6 +544,12 @@ class Workspace:
     def complex_path(self, target_stem: str, ligand_stem: str) -> Path:
         return self.complex_dir(target_stem) / f"{ligand_stem}.pdb"
 
+    def pose_complex_path(
+        self, target_stem: str, ligand_stem: str, pose_index: int
+    ) -> Path:
+        """非最佳 pose 的复合物，用于细节视图的构象浏览。"""
+        return self.complex_dir(target_stem) / f"{ligand_stem}_pose{pose_index + 1}.pdb"
+
     def pymol_path(self, target_stem: str, ligand_stem: str) -> Path:
         return self.root / "pymol" / f"{target_stem}__{ligand_stem}.pml"
 

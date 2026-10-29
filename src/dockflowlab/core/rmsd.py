@@ -1,12 +1,13 @@
 """配体构象比较：对称校正 RMSD 与收敛启发式。
 
 重对接验证需要比较“对接 pose”和“实验晶体构象”。直接把原子按文件顺序
-相减会被等价原子（苯环翻转、羧基两个氧互换等）误导，因此优先使用
-RDKit 的 ``GetBestRMS``；图不匹配时退回到按元素分组的最优原子匹配
-（匈牙利算法）+ Kabsch 叠合。
+相减会被等价原子（苯环翻转、羧基两个氧互换等）误导，因此优先枚举
+RDKit 子结构匹配（等价原子映射），取原始坐标 RMSD 的最小值；图不匹配
+时退回到按元素分组的最优原子匹配（匈牙利算法）。
 
-这里的 RMSD 是 **对称校正并叠合后** 的重原子 RMSD，和 Vina 输出里
-基于受体的 pose RMSD 不是同一个量，报告里必须分开写。
+注意：这里 **不做事后叠合**。重对接关心的是 pose 在受体坐标系里的位置，
+如果把两个构象先叠合，整体平移的错误会被抵消，跑错位点的 pose 也会
+显示成 RMSD 0。Vina 自带的 pose RMSD 同样基于受体坐标系。
 """
 
 from __future__ import annotations
@@ -57,8 +58,8 @@ def _pdb_block(atoms: Sequence[Atom], resname: str = "LIG", chain: str = "L") ->
 
 
 def _rdkit_best_rms(reference: Sequence[Atom], probe: Sequence[Atom]) -> float:
+    import numpy as np
     from rdkit import Chem
-    from rdkit.Chem import rdMolAlign
 
     ref_mol = Chem.MolFromPDBBlock(
         _pdb_block(reference), sanitize=False, removeHs=False
@@ -70,7 +71,40 @@ def _rdkit_best_rms(reference: Sequence[Atom], probe: Sequence[Atom]) -> float:
         raise ValueError("RDKit 无法解析配体坐标")
     if ref_mol.GetNumAtoms() != probe_mol.GetNumAtoms():
         raise ValueError("原子数不一致")
-    return float(rdMolAlign.GetBestRMS(probe_mol, ref_mol))
+
+    # GetSubstructMatches(query) 返回的每个 tuple 中，第 i 个元素是
+    # target 中与 query 第 i 个原子等价的原子。query=ref、target=probe
+    # 时正好给出 ref→probe 的原子映射。
+    matches = probe_mol.GetSubstructMatches(ref_mol, uniquify=False, maxMatches=5000)
+    reverse = False
+    if not matches:
+        matches = ref_mol.GetSubstructMatches(probe_mol, uniquify=False, maxMatches=5000)
+        reverse = True
+    if not matches:
+        raise ValueError("RDKit 找不到等价的原子映射")
+
+    ref_conf = ref_mol.GetConformer()
+    probe_conf = probe_mol.GetConformer()
+    ref_coords = np.array(
+        [list(ref_conf.GetAtomPosition(i)) for i in range(ref_mol.GetNumAtoms())],
+        dtype=float,
+    )
+    probe_coords = np.array(
+        [list(probe_conf.GetAtomPosition(i)) for i in range(probe_mol.GetNumAtoms())],
+        dtype=float,
+    )
+    best = None
+    for match in matches:
+        if len(match) != ref_mol.GetNumAtoms():
+            continue
+        mapped = (ref_coords if reverse else probe_coords)[list(match)]
+        target = probe_coords if reverse else ref_coords
+        value = float(np.sqrt(((target - mapped) ** 2).sum(axis=1).mean()))
+        if best is None or value < best:
+            best = value
+    if best is None:
+        raise ValueError("原子映射不完整")
+    return best
 
 
 def _element_groups(atoms: Sequence[Atom]) -> dict[str, list[int]]:
@@ -104,16 +138,7 @@ def _hungarian_rms(reference: Sequence[Atom], probe: Sequence[Atom]) -> tuple[fl
 
     ref_coords = np.array([reference[i].coord for i, _ in pairs], dtype=float)
     probe_coords = np.array([probe[j].coord for _, j in pairs], dtype=float)
-    ref_centered = ref_coords - ref_coords.mean(axis=0)
-    probe_centered = probe_coords - probe_coords.mean(axis=0)
-    covariance = probe_centered.T @ ref_centered
-    u, _, vt = np.linalg.svd(covariance)
-    rotation = vt.T @ u.T
-    if np.linalg.det(rotation) < 0:
-        vt[-1, :] *= -1
-        rotation = vt.T @ u.T
-    aligned = probe_centered @ rotation.T
-    rms = float(np.sqrt(((aligned - ref_centered) ** 2).sum(axis=1).mean()))
+    rms = float(np.sqrt(((ref_coords - probe_coords) ** 2).sum(axis=1).mean()))
     return rms, len(pairs)
 
 
@@ -121,7 +146,7 @@ def symmetry_corrected_rmsd(
     reference: Sequence[Atom],
     probe: Sequence[Atom],
 ) -> RmsdResult:
-    """计算参考构象与待测构象之间的重原子对称校正 RMSD。"""
+    """计算参考构象与待测构象之间的重原子对称校正 RMSD（受体坐标系，不叠合）。"""
     reference_heavy = _heavy(reference)
     probe_heavy = _heavy(probe)
     if not reference_heavy or not probe_heavy:
@@ -137,7 +162,7 @@ def symmetry_corrected_rmsd(
         value = _rdkit_best_rms(reference_heavy, probe_heavy)
         return RmsdResult(
             value=value,
-            method="RDKit GetBestRMS（对称校正）",
+            method="RDKit 等价原子匹配（对称校正）",
             matched_atoms=len(reference_heavy),
             reference_atoms=len(reference_heavy),
             probe_atoms=len(probe_heavy),
@@ -152,7 +177,7 @@ def symmetry_corrected_rmsd(
             message += f"；仅匹配 {matched} 个原子"
         return RmsdResult(
             value=value,
-            method="按元素匈牙利匹配 + Kabsch 叠合",
+            method="按元素匈牙利匹配",
             matched_atoms=matched,
             reference_atoms=len(reference_heavy),
             probe_atoms=len(probe_heavy),

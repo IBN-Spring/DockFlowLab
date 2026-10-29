@@ -51,17 +51,16 @@ def test_rmsd_is_zero_for_permuted_equivalent_atoms():
     assert result.matched_atoms == 6
 
 
-def test_rmsd_aligns_rotation_and_translation():
+def test_rmsd_keeps_receptor_frame_translation():
+    """重对接 RMSD 不做事后叠合，整体平移必须被计入。"""
     coords = _ring_coords()
     reference = _atoms(coords)
-    # 绕 z 轴旋转 90°，再平移。
-    probe_coords = [(-y + 10.0, x - 5.0, z + 2.0) for x, y, z in coords]
-    probe = _atoms(probe_coords)
+    probe = _atoms([(x + 4.0, y, z) for x, y, z in coords])
 
     result = rmsd.symmetry_corrected_rmsd(reference, probe)
 
     assert result.ok, result.message
-    assert result.value == pytest.approx(0.0, abs=1e-4)
+    assert result.value == pytest.approx(4.0, abs=1e-4)
 
 
 def test_rmsd_reports_mismatch_instead_of_raising():

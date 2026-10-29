@@ -8,9 +8,11 @@ from PySide6.QtCore import QSize, Qt, Signal
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
+    QComboBox,
     QFrame,
     QHBoxLayout,
     QLabel,
+    QMessageBox,
     QPushButton,
     QScrollArea,
     QSizePolicy,
@@ -27,6 +29,7 @@ from ..services.interactions import (
     InteractionAnalysis,
 )
 from ..services.plip_analysis import analyze_complex_precise
+from ..services.pose_browser import PoseOption
 from . import theme
 from .geometry import ScreenFittedDialog
 from .interaction_view import NGL_AVAILABLE, NGL_UNAVAILABLE_REASON, InteractionView
@@ -88,6 +91,9 @@ class InteractionDialog(ScreenFittedDialog):
         target_label: str,
         ligand_label: str,
         parent: QWidget | None = None,
+        *,
+        pose_options: list[PoseOption] | None = None,
+        convergence_message: str = "",
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle("对接细节")
@@ -95,6 +101,12 @@ class InteractionDialog(ScreenFittedDialog):
         self._view: InteractionView | None = None
         self._shutdown_done = False
         self._complex_path = Path(complex_path)
+        self._target_label = target_label
+        self._ligand_label = ligand_label
+        self._pose_options = list(pose_options or [])
+        self._pose_combo: QComboBox | None = None
+        self._loading_pose = False
+        self._current_pose_index = 0
         # PLIP 需要补氢和识别键级，复杂体系要一两秒；先给出等待光标。
         QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
         try:
@@ -115,7 +127,7 @@ class InteractionDialog(ScreenFittedDialog):
         except OSError:
             self._pdb_text = ""
         self.fit_to_screen(
-            preferred=QSize(1180, 820), minimum=QSize(900, 620)
+            preferred=QSize(1180, 860), minimum=QSize(900, 640)
         )
 
         root = QVBoxLayout(self)
@@ -131,21 +143,45 @@ class InteractionDialog(ScreenFittedDialog):
         title.setWordWrap(True)
         root.addWidget(title)
 
-        basis = (
-            "PLIP 结构分析"
-            if self._analysis.engine == "plip"
-            else "基于配体周围 4.4 Å 内的重原子几何接触（含金属配位）"
-        )
-        subtitle = QLabel(f"{self._analysis.summary} · {basis}")
-        subtitle.setObjectName("PageSubtitle")
-        subtitle.setWordWrap(True)
-        root.addWidget(subtitle)
+        self._subtitle = QLabel(self._subtitle_text())
+        self._subtitle.setObjectName("PageSubtitle")
+        self._subtitle.setWordWrap(True)
+        root.addWidget(self._subtitle)
+
+        if len(self._pose_options) > 1:
+            pose_row = QHBoxLayout()
+            pose_row.setSpacing(8)
+            pose_label = QLabel("查看构象")
+            pose_label.setObjectName("Muted")
+            pose_row.addWidget(pose_label)
+            self._pose_combo = QComboBox()
+            for option in self._pose_options:
+                self._pose_combo.addItem(option.label, option.index)
+            self._pose_combo.setToolTip(
+                "切换 Vina 输出的不同结合构象；相互作用会重新分析。"
+            )
+            self._pose_combo.currentIndexChanged.connect(self._on_pose_changed)
+            pose_row.addWidget(self._pose_combo, 1)
+            root.addLayout(pose_row)
+
+        if convergence_message:
+            convergence = QLabel(convergence_message)
+            convergence.setObjectName("Warning")
+            convergence.setWordWrap(True)
+            root.addWidget(convergence)
 
         content = QHBoxLayout()
         content.setSpacing(14)
+        self._content_layout = content
         content.addLayout(self._build_view_panel(), 1)
         content.addWidget(self._build_side_panel(), 0)
         root.addLayout(content, 1)
+
+        # 初始 pose 由调用方保证是第一项；同步下拉框但不触发重新分析。
+        if self._pose_combo is not None and self._pose_options:
+            self._loading_pose = True
+            self._pose_combo.setCurrentIndex(0)
+            self._loading_pose = False
 
         if NGL_AVAILABLE:
             try:
@@ -164,6 +200,14 @@ class InteractionDialog(ScreenFittedDialog):
     # ------------------------------------------------------------------
     # 左侧：3D 视图
     # ------------------------------------------------------------------
+    def _subtitle_text(self) -> str:
+        basis = (
+            "PLIP 结构分析"
+            if self._analysis.engine == "plip"
+            else "基于配体周围 4.4 Å 内的重原子几何接触（含金属配位）"
+        )
+        return f"{self._analysis.summary} · {basis}"
+
     def _build_view_panel(self) -> QVBoxLayout:
         panel = QVBoxLayout()
         panel.setSpacing(9)
@@ -192,28 +236,12 @@ class InteractionDialog(ScreenFittedDialog):
         controls = QVBoxLayout()
         controls.setSpacing(8)
 
-        # 只给实际出现的类型留开关；PLIP 新增的盐桥、π 相互作用等通常只有
-        # 少数几条，全部排出来反而让工具条显得拥挤。
-        self._present_kinds = [
-            kind for kind in KIND_ORDER if self._analysis.counts.get(kind, 0)
-        ]
-        kind_row = QHBoxLayout()
-        kind_row.setSpacing(10)
+        # 只给实际出现的类型留开关；切换 pose 后重新生成这一行。
+        self._kind_row = QHBoxLayout()
+        self._kind_row.setSpacing(10)
         self._checks: dict[str, QCheckBox] = {}
-        for kind in self._present_kinds:
-            count = self._analysis.counts.get(kind, 0)
-            check = QCheckBox(f"{KIND_LABELS[kind]} {count}")
-            check.setToolTip(
-                f"显示或隐藏{KIND_LABELS[kind]}\n{KIND_HINTS[kind]}"
-            )
-            check.setChecked(True)
-            check.toggled.connect(
-                lambda checked, key=kind: self._toggle_kind(key, checked)
-            )
-            self._checks[kind] = check
-            kind_row.addWidget(check)
-        kind_row.addStretch(1)
-        controls.addLayout(kind_row)
+        controls.addLayout(self._kind_row)
+        self._rebuild_kind_checks()
 
         action_row = QHBoxLayout()
         action_row.setSpacing(10)
@@ -250,6 +278,39 @@ class InteractionDialog(ScreenFittedDialog):
         self._view_hint.setObjectName("Muted")
         panel.addWidget(self._view_hint)
         return panel
+
+    def _rebuild_kind_checks(self) -> None:
+        previous = {
+            kind: check.isChecked() for kind, check in self._checks.items()
+        }
+        while self._kind_row.count():
+            item = self._kind_row.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+        self._present_kinds = [
+            kind for kind in KIND_ORDER if self._analysis.counts.get(kind, 0)
+        ]
+        self._checks = {}
+        for kind in self._present_kinds:
+            count = self._analysis.counts.get(kind, 0)
+            check = QCheckBox(f"{KIND_LABELS[kind]} {count}")
+            check.setToolTip(
+                f"显示或隐藏{KIND_LABELS[kind]}\n{KIND_HINTS[kind]}"
+            )
+            check.setChecked(previous.get(kind, True))
+            check.toggled.connect(
+                lambda checked, key=kind: self._toggle_kind(key, checked)
+            )
+            self._checks[kind] = check
+            self._kind_row.addWidget(check)
+        self._kind_row.addStretch(1)
+
+    def _apply_kind_visibility(self) -> None:
+        if self._view is None:
+            return
+        for kind, check in self._checks.items():
+            self._view.set_kind_visible(kind, check.isChecked())
 
     def _show_view_error(self, message: str) -> None:
         if self._view is not None:
@@ -536,6 +597,78 @@ class InteractionDialog(ScreenFittedDialog):
         if self._side_panel is not None:
             self._side_panel.setVisible(checked)
         self._fallback_close.setVisible(not checked)
+
+    # ------------------------------------------------------------------
+    # 构象切换
+    # ------------------------------------------------------------------
+    def _replace_side_panel(self) -> None:
+        old = self._side_panel
+        self._side_panel = None
+        if old is not None:
+            self._content_layout.removeWidget(old)
+            old.hide()
+            old.deleteLater()
+        self._rows = []
+        self._scroll = None
+        self._selected_index = -1
+        panel = self._build_side_panel()
+        self._content_layout.insertWidget(1, panel, 0)
+        panel.setVisible(self._list_check.isChecked())
+
+    def _on_pose_changed(self, combo_index: int) -> None:
+        if self._loading_pose:
+            return
+        if not 0 <= combo_index < len(self._pose_options):
+            return
+        option = self._pose_options[combo_index]
+        path = option.complex_path
+        if path is None or not Path(path).is_file():
+            QMessageBox.warning(
+                self,
+                "无法显示该构象",
+                "这个构象的复合物文件没有生成，可能是对接结果不完整。",
+            )
+            self._restore_pose_combo()
+            return
+
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        try:
+            analysis = analyze_complex_precise(Path(path))
+            text = Path(path).read_text(encoding="utf-8", errors="replace")
+        except Exception as exc:
+            QApplication.restoreOverrideCursor()
+            QMessageBox.warning(
+                self,
+                "构象分析失败",
+                f"无法分析构象 {option.rank}：{exc}",
+            )
+            self._restore_pose_combo()
+            return
+        QApplication.restoreOverrideCursor()
+
+        self._analysis = analysis
+        self._pdb_text = text
+        self._complex_path = Path(path)
+        self._current_pose_index = combo_index
+        self._subtitle.setText(self._subtitle_text())
+        self._replace_side_panel()
+        self._rebuild_kind_checks()
+
+        if self._view is not None:
+            try:
+                self._view.set_data(self._analysis, self._pdb_text)
+                self._apply_kind_visibility()
+                self._view.reset_view()
+            except Exception as exc:
+                self._view.hide()
+                self._show_view_error(str(exc))
+
+    def _restore_pose_combo(self) -> None:
+        if self._pose_combo is None:
+            return
+        self._loading_pose = True
+        self._pose_combo.setCurrentIndex(getattr(self, "_current_pose_index", 0))
+        self._loading_pose = False
 
     def _reset_view(self) -> None:
         self._apply_selection(-1, notify_view=True)
