@@ -58,6 +58,7 @@ SUBDIRS = (
     "boxes",
     "docking",
     "complexes",
+    "validation",
     "analysis",
     "report",
     "pymol",
@@ -545,6 +546,16 @@ class Workspace:
 
     def pymol_path(self, target_stem: str, ligand_stem: str) -> Path:
         return self.root / "pymol" / f"{target_stem}__{ligand_stem}.pml"
+
+    def validation_dir(self, target_stem: str) -> Path:
+        """重对接验证的独立目录，避免与用户自己的对接结果混在一起。"""
+        return self.root / "validation" / target_stem
+
+    def redocking_output(self, target_stem: str) -> Path:
+        return self.validation_dir(target_stem) / "redocked.pdbqt"
+
+    def redocking_meta(self, target_stem: str) -> Path:
+        return self.validation_dir(target_stem) / "redocking.json"
 
     def render_path(self, target_stem: str, ligand_stem: str, style_token: str) -> Path:
         """PyMOL 渲染图的输出路径（已清理的脚本标签由调用方给出）。"""

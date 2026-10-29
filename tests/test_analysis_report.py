@@ -72,6 +72,23 @@ def test_analyze_bundle(result_workspace):
     assert payload["project"] == workspace.name
 
 
+def test_analysis_adds_ligand_efficiency_from_prep_details(result_workspace):
+    workspace, target, first, second = result_workspace
+    first.meta["prep_details"] = {
+        "heavy_atoms": 20,
+        "molecular_weight": 180.16,
+        "rotatable_bonds": 3,
+    }
+    results = make_results(target, [first])
+
+    bundle = analyze(workspace, results, make_heatmap=False, make_bar=False)
+
+    row = bundle.dataframe.iloc[0]
+    assert row["重原子数"] == 20
+    assert row["配体效率 (kcal/mol/重原子)"] == pytest.approx(7.5 / 20, abs=1e-3)
+    assert row["可旋转键"] == 3
+
+
 def test_analysis_includes_failure_and_empty(tmp_path):
     from dockflowlab.workspace import Workspace
 

@@ -22,9 +22,11 @@ import pandas as pd  # noqa: E402
 from matplotlib.colors import LinearSegmentedColormap  # noqa: E402
 from matplotlib.font_manager import FontProperties, fontManager  # noqa: E402
 
+from ..core import pdbio  # noqa: E402
 from ..core.models import DockingResult, ProjectFile  # noqa: E402
 from ..logging_setup import get_logger  # noqa: E402
 from ..workspace import Workspace  # noqa: E402
+from .advice import ligand_efficiency  # noqa: E402
 from .docking import collect_existing_results  # noqa: E402
 
 log = get_logger("analysis")
@@ -242,6 +244,32 @@ def _status_label(result: DockingResult) -> str:
     return "失败"
 
 
+def ligand_properties(workspace: Workspace) -> dict[str, dict[str, Any]]:
+    """读取每个配体的重原子数、分子量与可旋转键，用于 LE 与结果表。
+
+    新项目在 ``prep_details`` 中已有这些信息；旧项目没有时从已准备的
+    PDBQT 统计重原子数，至少保证 LE 可用。
+    """
+    props: dict[str, dict[str, Any]] = {}
+    for entry in workspace.ligands:
+        details = entry.meta.get("prep_details")
+        details = details if isinstance(details, dict) else {}
+        heavy = details.get("heavy_atoms")
+        if not heavy and entry.prepared:
+            try:
+                prepared = workspace.absolute(entry.prepared)
+                atoms = pdbio.parse_first_pose_atoms(prepared)
+                heavy = sum(1 for atom in atoms if not atom.is_hydrogen)
+            except Exception:
+                heavy = None
+        props[entry.stem] = {
+            "heavy_atoms": int(heavy) if heavy else None,
+            "molecular_weight": details.get("molecular_weight"),
+            "rotatable_bonds": details.get("rotatable_bonds"),
+        }
+    return props
+
+
 def build_binding_matrix(results: Sequence[DockingResult]) -> pd.DataFrame:
     """成功结果的最佳打分矩阵，行列仍使用内部代号。"""
     successes = [result for result in results if result.ok and result.poses]
@@ -297,11 +325,14 @@ def analyze(
 
     target_labels = unique_labels(workspace.targets)
     ligand_labels = unique_labels(workspace.ligands)
+    ligand_props = ligand_properties(workspace)
 
     rows: list[dict[str, Any]] = []
     for result in results:
         target_label = target_labels.get(result.target, result.target)
         ligand_label = ligand_labels.get(result.ligand, result.ligand)
+        props = ligand_props.get(result.ligand, {})
+        heavy = props.get("heavy_atoms")
         base = {
             "靶点": target_label,
             "靶点代号": result.target,
@@ -309,15 +340,22 @@ def analyze(
             "配体代号": result.ligand,
             "对接类型": result.mode_label or "—",
             "盒子来源": result.box_source or "—",
+            "重原子数": heavy,
+            "分子量": props.get("molecular_weight"),
+            "可旋转键": props.get("rotatable_bonds"),
             "耗时（秒）": round(result.runtime_seconds, 1) if result.runtime_seconds else None,
         }
         if result.ok and result.poses:
             for index, pose in enumerate(result.poses, start=1):
+                efficiency = ligand_efficiency(pose.affinity, heavy)
                 rows.append(
                     {
                         **base,
                         "排名": index,
                         "结合能 (kcal/mol)": round(pose.affinity, 3),
+                        "配体效率 (kcal/mol/重原子)": (
+                            round(efficiency, 3) if efficiency is not None else None
+                        ),
                         "RMSD 下限 (Å)": round(pose.rmsd_lb, 3),
                         "RMSD 上限 (Å)": round(pose.rmsd_ub, 3),
                         "状态": _status_label(result),
@@ -330,6 +368,7 @@ def analyze(
                     **base,
                     "排名": None,
                     "结合能 (kcal/mol)": None,
+                    "配体效率 (kcal/mol/重原子)": None,
                     "RMSD 下限 (Å)": None,
                     "RMSD 上限 (Å)": None,
                     "状态": _status_label(result),
@@ -342,8 +381,9 @@ def analyze(
         dataframe = pd.DataFrame(
             columns=[
                 "靶点", "靶点代号", "配体", "配体代号", "对接类型", "盒子来源",
-                "耗时（秒）", "排名", "结合能 (kcal/mol)", "RMSD 下限 (Å)",
-                "RMSD 上限 (Å)", "状态", "说明",
+                "重原子数", "分子量", "可旋转键", "耗时（秒）", "排名",
+                "结合能 (kcal/mol)", "配体效率 (kcal/mol/重原子)",
+                "RMSD 下限 (Å)", "RMSD 上限 (Å)", "状态", "说明",
             ]
         )
 
