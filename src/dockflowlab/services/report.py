@@ -393,6 +393,44 @@ def _pose_table(
     )
 
 
+def _exhaustiveness_advice_text(
+    workspace: Workspace, results: Sequence[DockingResult]
+) -> str:
+    """按配体复杂度给出 exhaustiveness 建议，并标注实际运行是否偏低。"""
+    from .advice import recommend_exhaustiveness
+
+    best = None
+    for entry in workspace.ligands:
+        details = entry.meta.get("prep_details") or {}
+        if not isinstance(details, dict):
+            continue
+        try:
+            rotatable = int(details.get("rotatable_bonds") or 0)
+            heavy = int(details.get("heavy_atoms") or 0)
+        except (TypeError, ValueError):
+            continue
+        if heavy <= 0:
+            continue
+        advice = recommend_exhaustiveness(rotatable, heavy)
+        if best is None or advice.recommended > best.recommended:
+            best = advice
+    if best is None:
+        return ""
+    text = best.reason
+    used = [
+        int(item.parameters["exhaustiveness"])
+        for item in results
+        if item.ok and isinstance(item.parameters, dict)
+        and str(item.parameters.get("exhaustiveness", "")).isdigit()
+    ]
+    if used and min(used) < best.recommended:
+        text += (
+            f" 本次实际使用 exhaustiveness={min(used)}，低于建议值；"
+            "低搜索深度可能产生看似合理但未收敛的构象。"
+        )
+    return text
+
+
 def _methods(workspace: Workspace, results: Sequence[DockingResult]) -> str:
     box_sources = sorted({BOX_LABELS.get(item.box_source, item.box_source) for item in results if item.box_source})
     target_methods = sorted({
@@ -427,11 +465,15 @@ def _methods(workspace: Workspace, results: Sequence[DockingResult]) -> str:
     ph_value = _prep_ph(workspace)
     if ph_value:
         items.append(("质子化 pH", f"{ph_value}（准备时用于加氢或质子化校正）"))
+    advice_text = _exhaustiveness_advice_text(workspace, results)
     items.extend(
         [
             ("对接类型", "；".join(mode_labels) or "根据结构类型自动识别"),
             ("对接程序", _engine_summary(results)),
             ("对接运行参数", _run_parameters_text(results)),
+        ]
+        + ([("搜索深度建议", advice_text)] if advice_text else [])
+        + [
             ("盒子来源", "；".join(box_sources) or "自动"),
             ("评分含义", "对接打分是经验评分函数的输出，单位为 kcal/mol；数值越低表示该程序预测的结合越有利。它不等同于实验测得的 ΔG 或 Kd，也不能单独证明结合模式；分数还会随引擎与版本、评分函数（如 Vinardo）、受体/配体预处理、是否保留水/离子以及盒子范围而变化，因此不宜直接与其他软件或不同引擎（AutoDock Vina / QuickVina 2 / Smina）的分数比较。同一分子的分数也会随盒子大小、exhaustiveness 与随机种子变化，比较时应确认这些条件一致。小分子片段通常只能得到较小的负值。"),
             ("类型适用性", "；".join(mode_notes) or "不同对接类型的分数不宜直接横向比较。"),

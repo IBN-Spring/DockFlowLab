@@ -270,6 +270,19 @@ def test_report_can_include_interaction_summary(result_workspace):
     assert "PLIP" in text
 
 
+def test_report_includes_exhaustiveness_advice(result_workspace):
+    workspace, target, first, _ = result_workspace
+    first.meta["prep_details"] = {"rotatable_bonds": 12, "heavy_atoms": 40}
+    results = make_results(target, [first])
+    results[0].parameters = {"exhaustiveness": 8}
+
+    text = generate_report(workspace, results).read_text(encoding="utf-8")
+
+    assert "搜索深度建议" in text
+    assert "exhaustiveness=32" in text or "exhaustiveness = 32" in text
+    assert "低于建议值" in text
+
+
 def test_analyze_warns_when_parameters_differ(result_workspace):
     workspace, target, first, second = result_workspace
     results = make_results(target, [first, second])

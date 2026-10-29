@@ -857,6 +857,20 @@ class MainWindow(QMainWindow):
         self.settings.seed = int(params["seed"])
         self.settings.cpu = int(params["cpu"])
         self.settings.save()
+        advice = self.dock_page.exhaustiveness_advice()
+        if advice is not None and self.settings.exhaustiveness < advice.recommended:
+            answer = QMessageBox.question(
+                self,
+                "搜索深度偏低",
+                advice.reason
+                + f"\n\n当前 exhaustiveness={self.settings.exhaustiveness}，"
+                f"建议至少 {advice.recommended}。\n"
+                "继续使用较低值可能得到看似合理、实际未收敛的构象。\n\n是否仍要继续？",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if answer != QMessageBox.StandardButton.Yes:
+                return
         options = DockingOptions(
             exhaustiveness=self.settings.exhaustiveness,
             num_modes=self.settings.num_modes,

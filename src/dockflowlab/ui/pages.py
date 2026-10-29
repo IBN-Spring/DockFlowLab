@@ -32,6 +32,7 @@ from PySide6.QtWidgets import (
 
 from ..core.models import KIND_LIGAND, KIND_TARGET, STATUS_READY, DockingResult, ProjectFile
 from ..services import modes
+from ..services.advice import ExhaustivenessAdvice, recommend_exhaustiveness
 from ..workspace import Workspace
 from . import theme
 from .widgets import (
@@ -564,6 +565,7 @@ class DockPage(Page):
         self._actions_enabled = True
         self._has_workspace = False
         self._run_ready = False
+        self._ligand_advice: ExhaustivenessAdvice | None = None
         self._row_buttons: list[QPushButton] = []
         change = QPushButton("更换工作目录")
         change.setObjectName("Link")
@@ -624,6 +626,9 @@ class DockPage(Page):
         self.exhaustiveness.addItem("极致（64，较慢）", 64)
         self.exhaustiveness.setCurrentIndex(1)
         self.exhaustiveness.setMaximumWidth(240)
+        self.exhaustiveness.currentIndexChanged.connect(
+            self._update_exhaustiveness_advice
+        )
         grid.addWidget(self.exhaustiveness, 1, 1)
         grid.addWidget(QLabel("输出构象数"), 1, 2)
         self.num_modes = QSpinBox()
@@ -651,6 +656,11 @@ class DockPage(Page):
         grid.setColumnMinimumWidth(0, 110)
         grid.setColumnMinimumWidth(2, 130)
         params.add_layout(grid)
+        self.advice_label = QLabel("")
+        self.advice_label.setObjectName("Muted")
+        self.advice_label.setWordWrap(True)
+        self.advice_label.setVisible(False)
+        params.add(self.advice_label)
         self.body.addWidget(params)
 
         self.summary_card = Card("本次任务")
@@ -724,11 +734,15 @@ class DockPage(Page):
             self.summary_label.setText("—")
             self.auto_button.setEnabled(False)
             self.run_button.setEnabled(False)
+            self._ligand_advice = None
+            self._update_exhaustiveness_advice()
             return
         self._has_workspace = True
         self.auto_button.setEnabled(self._actions_enabled)
         ready_targets = [entry for entry in workspace.targets if entry.status == STATUS_READY]
         ready_ligands = [entry for entry in workspace.ligands if entry.status == STATUS_READY]
+        self._ligand_advice = self._compute_ligand_advice(ready_ligands)
+        self._update_exhaustiveness_advice()
         supported = modes.supported_pairs(ready_targets, ready_ligands, workspace)
         runnable_targets = []
         seen: set[str] = set()
@@ -781,6 +795,44 @@ class DockPage(Page):
         self.summary_label.setText(text)
         self._run_ready = pair_count > 0
         self.run_button.setEnabled(self._actions_enabled and self._run_ready)
+
+    @staticmethod
+    def _compute_ligand_advice(ligands) -> ExhaustivenessAdvice | None:
+        best: ExhaustivenessAdvice | None = None
+        for entry in ligands:
+            details = entry.meta.get("prep_details") or {}
+            try:
+                rotatable = int(details.get("rotatable_bonds") or 0)
+                heavy = int(details.get("heavy_atoms") or 0)
+            except (TypeError, ValueError):
+                continue
+            if heavy <= 0:
+                continue
+            advice = recommend_exhaustiveness(rotatable, heavy)
+            if best is None or (advice.recommended, advice.rotatable_bonds, advice.heavy_atoms) > (
+                best.recommended,
+                best.rotatable_bonds,
+                best.heavy_atoms,
+            ):
+                best = advice
+        return best
+
+    def exhaustiveness_advice(self) -> ExhaustivenessAdvice | None:
+        return self._ligand_advice
+
+    def _update_exhaustiveness_advice(self) -> None:
+        advice = self._ligand_advice
+        if advice is None:
+            self.advice_label.setVisible(False)
+            self.advice_label.setText("")
+            return
+        current = int(self.exhaustiveness.currentData() or 0)
+        text = f"按候选分子复杂度建议：{advice.reason}"
+        warning = advice.warning_for(current)
+        if warning:
+            text += "\n" + warning
+        self.advice_label.setText(text)
+        self.advice_label.setVisible(True)
 
     def _box_row(
         self,
