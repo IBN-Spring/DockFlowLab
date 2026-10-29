@@ -119,6 +119,17 @@ def test_html_report_is_self_contained(result_workspace):
     assert "尚未进行重对接验证" in text
 
 
+def test_report_shows_ligand_efficiency(result_workspace):
+    workspace, target, first, _second = result_workspace
+    first.meta["prep_details"] = {"heavy_atoms": 20, "rotatable_bonds": 3}
+    results = make_results(target, [first])
+
+    text = generate_report(workspace, results).read_text(encoding="utf-8")
+
+    assert "LE = −ΔG / 重原子数" in text
+    assert "最佳配体效率 LE = 0.38" in text
+
+
 def test_heatmap_custom_text_color_and_svg(result_workspace):
     workspace, target, first, second = result_workspace
     results = make_results(target, [first, second])

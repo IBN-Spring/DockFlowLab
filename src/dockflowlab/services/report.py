@@ -279,6 +279,7 @@ def _results_table(
     target_labels: dict[str, str],
     ligand_labels: dict[str, str],
     interaction_index=None,
+    heavy_atoms: dict[str, int] | None = None,
 ) -> str:
     if not results:
         return '<p class="empty">项目里还没有对接结果。完成至少一组对接后重新生成报告。</p>'
@@ -312,6 +313,15 @@ def _results_table(
         box_detail = _box_detail(item)
         if box_detail:
             box_cell += f'<br><span class="meta">{_e(box_detail)}</span>'
+        le_cell = ""
+        if heavy_atoms is not None:
+            heavy = heavy_atoms.get(item.ligand) if item.ok and item.poses else None
+            if heavy:
+                le_cell = (
+                    f'<td class="num">{-item.poses[0].affinity / heavy:.2f}</td>'
+                )
+            else:
+                le_cell = '<td class="num">—</td>'
         interaction_cell = ""
         if interaction_index is not None:
             entry = interaction_index.get(item.target, item.ligand)
@@ -334,6 +344,7 @@ def _results_table(
             f"<td>{_e(ligand_labels.get(item.ligand, item.ligand))}</td>"
             f"<td>{_e(item.mode_label or '—')}</td>"
             f'<td class="num">{_e(score)}</td>'
+            f"{le_cell}"
             f"<td>{box_cell}</td>"
             f'<td class="num">{_e(runtime)}</td>'
             f"<td>{status}</td>"
@@ -343,16 +354,23 @@ def _results_table(
         )
     interaction_head = "<th>相互作用</th>" if interaction_index is not None else ""
     note = ""
+    if heavy_atoms is not None:
+        note += (
+            '<p class="meta">LE = −ΔG / 重原子数，单位 kcal/mol/重原子；'
+            "便于比较不同大小的分子，但不同靶点的 LE 不宜直接对比。</p>"
+        )
     if interaction_index is not None:
-        note = (
+        note += (
             '<p class="meta">“相互作用”来自 PLIP（不可用时回退几何判定），'
             "只统计当前展示的接触；筛选请在软件结果页进行。"
             "对接输出的极性氢位置未优化，氢键的供体–氢–受体角度与距离只作参考，"
             "不宜据此判定氢键强弱。</p>"
         )
+    le_head = "<th class='num'>LE</th>" if heavy_atoms is not None else ""
     return (
         '<div class="table-wrap"><table>'
         "<thead><tr><th>靶点</th><th>候选分子</th><th>对接类型</th><th class='num'>最佳打分</th>"
+        f"{le_head}"
         f"<th>盒子来源</th><th class='num'>耗时 (秒)</th><th>状态</th>{interaction_head}<th>说明</th></tr></thead>"
         f"<tbody>{''.join(rows)}</tbody></table></div>{note}"
     )
@@ -576,7 +594,7 @@ def _trust_section(
     successes = [item for item in results if item.ok and item.poses]
     if not successes:
         return ""
-    from .advice import recommend_exhaustiveness
+    from .advice import ligand_efficiency, recommend_exhaustiveness
     from .redocking import load_redocking
 
     items: list[str] = []
@@ -615,6 +633,22 @@ def _trust_section(
         items.append(
             f"实际 exhaustiveness={min(used)}，低于按配体复杂度给出的建议值 "
             f"{advice.recommended}；低搜索深度可能产生未收敛的构象。"
+        )
+    ligand_by_stem = {entry.stem: entry for entry in workspace.ligands}
+    best = min(successes, key=lambda item: item.poses[0].affinity)
+    entry = ligand_by_stem.get(best.ligand)
+    details = (entry.meta.get("prep_details") if entry is not None else None) or {}
+    try:
+        heavy = int(details.get("heavy_atoms") or 0)
+    except (TypeError, ValueError):
+        heavy = 0
+    efficiency = ligand_efficiency(best.poses[0].affinity, heavy)
+    if efficiency is not None:
+        name = entry.display_name if entry is not None else best.ligand
+        items.append(
+            f"最佳配体效率 LE = {efficiency:.2f} kcal/mol/重原子"
+            f"（{name}，{heavy} 个重原子）；LE 便于比较不同大小的分子，"
+            "但不同靶点之间不宜直接对比。"
         )
     validated = []
     for stem in sorted({item.target for item in successes}):
@@ -739,6 +773,17 @@ def generate_report(
     heatmap_config = load_heatmap_config(workspace)
     target_labels.update(heatmap_config.target_labels)
     ligand_labels.update(heatmap_config.ligand_labels)
+    heavy_atoms: dict[str, int] = {}
+    for entry in workspace.ligands:
+        details = entry.meta.get("prep_details") or {}
+        if not isinstance(details, dict):
+            continue
+        try:
+            heavy = int(details.get("heavy_atoms") or 0)
+        except (TypeError, ValueError):
+            continue
+        if heavy > 0:
+            heavy_atoms[entry.stem] = heavy
     payload = {
         "title": _e(title),
         "project": _e(project_name),
@@ -746,7 +791,11 @@ def generate_report(
         "tiles": _tiles(bundle),
         "charts": _charts(bundle),
         "results": _results_table(
-            bundle.results, target_labels, ligand_labels, interaction_index
+            bundle.results,
+            target_labels,
+            ligand_labels,
+            interaction_index,
+            heavy_atoms,
         ),
         "poses": _pose_table(bundle.results, target_labels, ligand_labels),
         "redocking": _redocking_section(workspace),
