@@ -61,7 +61,9 @@ config.py    用户偏好（与项目无关）
   读取准备阶段写入的 `meta["kind"]`，否则按文件内容识别，并用文件时间戳/大小
   做 LRU 缓存。所有入口（界面、CLI、对接、分析、报告）共用这一份判断。
 - `preparation.py`：编排受体与配体的准备流程，汇总每个条目的结果，并把结构
-  类型写入条目元数据。
+  类型写入条目元数据。准备阶段同时生成结构体检（缺失残基/原子、altloc、
+  occupancy、金属离子、水与共晶配体），写入 `prep_details["structure_qc"]`
+  与 `prep_warnings`，供准备页体检卡与结果可信度卡使用。
 - `receptor.py` / `ligand.py`：具体的结构修复、加氢、Meeko 与 OpenBabel 回退。
   受体准备会先整链移除共晶配体所在的短链（包括肽类抑制剂），再做 PDBFixer
   修复，避免配体的标准残基被当成受体的一部分。需要金属酶研究时，
@@ -106,6 +108,22 @@ config.py    用户偏好（与项目无关）
   渲染带超时，取消/超时时调用 `run_process(kill_tree=True)` 结束 PyMOL 启动器
   及其派生的 `python.exe`，因此原生崩溃或卡死不会影响界面。
 
+- `rmsd.py`：对称校正的配体 RMSD（受体坐标系，不叠合）。RDKit 子结构匹配枚举
+  等价原子后取最小 RMSD；失败时用元素匈牙利匹配兜底。方法名写入结果，便于报告
+  说明 RMSD 的口径。
+- `redocking.py`：从共晶配体提取参考位点，用当前盒子与参数重跑一次对接，比较
+  实验构象与最佳 pose 的 RMSD（阈值 2.0 Å）。结果写入 `redocking/`，与普通对接
+  分开缓存；盒子、参数或引擎变化不会静默复用旧验证。
+- `pose_browser.py`：为结果页拆分 Vina 多构象复合物（`complexes/<target>/<ligand>_poseN.pdb`），
+  按输出 PDBQT 的修改时间失效；同时计算 pose 间收敛提示，供细节窗口切换构象。
+- `interaction_index.py`：批量相互作用索引与缓存（`analysis/interactions/<target>/<ligand>.json`，
+  按复合物时间与大小失效）。支持按类型、残基包含/排除筛选；单条失败被隔离，
+  取消在每次回调后立即生效。
+- `interaction_export.py`：把相互作用表导出为 CSV（类型、残基、链、原子、距离、
+  pose 排名），与结果页筛选表共用字段口径。
+- `advice.py`：按可旋转键与重原子数推荐 exhaustiveness，并计算配体效率
+  `LE = −ΔG / 重原子数`。
+
 服务函数接收 `Workspace`、`AppSettings` 等显式参数，不读全局界面状态。
 
 ### tools
@@ -114,6 +132,7 @@ config.py    用户偏好（与项目无关）
   可执行文件、补充 DLL 搜索路径、在 ASCII 临时目录运行、解析 PDBQT 姿态；
   Vina 用 `--config`，两个 Vina 1.1.2 风格引擎用命令行参数。Smina 输出的
   `minimizedAffinity` 会改写为标准 `VINA RESULT` 备注，供后续统一解析。
+  Smina 的评分函数（默认 / Vinardo）通过 `--scoring` 传入，并写入结果参数。
 - `obabel.py`：优先 Python API，失败时 CLI 回退；兼容 conda、wheel、系统安装与
   PyInstaller 内置布局。
 - `runtime.py`：`resource_path`、临时目录、子进程封装、平台判断。
