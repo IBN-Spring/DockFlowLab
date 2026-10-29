@@ -35,6 +35,7 @@ from ..services.pose_browser import PoseOption
 from . import theme
 from .geometry import ScreenFittedDialog
 from .interaction_view import NGL_AVAILABLE, NGL_UNAVAILABLE_REASON, InteractionView
+from .widgets import Callout
 
 KIND_COLORS = {
     "hbond": "#2a78d6",
@@ -167,10 +168,7 @@ class InteractionDialog(ScreenFittedDialog):
             root.addLayout(pose_row)
 
         if convergence_message:
-            convergence = QLabel(convergence_message)
-            convergence.setObjectName("Warning")
-            convergence.setWordWrap(True)
-            root.addWidget(convergence)
+            root.addWidget(Callout(convergence_message, "warning"))
 
         content = QHBoxLayout()
         content.setSpacing(14)
@@ -479,10 +477,7 @@ class InteractionDialog(ScreenFittedDialog):
             "\n提示：对接引擎输出的极性氢位置未优化，氢键的供体–氢–受体角度"
             "与距离只作参考；判断氢键强弱应回到原始结构或做进一步优化验证。"
         )
-        caveat = QLabel(caveat_text)
-        caveat.setObjectName("Muted")
-        caveat.setWordWrap(True)
-        layout.addWidget(caveat)
+        layout.addWidget(Callout(caveat_text, "info"))
 
         buttons = QHBoxLayout()
         buttons.setSpacing(8)

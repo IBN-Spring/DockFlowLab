@@ -80,9 +80,9 @@ def test_results_offer_interaction_details(qt_app, tmp_path):
     page.show_results(workspace, [result])
 
     assert not page.trust_card.isHidden()
-    assert "盒子来源" in page.trust_label.text()
+    assert "盒子来源" in [row.name_label.text() for row in page.trust_rows]
 
-    actions = page.table.cellWidget(0, 8)
+    actions = page.table.cellWidget(0, 9)
     assert actions is not None
     buttons = {button.text(): button for button in actions.findChildren(QPushButton)}
     assert set(buttons) == {"细节", "PyMOL", "定位"}
@@ -122,11 +122,11 @@ def test_prepare_page_shows_qc_and_disables_redocking_without_ligand(qt_app, tmp
     page = PreparePage()
     page.refresh(workspace)
 
-    text = page.qc_label.text()
-    assert "缺失残基" in text
-    assert "金属离子" in text
-    assert "准备提示" in text
-    assert "共晶配体" in text
+    facts = page.qc_facts.text()
+    assert "缺失残基" in facts
+    assert "金属离子" in facts
+    assert "准备提示" in page.qc_callout.text()
+    assert "共晶配体" in page.redock_reason.text()
     assert not page.redock_button.isEnabled()
 
 
@@ -181,7 +181,7 @@ def test_results_filter_and_csv_export(qt_app, tmp_path):
 
     # 表格顺序按分数排序，先确认相互作用列已回填。
     assert not page.filter_row.isHidden()
-    assert page.table.item(0, 5).text() != "—"
+    assert page.table.item(0, 6).text() != "—"
 
     page.residue_filter.setText("met318")
     assert page.visible_row_keys() == [("t", "a")]

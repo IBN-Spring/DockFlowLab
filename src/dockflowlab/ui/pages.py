@@ -32,18 +32,27 @@ from PySide6.QtWidgets import (
 
 from ..core.models import KIND_LIGAND, KIND_TARGET, STATUS_READY, DockingResult, ProjectFile
 from ..services import modes
-from ..services.advice import ExhaustivenessAdvice, recommend_exhaustiveness
+from ..services.advice import (
+    ExhaustivenessAdvice,
+    ligand_efficiency,
+    recommend_exhaustiveness,
+)
 from ..workspace import Workspace
 from . import theme
 from .widgets import (
+    Callout,
     Card,
     DropZone,
     EmptyState,
     EntityRow,
+    FactGrid,
     LogPanel,
     PageHeader,
     StatTile,
     StatusChip,
+    StatusRow,
+    make_divider,
+    section_title,
 )
 
 TARGET_FILTER = (
@@ -72,6 +81,13 @@ def _plain_number(spin: QAbstractSpinBox) -> QAbstractSpinBox:
 def _refresh_style(widget: QWidget) -> None:
     widget.style().unpolish(widget)
     widget.style().polish(widget)
+
+
+def _field_label(text: str) -> QLabel:
+    """设置项左侧的字段名，语气比正文轻，避免和数值抢注意力。"""
+    label = QLabel(text)
+    label.setObjectName("CardHint")
+    return label
 
 
 def _display_map(entries) -> dict[str, str]:
@@ -450,35 +466,60 @@ class PreparePage(Page):
         self.body.addWidget(options)
 
         self.qc_card = Card(
-            "结构体检与重对接验证",
-            "体检读取 PDB 的 REMARK 350/465/470、altloc 与 occupancy。"
-            "重对接会用当前盒子与参数把晶体配体重新对接到受体上，"
-            "RMSD ≤ 2 Å 说明这套流程能复现实验构象。",
+            "结构检查与校准",
+            "先用体检确认结构本身没有会影响解释的问题，再用晶体配体做一次"
+            "重对接，确认当前的盒子和参数能复现实验构象。两步都可以在准备好之前完成。",
         )
+
+        # 1) 结构体检：靶点下拉框 + 字段网格 + 准备提示
+        target_row = QHBoxLayout()
+        target_row.setSpacing(8)
+        target_label = QLabel("查看靶点")
+        target_label.setObjectName("CardHint")
+        target_row.addWidget(target_label)
+        self.redock_target = QComboBox()
+        self.redock_target.setMaximumWidth(320)
+        self.redock_target.currentIndexChanged.connect(self._update_qc_panel)
+        target_row.addWidget(self.redock_target, 1)
+        target_row.addStretch(1)
+        self.qc_card.add_layout(target_row)
+
+        self.qc_card.add(section_title("1 · 结构体检"))
+        self.qc_facts = FactGrid(columns=2)
+        self.qc_card.add(self.qc_facts)
+        self.qc_hint = QLabel("准备靶点后，这里会列出缺失残基、多构象原子、金属与水等信息。")
+        self.qc_hint.setObjectName("Muted")
+        self.qc_hint.setWordWrap(True)
+        self.qc_card.add(self.qc_hint)
+        self.qc_callout = Callout("", "warning")
+        self.qc_card.add(self.qc_callout)
+
+        # 2) 重对接校准：说明 → 结果 → 不可用原因 → 按钮
+        self.qc_card.add(make_divider())
+        self.qc_card.add(section_title("2 · 重对接校准（可选）"))
+        redock_hint = QLabel(
+            "把原始结构里的共晶配体按当前盒子和参数重新对接一次，"
+            "与实验构象的 RMSD ≤ 2 Å 说明这套设置可以复现已知结果。"
+            "没有共晶配体的结构（或只有金属/小分子碎片）不能做这一步。"
+        )
+        redock_hint.setObjectName("CardHint")
+        redock_hint.setWordWrap(True)
+        self.qc_card.add(redock_hint)
+        self.redock_status = Callout("", "success")
+        self.qc_card.add(self.redock_status)
+        self.redock_reason = Callout("", "warning")
+        self.qc_card.add(self.redock_reason)
         redock_row = QHBoxLayout()
         redock_row.setSpacing(8)
-        redock_row.addWidget(QLabel("靶点"))
-        self.redock_target = QComboBox()
-        self.redock_target.setMaximumWidth(280)
-        self.redock_target.currentIndexChanged.connect(self._update_qc_label)
-        redock_row.addWidget(self.redock_target, 1)
-        self.redock_button = QPushButton("重对接验证")
+        self.redock_button = QPushButton("开始重对接验证")
         self.redock_button.setObjectName("Small")
         self.redock_button.setToolTip(
             "从原始结构中提取共晶配体，按当前参数重新对接并计算对称校正 RMSD"
         )
         self.redock_button.clicked.connect(self._request_redocking)
         redock_row.addWidget(self.redock_button)
+        redock_row.addStretch(1)
         self.qc_card.add_layout(redock_row)
-        self.qc_label = QLabel("准备靶点后可在这里看到结构体检摘要。")
-        self.qc_label.setObjectName("Muted")
-        self.qc_label.setWordWrap(True)
-        self.qc_card.add(self.qc_label)
-        self.redock_status = QLabel("")
-        self.redock_status.setObjectName("Muted")
-        self.redock_status.setWordWrap(True)
-        self.redock_status.setVisible(False)
-        self.qc_card.add(self.redock_status)
         self.body.addWidget(self.qc_card)
         self._target_entries: dict[str, ProjectFile] = {}
 
@@ -578,39 +619,114 @@ class PreparePage(Page):
         has_targets = bool(targets)
         self.redock_target.setEnabled(has_targets)
         self.redock_button.setEnabled(has_targets)
-        if not has_targets:
-            self.qc_label.setText("准备靶点后可在这里看到结构体检摘要。")
-            return
-        self._update_qc_label()
+        self._update_qc_panel()
 
-    def _update_qc_label(self) -> None:
+    @staticmethod
+    def _qc_rows(qc: dict | None) -> list[tuple[str, str, str]]:
+        """把体检字典整理成固定顺序的字段行，缺失项也保留位置便于比较。"""
+        if not isinstance(qc, dict) or not qc:
+            return [("结构体检", "没有可用的信息（可能不是 PDB 格式或由旧版本准备）", "muted")]
+
+        def count(key: str) -> int:
+            try:
+                return int(qc.get(key) or 0)
+            except (TypeError, ValueError):
+                return 0
+
+        def join(value) -> str:
+            if isinstance(value, (list, tuple)):
+                items = [str(item) for item in value if str(item).strip()]
+            else:
+                items = [str(value)] if str(value or "").strip() else []
+            return "、".join(items) if items else "无"
+
+        if qc.get("is_multimer"):
+            unit = str(qc.get("biological_unit") or "未注明")
+            transforms = count("biomt_transforms")
+            assembly = f"{unit}（{transforms} 个变换，当前只用不对称单元）"
+            assembly_tone = "warn"
+        else:
+            assembly = "与不对称单元一致"
+            assembly_tone = "ok"
+
+        rows = [
+            ("生物学装配", assembly, assembly_tone),
+            ("缺失残基", str(count("missing_residue_count")), "warn" if count("missing_residue_count") else "ok"),
+            ("缺失原子", str(count("missing_atom_count")), "warn" if count("missing_atom_count") else "ok"),
+            ("多构象原子（altloc）", str(count("altloc_atoms")), "warn" if count("altloc_atoms") else "ok"),
+            ("低占位原子", str(count("low_occupancy_atoms")), "warn" if count("low_occupancy_atoms") else "ok"),
+            ("金属离子", join(qc.get("metals")), ""),
+            ("水分子", str(count("waters")), ""),
+            ("非标准残基", join(qc.get("nonstandard_residues")), ""),
+        ]
+        additives = qc.get("additives")
+        if additives:
+            rows.append(("常见添加剂", join(additives), ""))
+        return rows
+
+    def _update_qc_panel(self) -> None:
         stem = str(self.redock_target.currentData() or "")
         entry = self._target_entries.get(stem)
         if entry is None:
-            self.qc_label.setText("准备靶点后可在这里看到结构体检摘要。")
+            self.qc_facts.set_rows([])
+            self.qc_facts.setVisible(False)
+            self.qc_hint.setVisible(True)
+            self.qc_callout.set_text("")
+            self.redock_reason.set_text("")
+            self.redock_status.set_text("")
             return
+        self.qc_facts.setVisible(True)
+        self.qc_hint.setVisible(False)
         details = entry.meta.get("prep_details") or {}
         qc = details.get("structure_qc") if isinstance(details, dict) else None
-        lines: list[str] = []
-        if isinstance(qc, dict) and qc:
-            summary = qc.get("summary")
-            if isinstance(summary, list):
-                lines.extend(str(item) for item in summary)
-            else:
-                lines.append(
-                    f"缺失残基：{qc.get('missing_residue_count', 0)}；"
-                    f"缺失原子：{qc.get('missing_atom_count', 0)}；"
-                    f"altloc 原子：{qc.get('altloc_atoms', 0)}"
-                )
-        else:
-            lines.append("没有可用的结构体检信息（可能不是 PDB 格式或由旧版本准备）。")
-        warnings = entry.meta.get("prep_warnings") or []
+        self.qc_facts.set_rows(self._qc_rows(qc))
+
+        raw_warnings = entry.meta.get("prep_warnings") or []
+        if isinstance(raw_warnings, str):
+            raw_warnings = [raw_warnings]
+        warnings = [str(item).strip() for item in raw_warnings if str(item).strip()]
         if warnings:
-            lines.append("准备提示：" + "；".join(str(item) for item in warnings[:3]))
+            lines = ["准备提示："] + [
+                f"• {item}" for item in warnings[:3]
+            ]
+            if len(warnings) > 3:
+                lines.append(f"另有 {len(warnings) - 3} 条提示，鼠标悬停可查看全部")
+            self.qc_callout.set_text("\n".join(lines), "warning")
+            self.qc_callout.setToolTip("\n".join(f"• {item}" for item in warnings))
+        else:
+            self.qc_callout.set_text("")
+            self.qc_callout.setToolTip("")
+
         reason = self._redocking_unavailable_reason(entry)
-        if reason:
-            lines.append(f"重对接验证不可用：{reason}")
-        self.qc_label.setText("\n".join(lines))
+        self.redock_reason.set_text(
+            f"重对接验证不可用：{reason}。" if reason else "", "warning"
+        )
+        self._show_saved_redocking(stem)
+
+    def _show_saved_redocking(self, stem: str) -> None:
+        """把上一次保存的重对接结果带回界面，避免切换靶点后看起来像没做过。"""
+        from ..services.redocking import load_redocking
+
+        result = None
+        if self._workspace is not None and stem:
+            try:
+                result = load_redocking(self._workspace, stem)
+            except Exception:  # 旧版本或损坏的缓存不应影响页面
+                result = None
+        if result is None:
+            self.redock_status.set_text("")
+        elif not result.ok:
+            self.redock_status.set_text(
+                f"上次重对接未完成：{result.error}", "danger"
+            )
+        elif result.rmsd is None:
+            self.redock_status.set_text("上次重对接无法计算 RMSD。", "warning")
+        else:
+            verdict = "通过" if result.passed else "未通过，建议检查盒子与参数"
+            self.redock_status.set_text(
+                f"上次重对接：对称校正 RMSD {result.rmsd:.2f} Å，{verdict}。",
+                "success" if result.passed else "danger",
+            )
 
     def _redocking_unavailable_reason(self, entry: ProjectFile) -> str:
         """PDB 结构里没有合适共晶配体时，禁用按钮并说明原因。"""
@@ -659,11 +775,7 @@ class PreparePage(Page):
             self.redocking_requested.emit(stem)
 
     def set_redocking_result(self, text: str, ok: bool = True) -> None:
-        self.redock_status.setText(text)
-        self.redock_status.setStyleSheet(
-            "" if ok else f"color: {theme.DANGER};"
-        )
-        self.redock_status.setVisible(bool(text))
+        self.redock_status.set_text(text, "success" if ok else "danger")
 
     def _update_action_state(self) -> None:
         """全部就绪时把“下一步”设为主按钮，避免两个蓝色按钮抢注意力。"""
@@ -694,7 +806,7 @@ class PreparePage(Page):
         self.keep_metals_check.setEnabled(True)
         self.force_check.setEnabled(True)
         if self._target_entries:
-            self._update_qc_label()
+            self._update_qc_panel()
         else:
             self.redock_button.setEnabled(False)
 
@@ -752,23 +864,51 @@ class DockPage(Page):
         self.box_card.add(self.box_empty)
         self.body.addWidget(self.box_card)
 
-        params = Card(
-            "搜索设置",
-            "标准设置适合多数蛋白–小分子对接。提高精细度会增加耗时。"
-            "不同对接引擎的评分函数可能不同，分数不宜跨引擎直接比较。",
+        engine_card = Card(
+            "对接引擎与评分",
+            "第一次使用时保持默认即可。不同引擎或评分函数给出的分数含义不同，"
+            "只能在同一套设置内部比较。",
         )
-        grid = QGridLayout()
-        grid.setHorizontalSpacing(14)
-        grid.setVerticalSpacing(10)
-        grid.addWidget(QLabel("对接引擎"), 0, 0)
+        engine_grid = QGridLayout()
+        engine_grid.setHorizontalSpacing(14)
+        engine_grid.setVerticalSpacing(10)
+        engine_grid.addWidget(_field_label("对接引擎"), 0, 0)
         self.engine = QComboBox()
         self.engine.setMaximumWidth(360)
         self.engine.setToolTip(
             "Vina 适合大多数任务；某个复合物在 Vina 上卡死时，"
             "可改用 QuickVina 2 或 Smina。"
         )
-        grid.addWidget(self.engine, 0, 1, 1, 3)
-        grid.addWidget(QLabel("精细度"), 1, 0)
+        engine_grid.addWidget(self.engine, 0, 1)
+        engine_grid.addWidget(_field_label("评分函数"), 1, 0)
+        self.smina_scoring = QComboBox()
+        self.smina_scoring.addItem("默认（Vina 评分）", "default")
+        self.smina_scoring.addItem("Vinardo", "vinardo")
+        self.smina_scoring.setMaximumWidth(240)
+        self.smina_scoring.setToolTip(
+            "仅对 Smina 引擎生效。Vinardo 更强调疏水作用与去溶剂化，"
+            "但不同评分函数的分数不能直接比较；切换后请重新计算，不要与旧结果对比。"
+        )
+        engine_grid.addWidget(self.smina_scoring, 1, 1)
+        engine_grid.setColumnStretch(2, 1)
+        engine_grid.setColumnMinimumWidth(0, 96)
+        self.engine.currentIndexChanged.connect(self._update_scoring_state)
+        engine_card.add_layout(engine_grid)
+        self.scoring_hint = QLabel("")
+        self.scoring_hint.setObjectName("Muted")
+        self.scoring_hint.setWordWrap(True)
+        engine_card.add(self.scoring_hint)
+        self._update_scoring_state()
+        self.body.addWidget(engine_card)
+
+        params = Card(
+            "搜索强度与输出",
+            "标准设置适合多数蛋白–小分子对接。精细度越高，搜索越充分，耗时也越长。",
+        )
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(14)
+        grid.setVerticalSpacing(10)
+        grid.addWidget(_field_label("精细度"), 0, 0)
         self.exhaustiveness = QComboBox()
         self.exhaustiveness.addItem("快速（8）", 8)
         self.exhaustiveness.addItem("标准（16，推荐）", 16)
@@ -779,50 +919,35 @@ class DockPage(Page):
         self.exhaustiveness.currentIndexChanged.connect(
             self._update_exhaustiveness_advice
         )
-        grid.addWidget(self.exhaustiveness, 1, 1)
-        grid.addWidget(QLabel("输出构象数"), 1, 2)
+        grid.addWidget(self.exhaustiveness, 0, 1, 1, 3)
+        grid.addWidget(_field_label("输出构象数"), 1, 0)
         self.num_modes = QSpinBox()
         self.num_modes.setRange(1, 20)
         self.num_modes.setValue(9)
         _plain_number(self.num_modes)
         self.num_modes.setMaximumWidth(120)
-        grid.addWidget(self.num_modes, 1, 3)
-        grid.addWidget(QLabel("随机种子"), 2, 0)
+        grid.addWidget(self.num_modes, 1, 1)
+        grid.addWidget(_field_label("随机种子"), 1, 2)
         self.seed = QSpinBox()
         self.seed.setRange(0, 2_147_483_647)
         self.seed.setValue(42)
         _plain_number(self.seed)
-        self.seed.setMaximumWidth(240)
-        grid.addWidget(self.seed, 2, 1)
-        grid.addWidget(QLabel("CPU 核心（0 = 自动）"), 2, 2)
+        self.seed.setMaximumWidth(120)
+        self.seed.setToolTip("相同种子与参数可以得到可复现的结果")
+        grid.addWidget(self.seed, 1, 3)
+        grid.addWidget(_field_label("CPU 核心（0 = 自动）"), 2, 0)
         self.cpu = QSpinBox()
         self.cpu.setRange(0, 256)
         self.cpu.setValue(0)
         _plain_number(self.cpu)
         self.cpu.setMaximumWidth(120)
-        grid.addWidget(self.cpu, 2, 3)
-        grid.addWidget(QLabel("Smina 评分函数"), 3, 0)
-        self.smina_scoring = QComboBox()
-        self.smina_scoring.addItem("默认（Vina 评分）", "default")
-        self.smina_scoring.addItem("Vinardo", "vinardo")
-        self.smina_scoring.setMaximumWidth(240)
-        self.smina_scoring.setToolTip(
-            "仅对 Smina 引擎生效。Vinardo 更强调疏水作用与去溶剂化，"
-            "但不同评分函数的分数不能直接比较；切换后请重新计算，不要与旧结果对比。"
-        )
-        grid.addWidget(self.smina_scoring, 3, 1, 1, 3)
-        self.engine.currentIndexChanged.connect(self._update_scoring_state)
-        grid.setColumnStretch(1, 1)
-        grid.setColumnStretch(3, 1)
-        grid.setColumnMinimumWidth(0, 110)
-        grid.setColumnMinimumWidth(2, 130)
-        self._update_scoring_state()
+        grid.addWidget(self.cpu, 2, 1)
+        grid.setColumnStretch(4, 1)
+        grid.setColumnMinimumWidth(0, 96)
+        grid.setColumnMinimumWidth(2, 96)
         params.add_layout(grid)
-        self.advice_label = QLabel("")
-        self.advice_label.setObjectName("Muted")
-        self.advice_label.setWordWrap(True)
-        self.advice_label.setVisible(False)
-        params.add(self.advice_label)
+        self.advice_callout = Callout("", "info")
+        params.add(self.advice_callout)
         self.body.addWidget(params)
 
         self.summary_card = Card("本次任务")
@@ -865,9 +990,18 @@ class DockPage(Page):
         self._update_scoring_state()
 
     def _update_scoring_state(self) -> None:
-        """评分函数只对 Smina 生效，其他引擎时置灰。"""
+        """评分函数只对 Smina 生效，其他引擎时置灰并说明去哪里开启。"""
         enabled = str(self.engine.currentData() or "") == "smina"
         self.smina_scoring.setEnabled(enabled)
+        if enabled:
+            self.scoring_hint.setText(
+                "Vinardo 更强调疏水作用与去溶剂化；切换评分函数后请重新计算，"
+                "不要和旧结果直接比较。"
+            )
+        else:
+            self.scoring_hint.setText(
+                "当前引擎使用内置评分，没有额外选项；切换到 Smina 才能选择 Vinardo。"
+            )
 
     def _emit_run(self) -> None:
         self.run_requested.emit(
@@ -992,16 +1126,16 @@ class DockPage(Page):
     def _update_exhaustiveness_advice(self) -> None:
         advice = self._ligand_advice
         if advice is None:
-            self.advice_label.setVisible(False)
-            self.advice_label.setText("")
+            self.advice_callout.set_text("")
             return
         current = int(self.exhaustiveness.currentData() or 0)
         text = f"按候选分子复杂度建议：{advice.reason}"
         warning = advice.warning_for(current)
         if warning:
             text += "\n" + warning
-        self.advice_label.setText(text)
-        self.advice_label.setVisible(True)
+            self.advice_callout.set_text(text, "warning")
+        else:
+            self.advice_callout.set_text(text, "info")
 
     def _box_row(
         self,
@@ -1086,6 +1220,7 @@ class ResultsPage(Page):
         self.folder_button = QPushButton("打开结果文件夹")
         self.folder_button.clicked.connect(self.open_folder_requested.emit)
         self.scan_button = QPushButton("批量分析相互作用")
+        self.scan_button.setObjectName("Small")
         self.scan_button.setToolTip(
             "对每条成功结果运行 PLIP（不可用时回退几何判定），结果会缓存；"
             "完成后可按相互作用类型或残基筛选。"
@@ -1101,7 +1236,7 @@ class ResultsPage(Page):
                 "对接结果",
                 "分数越低，表示该程序预测的结合越有利。不同对接类型的分数不宜直接比较；"
                 "请结合实验或文献证据判断。",
-                [self.scan_button, self.refresh_button, self.folder_button, self.report_button],
+                [self.refresh_button, self.folder_button, self.report_button],
             )
         )
 
@@ -1115,14 +1250,24 @@ class ResultsPage(Page):
         tiles.addWidget(self.tile_time)
         self.body.addLayout(tiles)
 
-        self.trust_card = Card("结果可信度")
-        self.trust_label = QLabel("—")
-        self.trust_label.setObjectName("CardHint")
-        self.trust_label.setWordWrap(True)
-        self.trust_label.setTextInteractionFlags(
-            Qt.TextInteractionFlag.TextSelectableByMouse
+        self.trust_card = Card(
+            "结果可信度",
+            "逐项列出会影响结果解释的因素。黄色表示需要留意，但不代表结果错误；"
+            "红色表示建议先复核再采用。",
         )
-        self.trust_card.add(self.trust_label)
+        trust_head = QHBoxLayout()
+        trust_head.setSpacing(10)
+        self.trust_chip = StatusChip("new", "待分析")
+        trust_head.addWidget(self.trust_chip)
+        self.trust_headline = QLabel("")
+        self.trust_headline.setObjectName("CardHint")
+        self.trust_headline.setWordWrap(True)
+        trust_head.addWidget(self.trust_headline, 1)
+        self.trust_card.add_layout(trust_head)
+        self.trust_rows_layout = QVBoxLayout()
+        self.trust_rows_layout.setSpacing(0)
+        self.trust_card.add_layout(self.trust_rows_layout)
+        self.trust_rows: list[StatusRow] = []
         self.trust_card.setVisible(False)
         self.body.addWidget(self.trust_card)
 
@@ -1132,13 +1277,32 @@ class ResultsPage(Page):
         self.body.addWidget(self.log_panel)
 
         self.table_card = Card("结果列表")
+
+        # 相互作用分析紧挨着结果表：它只影响这张表的列与筛选，不属于页面级操作。
+        self.table_tools = QWidget()
+        tools_layout = QHBoxLayout(self.table_tools)
+        tools_layout.setContentsMargins(0, 0, 0, 0)
+        tools_layout.setSpacing(10)
+        tools_layout.addWidget(self.scan_button)
+        self.scan_note = QLabel("分析后可按相互作用类型或残基筛选，并导出结果表。")
+        self.scan_note.setObjectName("Muted")
+        self.scan_note.setWordWrap(True)
+        tools_layout.addWidget(self.scan_note, 1)
+        self.table_tools.setVisible(False)
+        self.table_card.add(self.table_tools)
+
         self.filter_row = QWidget()
-        filter_layout = QHBoxLayout(self.filter_row)
+        filter_layout = QVBoxLayout(self.filter_row)
         filter_layout.setContentsMargins(0, 0, 0, 0)
         filter_layout.setSpacing(6)
-        filter_layout.addWidget(QLabel("相互作用筛选"))
+        filter_grid = QGridLayout()
+        filter_grid.setHorizontalSpacing(10)
+        filter_grid.setVerticalSpacing(4)
+        filter_grid.addWidget(_field_label("包含相互作用"), 0, 0)
+        filter_grid.addWidget(_field_label("关键残基"), 0, 1)
+        filter_grid.addWidget(_field_label("排除类型"), 0, 2)
         self.kind_filter = QComboBox()
-        self.kind_filter.addItem("包含任意类型", "")
+        self.kind_filter.addItem("任意类型", "")
         for kind in ("hbond", "saltbridge", "metal", "pistacking", "pication", "halogen", "hydrophobic"):
             self.kind_filter.addItem(
                 {"hbond": "氢键", "saltbridge": "盐桥", "metal": "金属配位",
@@ -1147,38 +1311,47 @@ class ResultsPage(Page):
                 kind,
             )
         self.kind_filter.setToolTip("只保留至少包含这类相互作用的结果")
-        filter_layout.addWidget(self.kind_filter)
+        filter_grid.addWidget(self.kind_filter, 1, 0)
         self.residue_filter = QLineEdit()
-        self.residue_filter.setPlaceholderText("关键残基，如 MET318（多个用逗号分隔）")
+        self.residue_filter.setPlaceholderText("如 MET318，多个用逗号分隔")
         self.residue_filter.setClearButtonEnabled(True)
         self.residue_filter.setToolTip("只保留与这些残基有接触的结果；不区分大小写")
-        filter_layout.addWidget(self.residue_filter, 1)
+        filter_grid.addWidget(self.residue_filter, 1, 1)
         self.exclude_filter = QComboBox()
-        self.exclude_filter.addItem("不排除类型", "")
+        self.exclude_filter.addItem("不排除", "")
         for kind in ("vdw", "hydrophobic", "hbond"):
             self.exclude_filter.addItem(
                 {"vdw": "范德华接触", "hydrophobic": "疏水作用", "hbond": "氢键"}[kind], kind
             )
         self.exclude_filter.setToolTip("排除包含这类相互作用的结果")
-        filter_layout.addWidget(self.exclude_filter)
+        filter_grid.addWidget(self.exclude_filter, 1, 2)
         self.clear_filter_button = QPushButton("清除筛选")
         self.clear_filter_button.setObjectName("Small")
         self.clear_filter_button.clicked.connect(self._clear_filters)
-        filter_layout.addWidget(self.clear_filter_button)
-        self.export_button = QPushButton("导出 CSV")
+        filter_grid.addWidget(self.clear_filter_button, 1, 3)
+        filter_grid.setColumnStretch(1, 1)
+        filter_layout.addLayout(filter_grid)
+        filter_footer = QHBoxLayout()
+        filter_footer.setContentsMargins(0, 0, 0, 0)
+        filter_footer.setSpacing(10)
+        self.filter_count = QLabel("")
+        self.filter_count.setObjectName("Muted")
+        filter_footer.addWidget(self.filter_count, 1)
+        self.export_button = QPushButton("导出可见结果")
         self.export_button.setObjectName("Small")
-        self.export_button.setToolTip("导出当前筛选后可见的结果")
+        self.export_button.setToolTip("把当前筛选后可见的行导出为 CSV")
         self.export_button.clicked.connect(self.export_requested.emit)
-        filter_layout.addWidget(self.export_button)
+        filter_footer.addWidget(self.export_button)
+        filter_layout.addLayout(filter_footer)
         self.filter_row.setVisible(False)
         self.table_card.add(self.filter_row)
         for widget in (self.kind_filter, self.exclude_filter):
             widget.currentIndexChanged.connect(self._apply_filter)
         self.residue_filter.textChanged.connect(self._apply_filter)
 
-        self.table = QTableWidget(0, 9)
+        self.table = QTableWidget(0, 10)
         self.table.setHorizontalHeaderLabels(
-            ["靶点", "候选分子", "对接类型", "最佳打分", "盒子来源", "相互作用", "状态", "说明", "操作"]
+            ["靶点", "候选分子", "对接类型", "最佳打分", "配体效率", "盒子来源", "相互作用", "状态", "说明", "操作"]
         )
         self.table.verticalHeader().setVisible(False)
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
@@ -1190,17 +1363,19 @@ class ResultsPage(Page):
         self.table.verticalHeader().setDefaultSectionSize(round(38 * ui_scale))
         self.table.verticalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Fixed)
         header = self.table.horizontalHeader()
-        header.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
-        header.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
-        header.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
-        header.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
-        header.setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
-        header.setSectionResizeMode(5, QHeaderView.ResizeMode.ResizeToContents)
-        header.setSectionResizeMode(6, QHeaderView.ResizeMode.Fixed)
-        self.table.setColumnWidth(6, round(92 * ui_scale))
-        header.setSectionResizeMode(7, QHeaderView.ResizeMode.Stretch)
-        header.setSectionResizeMode(8, QHeaderView.ResizeMode.Fixed)
-        self.table.setColumnWidth(8, round(208 * ui_scale))
+        for column in range(7):
+            header.setSectionResizeMode(column, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(7, QHeaderView.ResizeMode.Fixed)
+        self.table.setColumnWidth(7, round(92 * ui_scale))
+        header.setSectionResizeMode(8, QHeaderView.ResizeMode.Stretch)
+        header.setSectionResizeMode(9, QHeaderView.ResizeMode.Fixed)
+        self.table.setColumnWidth(9, round(208 * ui_scale))
+        ligand_eff_header = self.table.horizontalHeaderItem(4)
+        if ligand_eff_header is not None:
+            ligand_eff_header.setToolTip(
+                "配体效率 LE = −ΔG ÷ 重原子数（kcal/mol/重原子），"
+                "用于比较大小不同的分子，不能代替总分判断"
+            )
         self.table.setMinimumHeight(round(120 * ui_scale))
         self.table.setVisible(False)
         self.table.setToolTip("选中行后按 Ctrl+C 或右键复制，可直接粘贴到 Excel")
@@ -1298,6 +1473,7 @@ class ResultsPage(Page):
         self._interaction_index = None
         self.filter_row.setVisible(False)
         self.scan_button.setEnabled(False)
+        self.table_tools.setVisible(False)
         self.table.setRowCount(0)
         self.table.setVisible(False)
         self.empty_label.setVisible(False)
@@ -1324,7 +1500,9 @@ class ResultsPage(Page):
         self.table.setVisible(False)
         self.scan_button.setVisible(bool(results))
         self.scan_button.setEnabled(bool(results))
+        self.table_tools.setVisible(bool(results))
         self.filter_row.setVisible(False)
+        self._update_filter_count()
         if workspace is None:
             self.empty_label.setVisible(True)
             self.empty_label.setText("还没有打开工作目录。")
@@ -1354,6 +1532,7 @@ class ResultsPage(Page):
         self._fit_table_height(len(results))
         target_labels = _display_map(workspace.targets)
         ligand_labels = _display_map(workspace.ligands)
+        heavy_atoms = self._ligand_heavy_atoms(workspace)
         ordered = sorted(
             results,
             key=lambda item: (
@@ -1373,7 +1552,26 @@ class ResultsPage(Page):
             score_item = QTableWidgetItem(score)
             score_item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
             self.table.setItem(row, 3, score_item)
-            self.table.setItem(row, 4, QTableWidgetItem(
+            efficiency = (
+                ligand_efficiency(result.poses[0].affinity, heavy_atoms.get(result.ligand, 0))
+                if result.poses
+                else None
+            )
+            efficiency_item = QTableWidgetItem(
+                f"{efficiency:.2f}" if efficiency is not None else "—"
+            )
+            efficiency_item.setTextAlignment(
+                Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+            )
+            if efficiency is not None:
+                efficiency_item.setToolTip(
+                    f"−ΔG ÷ {heavy_atoms.get(result.ligand, 0)} 个重原子"
+                    "（kcal/mol/重原子）"
+                )
+            else:
+                efficiency_item.setToolTip("缺少重原子数，无法计算配体效率")
+            self.table.setItem(row, 4, efficiency_item)
+            self.table.setItem(row, 5, QTableWidgetItem(
                 {"pocket": "几何口袋", "cocrystal": "共晶配体", "site": "PDB 位点", "blind": "全结构盲对接",
                  "manual": "手动", "reference": "参考分子", "ligand": "目标分子"}.get(
                     result.box_source, result.box_source or "自动"
@@ -1391,14 +1589,14 @@ class ResultsPage(Page):
             holder_layout.setContentsMargins(6, 0, 0, 0)
             holder_layout.addWidget(chip, 0, Qt.AlignmentFlag.AlignVCenter)
             holder_layout.addStretch(1)
-            self.table.setCellWidget(row, 6, holder)
+            self.table.setCellWidget(row, 7, holder)
             note = result.error if not result.ok else "；".join(result.warnings)
             note_item = QTableWidgetItem(note or "—")
             note_item.setToolTip(note)
-            self.table.setItem(row, 7, note_item)
+            self.table.setItem(row, 8, note_item)
             interaction_item = QTableWidgetItem("—")
             interaction_item.setToolTip("点击“批量分析相互作用”后可在此查看并筛选")
-            self.table.setItem(row, 5, interaction_item)
+            self.table.setItem(row, 6, interaction_item)
             self._interaction_cells[key] = interaction_item
             if result.ok and result.pymol_path:
                 actions = QWidget()
@@ -1427,7 +1625,7 @@ class ResultsPage(Page):
                 action_layout.addWidget(detail)
                 action_layout.addWidget(pymol)
                 action_layout.addWidget(locate)
-                self.table.setCellWidget(row, 8, actions)
+                self.table.setCellWidget(row, 9, actions)
         mode_labels = sorted({result.mode_label for result in results if result.ok and result.mode_label})
         if len(mode_labels) > 1:
             self.mode_note.setText(
@@ -1440,21 +1638,34 @@ class ResultsPage(Page):
             self.mode_note.setText("")
         if self._interaction_index is not None:
             self._apply_interaction_index(self._interaction_index)
+        self._update_filter_count()
         self._update_trust_card(workspace, results)
         self._load_chart(workspace)
 
+    def _ligand_heavy_atoms(self, workspace: Workspace) -> dict[str, int]:
+        heavy: dict[str, int] = {}
+        for entry in workspace.ligands:
+            details = entry.meta.get("prep_details") or {}
+            try:
+                heavy[entry.stem] = int((details or {}).get("heavy_atoms") or 0)
+            except (TypeError, ValueError):
+                heavy[entry.stem] = 0
+        return heavy
+
     def _update_trust_card(self, workspace: Workspace, results: list[DockingResult]) -> None:
-        """把影响结果解释的因素集中成一张卡，避免分数被单独放大。"""
+        """把影响结果解释的因素逐项列出，避免分数被单独放大。"""
         successes = [item for item in results if item.ok and item.poses]
         if not successes:
             self.trust_card.setVisible(False)
             return
-        from ..services.advice import ligand_efficiency, recommend_exhaustiveness
         from ..services.redocking import load_redocking
 
-        lines: list[str] = []
+        # (指标, 状态, 状态文字, 说明)
+        rows: list[tuple[str, str, str, str]] = []
+        ligand_by_stem = {entry.stem: entry for entry in workspace.ligands}
+        heavy_atoms = self._ligand_heavy_atoms(workspace)
 
-        # 盒子来源与需要人工确认的自动盒子。
+        # 1) 盒子来源与需要人工确认的自动盒子。
         source_counts: dict[str, int] = {}
         review = 0
         for item in successes:
@@ -1466,17 +1677,19 @@ class ResultsPage(Page):
             box = workspace.load_box(item.target)
             if box is not None and box.needs_review:
                 review += 1
-        if source_counts:
-            text = "盒子来源：" + "、".join(
-                f"{label} {count}" for label, count in source_counts.items()
-            )
-            if review:
-                text += f"；其中 {review} 个自动盒子定位不可靠，建议人工确认"
-            lines.append(text)
+        source_text = "、".join(
+            f"{label} {count}" for label, count in source_counts.items()
+        ) or "未记录"
+        if review:
+            rows.append((
+                "盒子来源", "warning", f"{review} 个待确认",
+                source_text + "；部分自动盒子定位不可靠，建议在“对接设置”里手动确认",
+            ))
+        else:
+            rows.append(("盒子来源", "success", "无需确认", source_text))
 
-        # 搜索深度与配体复杂度建议。
+        # 2) 搜索深度与配体复杂度建议。
         advice = None
-        ligand_by_stem = {entry.stem: entry for entry in workspace.ligands}
         for item in successes:
             entry = ligand_by_stem.get(item.ligand)
             details = (entry.meta.get("prep_details") if entry else None) or {}
@@ -1497,16 +1710,22 @@ class ResultsPage(Page):
             and str(item.parameters.get("exhaustiveness", "")).isdigit()
         ]
         if used:
-            text = f"搜索深度：exhaustiveness {min(used)}"
+            depth = f"exhaustiveness {min(used)}"
             if max(used) != min(used):
-                text += f"–{max(used)}"
+                depth += f"–{max(used)}"
             if advice is not None:
-                text += f"；按配体复杂度建议 {advice.recommended}"
+                depth += f"；按配体复杂度建议 {advice.recommended}"
                 if min(used) < advice.recommended:
-                    text += "（当前偏低，搜索可能未收敛）"
-            lines.append(text)
+                    rows.append((
+                        "搜索深度", "warning", "偏低",
+                        depth + "；搜索可能未收敛，可提高精细度后重跑",
+                    ))
+                else:
+                    rows.append(("搜索深度", "success", "合适", depth))
+            else:
+                rows.append(("搜索深度", "new", "已设置", depth))
 
-        # 评分函数：只有用到 Smina Vinardo 时才提示，避免噪音。
+        # 3) 评分函数：混合使用时给出不可比较的提示。
         scoring_counts: dict[str, int] = {}
         for item in successes:
             if not isinstance(item.parameters, dict):
@@ -1514,34 +1733,67 @@ class ResultsPage(Page):
             key = str(item.parameters.get("scoring") or "default")
             label = "Vinardo" if key == "vinardo" else "Vina 默认"
             scoring_counts[label] = scoring_counts.get(label, 0) + 1
-        if scoring_counts.get("Vinardo"):
-            lines.append(
-                "评分函数："
-                + "、".join(f"{label} {count}" for label, count in scoring_counts.items())
-                + "；不同评分函数的分值不可直接比较"
+        if scoring_counts:
+            scoring_text = "、".join(
+                f"{label} {count}" for label, count in scoring_counts.items()
             )
+            if len(scoring_counts) > 1:
+                rows.append((
+                    "评分函数", "warning", "混合",
+                    scoring_text + "；不同评分函数的分值不可直接比较",
+                ))
+            elif "Vinardo" in scoring_counts:
+                rows.append((
+                    "评分函数", "new", "Vinardo",
+                    "Vinardo 分值不能与 Vina 默认评分的结果直接比较",
+                ))
+            else:
+                rows.append((
+                    "评分函数", "new", "Vina 默认",
+                    "使用与 Vina 一致的评分，可与 Vina 引擎的结果比较",
+                ))
 
-        # 结构体检：缺失残基、金属、水。
+        # 4) 结构体检：缺失残基、altloc、金属、水。
         qc_notes: list[str] = []
+        qc_problem = False
         for target in workspace.targets:
             details = target.meta.get("prep_details") or {}
             qc = details.get("structure_qc") if isinstance(details, dict) else None
             if not isinstance(qc, dict) or not qc:
                 continue
-            bits = [f"缺失残基 {qc.get('missing_residue_count', 0)}",
-                    f"缺失原子 {qc.get('missing_atom_count', 0)}"]
+
+            def count(key: str) -> int:
+                try:
+                    return int(qc.get(key) or 0)
+                except (TypeError, ValueError):
+                    return 0
+
+            missing_residues = count("missing_residue_count")
+            missing_atoms = count("missing_atom_count")
+            altloc = count("altloc_atoms")
+            low_occupancy = count("low_occupancy_atoms")
+            if missing_residues or missing_atoms or altloc or low_occupancy or qc.get("is_multimer"):
+                qc_problem = True
+            bits = [f"缺失残基 {missing_residues}", f"缺失原子 {missing_atoms}"]
+            if altloc:
+                bits.append(f"多构象原子 {altloc}")
             metals = qc.get("metals") or []
-            waters = int(qc.get("waters") or 0)
             if metals:
                 bits.append("金属 " + "、".join(str(item) for item in metals))
-            if waters:
-                bits.append(f"水 {waters}")
+            if count("waters"):
+                bits.append(f"水 {count('waters')}")
             qc_notes.append(f"{target.display_name}：" + "，".join(bits))
         if qc_notes:
-            lines.append("结构体检：" + "；".join(qc_notes[:3]))
+            rows.append((
+                "结构体检", "warning" if qc_problem else "success",
+                "有提示" if qc_problem else "正常", "；".join(qc_notes[:3]),
+            ))
+        else:
+            rows.append(("结构体检", "new", "无记录", "旧版本准备的结构没有体检信息"))
 
-        # 重对接验证（可选）。
+        # 5) 重对接验证（可选）。
         redock_notes: list[str] = []
+        passed = failed = pending = 0
         for stem in sorted({item.target for item in successes}):
             result = load_redocking(workspace, stem)
             if result is None:
@@ -1549,42 +1801,78 @@ class ResultsPage(Page):
             entry = next((t for t in workspace.targets if t.stem == stem), None)
             name = entry.display_name if entry else stem
             if not result.ok:
+                pending += 1
                 redock_notes.append(f"{name} 未完成（{result.error}）")
             elif result.rmsd is None:
+                pending += 1
                 redock_notes.append(f"{name} 无法计算 RMSD")
+            elif result.passed:
+                passed += 1
+                redock_notes.append(f"{name} 对称校正 RMSD {result.rmsd:.2f} Å（通过）")
             else:
-                verdict = "通过" if result.passed else "未通过"
-                redock_notes.append(f"{name} {result.rmsd:.2f} Å（{verdict}）")
+                failed += 1
+                redock_notes.append(f"{name} 对称校正 RMSD {result.rmsd:.2f} Å（未通过）")
         if redock_notes:
-            lines.append("重对接验证：" + "；".join(redock_notes))
+            if failed:
+                status, chip_text = "warning", f"{failed} 个未通过"
+            elif pending:
+                status, chip_text = "warning", "未完成"
+            else:
+                status, chip_text = "success", "通过"
+            rows.append(("重对接", status, chip_text, "；".join(redock_notes)))
         else:
-            lines.append("重对接验证：尚未进行（可选，用于校准当前盒子与参数）")
+            rows.append((
+                "重对接", "new", "未运行",
+                "可选：用晶体配体检验盒子与参数，通过后结果更可信",
+            ))
 
-        # 相互作用筛选状态。
+        # 6) 相互作用筛选状态。
         if self._interaction_index is not None:
             entries = [entry for entry in self._interaction_index.entries.values() if entry.ok]
             geometric = sum(1 for entry in entries if entry.engine != "plip")
-            text = f"相互作用：已分析 {len(entries)} 条"
+            detail = f"已分析 {len(entries)} 条"
             if geometric:
-                text += f"，其中 {geometric} 条使用几何判定（PLIP 不可用或未识别配体）"
-            lines.append(text)
+                detail += f"，其中 {geometric} 条使用几何判定（PLIP 不可用或未识别配体）"
+            rows.append(("相互作用", "success", "已分析", detail))
+        else:
+            rows.append((
+                "相互作用", "new", "未分析",
+                "在结果列表上方点“批量分析相互作用”，可按类型或残基筛选",
+            ))
 
-        # 配体效率。
+        # 7) 配体效率。
         best = min(successes, key=lambda item: item.poses[0].affinity)
         entry = ligand_by_stem.get(best.ligand)
-        details = (entry.meta.get("prep_details") if entry else None) or {}
-        try:
-            heavy = int(details.get("heavy_atoms") or 0)
-        except (TypeError, ValueError):
-            heavy = 0
+        heavy = heavy_atoms.get(best.ligand, 0)
         efficiency = ligand_efficiency(best.poses[0].affinity, heavy)
         if efficiency is not None:
             name = entry.display_name if entry else best.ligand
-            lines.append(
-                f"最佳配体效率：{efficiency:.2f} kcal/mol/重原子（{name}，{heavy} 个重原子）"
-            )
+            rows.append((
+                "配体效率", "new", f"{efficiency:.2f}",
+                f"kcal/mol/重原子（{name}，{heavy} 个重原子）；越大越有利，"
+                "只用于比较大小不同的分子",
+            ))
 
-        self.trust_label.setText("\n".join(f"· {line}" for line in lines))
+        # 总体判断取最严重的一项。
+        severity = {"success": 0, "new": 0, "warning": 1, "error": 2}
+        worst = max(severity.get(row[1], 0) for row in rows)
+        warnings = sum(1 for row in rows if row[1] == "warning")
+        if worst >= 2:
+            self.trust_chip.set_status("error", "需复核")
+            self.trust_headline.setText("有项目需要复核后再采用结果")
+        elif worst == 1:
+            self.trust_chip.set_status("warning", "需留意")
+            self.trust_headline.setText(f"有 {warnings} 项建议在采用结果前确认")
+        else:
+            self.trust_chip.set_status("success", "可以参考")
+            self.trust_headline.setText("未发现需要特别留意的问题")
+
+        _clear_layout(self.trust_rows_layout)
+        self.trust_rows = []
+        for name, status, chip_text, detail in rows:
+            row = StatusRow(name, status, chip_text, detail)
+            self.trust_rows.append(row)
+            self.trust_rows_layout.addWidget(row)
         self.trust_card.setVisible(True)
 
     # -- 相互作用列与筛选 ----------------------------------------------
@@ -1637,17 +1925,33 @@ class ResultsPage(Page):
         if not filt.active:
             for row in range(self.table.rowCount()):
                 self.table.setRowHidden(row, False)
-            return
-        for row, key in enumerate(self._row_keys):
-            entry = (
-                self._interaction_index.get(*key)
-                if self._interaction_index is not None
-                else None
+        else:
+            for row, key in enumerate(self._row_keys):
+                entry = (
+                    self._interaction_index.get(*key)
+                    if self._interaction_index is not None
+                    else None
+                )
+                self.table.setRowHidden(row, not filt.matches(entry))
+            self._fit_table_height(
+                sum(
+                    1
+                    for row in range(self.table.rowCount())
+                    if not self.table.isRowHidden(row)
+                )
             )
-            self.table.setRowHidden(row, not filt.matches(entry))
-        self._fit_table_height(
-            sum(1 for row in range(self.table.rowCount()) if not self.table.isRowHidden(row))
-        )
+        self._update_filter_count()
+
+    def _update_filter_count(self) -> None:
+        total = len(self._row_keys)
+        visible = len(self.visible_row_keys())
+        if not total:
+            self.filter_count.setText("")
+        elif visible == total:
+            self.filter_count.setText(f"显示全部 {total} 条结果")
+        else:
+            self.filter_count.setText(f"显示 {visible} / {total} 条结果")
+        self.export_button.setEnabled(visible > 0)
 
     def _clear_filters(self) -> None:
         self.residue_filter.clear()
@@ -1681,7 +1985,7 @@ class ResultsPage(Page):
                 item = self.table.item(row, column)
                 text = item.text() if item is not None else ""
                 # 状态列是自定义控件，直接写状态名。
-                if column == 6:
+                if column == 7:
                     widget = self.table.cellWidget(row, column)
                     chip = widget.findChild(StatusChip) if widget is not None else None
                     if chip is not None:

@@ -198,6 +198,59 @@ def _qss() -> str:
     QLabel#CardHint {{ color: {SECONDARY}; font-size: 12px; }}
     QLabel#Muted {{ color: {MUTED}; font-size: 12px; }}
     QLabel#Warning {{ color: {WARNING}; font-size: 12px; font-weight: 600; }}
+    QLabel#SectionTitle {{
+        color: {SECONDARY};
+        font-size: 13px;
+        font-weight: 600;
+        margin-top: 2px;
+    }}
+
+    /* 提示条：底色表示语气，左侧色条强调 */
+    QFrame#Callout {{ border-radius: 8px; }}
+    QFrame#Callout[tone="info"] {{
+        background: {ACCENT_SOFT};
+        border: 1px solid #c9defa;
+        border-left: 3px solid {ACCENT};
+    }}
+    QFrame#Callout[tone="warning"] {{
+        background: {WARNING_BG};
+        border: 1px solid #efdfb2;
+        border-left: 3px solid #d99a00;
+    }}
+    QFrame#Callout[tone="success"] {{
+        background: {SUCCESS_BG};
+        border: 1px solid #cfe6d5;
+        border-left: 3px solid {SUCCESS};
+    }}
+    QFrame#Callout[tone="danger"] {{
+        background: {DANGER_BG};
+        border: 1px solid #f3cfcb;
+        border-left: 3px solid {DANGER};
+    }}
+    QLabel#CalloutText {{ font-size: 12px; color: {SECONDARY}; }}
+    QFrame#Callout[tone="warning"] QLabel#CalloutText {{ color: {WARNING}; }}
+    QFrame#Callout[tone="success"] QLabel#CalloutText {{ color: {SUCCESS}; }}
+    QFrame#Callout[tone="danger"] QLabel#CalloutText {{ color: {DANGER}; }}
+
+    /* 结构体检的字段网格 */
+    QLabel#FactLabel {{ color: {MUTED}; font-size: 12px; }}
+    QLabel#FactValue {{ color: {INK}; font-size: 13px; }}
+    QLabel#FactValue[tone="ok"] {{ color: {SUCCESS}; }}
+    QLabel#FactValue[tone="warn"] {{ color: {WARNING}; }}
+    QLabel#FactValue[tone="bad"] {{ color: {DANGER}; }}
+    QLabel#FactValue[tone="muted"] {{ color: {MUTED}; }}
+
+    /* 可信度卡的一行 */
+    QFrame#StatusRow {{
+        background: transparent;
+        border: none;
+        border-bottom: 1px solid #f0efe9;
+    }}
+    QLabel#StatusName {{
+        color: {SECONDARY};
+        font-size: 13px;
+        font-weight: 600;
+    }}
     QLabel#Metric {{ font-size: 26px; font-weight: 700; }}
     QLabel#MetricLabel {{ color: {SECONDARY}; font-size: 12px; }}
 

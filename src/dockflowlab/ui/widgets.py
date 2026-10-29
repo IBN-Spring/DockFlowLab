@@ -8,6 +8,7 @@ from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QFrame,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
     QPlainTextEdit,
@@ -73,6 +74,141 @@ class Card(QFrame):
         self.body.addLayout(layout)
 
 
+def section_title(text: str) -> QLabel:
+    """卡片内部的二级标题，用来把一张卡分成有先后顺序的小节。"""
+    label = QLabel(text)
+    label.setObjectName("SectionTitle")
+    return label
+
+
+def _repolish(widget: QWidget) -> None:
+    style = widget.style()
+    style.unpolish(widget)
+    style.polish(widget)
+
+
+class Callout(QFrame):
+    """带浅色底色的提示条：把解释性文字与操作区分开。
+
+    ``tone`` 取 ``info`` / ``warning`` / ``success`` / ``danger``，
+    对应蓝、黄、绿、红四种浅底；文字为空时整条隐藏。
+    """
+
+    TONES = ("info", "warning", "success", "danger")
+
+    def __init__(
+        self, text: str = "", tone: str = "info", parent: QWidget | None = None
+    ) -> None:
+        super().__init__(parent)
+        self.setObjectName("Callout")
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(12, 8, 12, 8)
+        layout.setSpacing(0)
+        self.label = QLabel(text)
+        self.label.setObjectName("CalloutText")
+        self.label.setWordWrap(True)
+        layout.addWidget(self.label)
+        self.set_tone(tone)
+        self.setVisible(bool(text))
+
+    def set_tone(self, tone: str) -> None:
+        self.setProperty("tone", tone if tone in self.TONES else "info")
+        _repolish(self)
+
+    def set_text(self, text: str, tone: str | None = None) -> None:
+        self.label.setText(text)
+        if tone is not None:
+            self.set_tone(tone)
+        self.setVisible(bool(text))
+
+    def text(self) -> str:
+        return self.label.text()
+
+
+class FactGrid(QWidget):
+    """紧凑的“字段 / 值”网格，替代一长串并列提示语。
+
+    ``rows`` 为 ``(字段, 值, 色调)`` 的序列；色调取 ``ok`` / ``warn`` /
+    ``bad`` / ``muted`` 或空字符串。``text()`` 返回所有单元格的文本，
+    便于测试与无障碍读取。
+    """
+
+    def __init__(self, columns: int = 2, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._columns = max(1, columns)
+        self._grid = QGridLayout(self)
+        self._grid.setContentsMargins(0, 0, 0, 0)
+        self._grid.setHorizontalSpacing(18)
+        self._grid.setVerticalSpacing(7)
+        for index in range(self._columns):
+            self._grid.setColumnMinimumWidth(index * 2, 76)
+            self._grid.setColumnStretch(index * 2 + 1, 1)
+        self._cells: list[QLabel] = []
+
+    def set_rows(self, rows) -> None:
+        while self._grid.count():
+            item = self._grid.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.setParent(None)
+                widget.deleteLater()
+        self._cells = []
+        for index, row in enumerate(rows):
+            name = row[0]
+            value = row[1] if len(row) > 1 else ""
+            tone = row[2] if len(row) > 2 else ""
+            grid_row, column = divmod(index, self._columns)
+            label = QLabel(str(name))
+            label.setObjectName("FactLabel")
+            label.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
+            value_label = QLabel(str(value))
+            value_label.setObjectName("FactValue")
+            value_label.setWordWrap(True)
+            if tone:
+                value_label.setProperty("tone", str(tone))
+                _repolish(value_label)
+            self._grid.addWidget(label, grid_row, column * 2)
+            self._grid.addWidget(value_label, grid_row, column * 2 + 1)
+            self._cells.extend((label, value_label))
+
+    def text(self) -> str:
+        return "\n".join(cell.text() for cell in self._cells)
+
+
+class StatusRow(QFrame):
+    """一行“指标 + 状态 + 说明”，用于结果可信度卡。"""
+
+    def __init__(
+        self,
+        name: str,
+        status: str,
+        status_text: str,
+        detail: str = "",
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self.setObjectName("StatusRow")
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 6, 0, 6)
+        layout.setSpacing(10)
+        self.name_label = QLabel(name)
+        self.name_label.setObjectName("StatusName")
+        self.name_label.setMinimumWidth(round(84 * theme.ui_scale()))
+        self.name_label.setAlignment(
+            Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft
+        )
+        layout.addWidget(self.name_label)
+        self.chip = StatusChip(status, status_text)
+        layout.addWidget(self.chip, 0, Qt.AlignmentFlag.AlignTop)
+        self.detail_label = QLabel(detail)
+        self.detail_label.setObjectName("CardHint")
+        self.detail_label.setWordWrap(True)
+        self.detail_label.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse
+        )
+        layout.addWidget(self.detail_label, 1)
+
+
 class StatTile(QFrame):
     def __init__(self, label: str, value: str = "—", accent: bool = False, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -104,6 +240,8 @@ class StatusChip(QLabel):
         "skipped": (theme.SECONDARY, "#f1f0ec", "已有结果"),
         "error": (theme.DANGER, theme.DANGER_BG, "失败"),
         "running": (theme.ACCENT_DARK, theme.ACCENT_SOFT, "运行中"),
+        "warning": (theme.WARNING, theme.WARNING_BG, "需留意"),
+        "info": (theme.ACCENT_DARK, theme.ACCENT_SOFT, "说明"),
     }
 
     def __init__(self, status: str = "new", text: str = "", parent: QWidget | None = None) -> None:
