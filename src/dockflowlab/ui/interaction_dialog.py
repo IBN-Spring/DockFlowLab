@@ -245,6 +245,16 @@ class InteractionDialog(ScreenFittedDialog):
 
         action_row = QHBoxLayout()
         action_row.setSpacing(10)
+        self._protein_check = QCheckBox("蛋白背景")
+        self._protein_check.setToolTip(
+            "显示半透明的蛋白卡通背景。\n"
+            "关闭时更容易看清配体结构和接触残基；"
+            "开启后蛋白可能遮挡部分配体。"
+        )
+        self._protein_check.setChecked(False)
+        self._protein_check.toggled.connect(self._toggle_protein)
+        action_row.addWidget(self._protein_check)
+
         self._labels_check = QCheckBox("显示 3D 标签")
         self._labels_check.setToolTip("隐藏后只保留结构与接触连线")
         self._labels_check.setChecked(True)
@@ -323,6 +333,7 @@ class InteractionDialog(ScreenFittedDialog):
         )
         self._view_error.setVisible(True)
         self._labels_check.setEnabled(False)
+        self._protein_check.setEnabled(False)
         self._view_hint.setText("3D 视图不可用，仍可查看右侧接触列表。")
 
     def _on_view_failed(self, message: str) -> None:
@@ -595,6 +606,10 @@ class InteractionDialog(ScreenFittedDialog):
             if selected.kind == kind:
                 self._apply_selection(-1, notify_view=True)
 
+    def _toggle_protein(self, checked: bool) -> None:
+        if self._view is not None:
+            self._view.set_protein_visible(checked)
+
     def _toggle_labels(self, checked: bool) -> None:
         if self._view is not None:
             self._view.set_labels_visible(checked)
@@ -668,6 +683,7 @@ class InteractionDialog(ScreenFittedDialog):
         if self._view is not None:
             try:
                 self._view.set_data(self._analysis, self._pdb_text)
+                self._view.set_protein_visible(self._protein_check.isChecked())
                 self._apply_kind_visibility()
                 self._view.reset_view()
             except Exception as exc:

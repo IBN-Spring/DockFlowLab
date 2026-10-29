@@ -244,7 +244,7 @@
   <span class="item" data-kind="vdw" style="--c: var(--vdw)">
     <span class="swatch"></span>范德华接触
   </span>
-  <span class="meta">蛋白背景 · 30% 不透明度 · 金色 = 当前选中</span>
+  <span class="meta">金色 = 当前选中 · 蛋白背景可在下方开启</span>
 </div>
 <div id="hint">点击标签定位 · 双击重置</div>
 <div id="message"></div>
@@ -300,6 +300,10 @@
     visibility[kind] = true;
   });
   let labelsVisible = true;
+  // 蛋白卡通默认关闭：半透明卡通在透明通道里会盖在配体上，把分子切成
+  // 一段一段；交互细节视图优先保证配体与接触残基清晰可读。
+  let proteinVisible = false;
+  let proteinReps = [];
   let labelItems = [];
   let selectedIndex = -1;
 
@@ -401,6 +405,7 @@
       stage.removeComponent(structureComp);
       structureComp = null;
     }
+    proteinReps = [];
     KIND_KEYS.forEach(function (kind) {
       residueReps[kind] = [];
     });
@@ -537,8 +542,8 @@
       colorScheme: "uniform",
       colorValue: LIGAND_PURPLE,
       aspectRatio: 2.2,
-      scale: 1.45,
-      radius: 0.16,
+      scale: 1.5,
+      radius: 0.18,
       multipleBond: "symmetric"
     });
   }
@@ -554,7 +559,7 @@
         sele: selection,
         colorScheme: "uniform",
         colorValue: TEAL,
-        radius: 0.19,
+        radius: 0.14,
         multipleBond: "symmetric"
       };
       const rep = structureComp.addRepresentation(
@@ -607,6 +612,18 @@
     if (stage) stage.viewer.requestRender();
   }
 
+  function applyProteinVisibility() {
+    proteinReps.forEach(function (rep) {
+      if (rep) rep.setVisibility(proteinVisible);
+    });
+  }
+
+  function setProteinVisible(value) {
+    proteinVisible = Boolean(value);
+    applyProteinVisibility();
+    if (stage) stage.viewer.requestRender();
+  }
+
   function loadData() {
     if (!stage || !pendingData) return;
     const payload = pendingData;
@@ -635,9 +652,12 @@
         return;
       }
       structureComp = component;
+      proteinReps = [];
 
-      // 蛋白只作为空间参考，降低不透明度，让配体与接触残基更突出。
-      component.addRepresentation("cartoon", {
+      // 蛋白只作为空间参考。半透明卡通在 NGL 的透明通道里总是画在配体之后，
+      // 即使它在配体背面也会盖住配体，看上去像分子被切断；因此默认关闭，
+      // 由界面上的“蛋白背景”开关按需显示。
+      const cartoonRep = component.addRepresentation("cartoon", {
         sele: "polymer",
         colorScheme: "uniform",
         colorValue: PROTEIN_GRAY,
@@ -646,17 +666,20 @@
         subdiv: 7,
         smoothSheet: true
       });
+      if (cartoonRep) proteinReps.push(cartoonRep);
       // 非聚合物靶点（如小分子、部分核酸修饰）没有卡通模型，用淡线框兜底。
       const ligandSelection = String(payload.ligandSelection || "");
       if (ligandSelection) {
-        component.addRepresentation("licorice", {
+        const fillerRep = component.addRepresentation("licorice", {
           sele: "not polymer and not water and not (" + ligandSelection + ")",
           colorScheme: "uniform",
           colorValue: PROTEIN_GRAY,
           opacity: 0.28,
           radius: 0.10
         });
+        if (fillerRep) proteinReps.push(fillerRep);
       }
+      applyProteinVisibility();
 
       buildLigand(component);
       buildResidues();
@@ -691,7 +714,14 @@
     clearHighlight();
     const items = (data && data.interactions) || [];
     if (!items.length) {
-      structureComp.autoView();
+      // 没有接触时镜头对准配体：蛋白卡通默认隐藏，框住整个蛋白只会让配体
+      // 缩成一个点。
+      const ligandSele = data && data.ligandSelection;
+      if (ligandSele) {
+        structureComp.autoView(ligandSele);
+      } else {
+        structureComp.autoView();
+      }
       if (initialOrientation) stage.viewerControls.orient(initialOrientation);
       stage.viewer.requestRender();
       updateLabels();
@@ -985,6 +1015,7 @@
     setData: setData,
     setKindVisible: setKindVisible,
     setLabelsVisible: setLabelsVisible,
+    setProteinVisible: setProteinVisible,
     selectInteraction: selectInteraction,
     resetView: focusScene,
     syncSize: function () {

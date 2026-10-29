@@ -2,7 +2,8 @@
 
 页面只负责渲染；接触判定在 :mod:`dockflowlab.services.interactions` 中完成。
 Python 端把复合物 PDB 文本与接触列表一起传给 ``interaction.html``，由 JavaScript
-绘制卡通背景、配体球棍、残基线框、虚线连接和 HTML 标签。
+绘制配体球棍、残基线框、虚线连接和 HTML 标签；蛋白卡通背景默认隐藏，可通过
+``set_protein_visible`` 按需显示。
 """
 
 from __future__ import annotations
@@ -197,6 +198,10 @@ class InteractionView(QWidget):
 
     def set_labels_visible(self, visible: bool) -> None:
         self._call("setLabelsVisible", bool(visible))
+
+    def set_protein_visible(self, visible: bool) -> None:
+        """显示或隐藏蛋白卡通背景；默认隐藏以保证配体清晰。"""
+        self._call("setProteinVisible", bool(visible))
 
     def select_interaction(self, index: int) -> None:
         """高亮并定位一条接触；传入 -1 取消选中。"""
