@@ -473,6 +473,10 @@ class InteractionDialog(ScreenFittedDialog):
                 "疏水作用与范德华接触按元素和距离近似。"
                 "当前使用本地几何回退（PLIP 不可用），结果适合快速复核。"
             )
+        caveat_text += (
+            "\n提示：对接引擎输出的极性氢位置未优化，氢键的供体–氢–受体角度"
+            "与距离只作参考；判断氢键强弱应回到原始结构或做进一步优化验证。"
+        )
         caveat = QLabel(caveat_text)
         caveat.setObjectName("Muted")
         caveat.setWordWrap(True)

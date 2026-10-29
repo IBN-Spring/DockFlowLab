@@ -346,7 +346,9 @@ def _results_table(
     if interaction_index is not None:
         note = (
             '<p class="meta">“相互作用”来自 PLIP（不可用时回退几何判定），'
-            "只统计当前展示的接触；筛选请在软件结果页进行。</p>"
+            "只统计当前展示的接触；筛选请在软件结果页进行。"
+            "对接输出的极性氢位置未优化，氢键的供体–氢–受体角度与距离只作参考，"
+            "不宜据此判定氢键强弱。</p>"
         )
     return (
         '<div class="table-wrap"><table>'

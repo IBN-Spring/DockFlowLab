@@ -270,6 +270,8 @@ def test_report_can_include_interaction_summary(result_workspace):
     assert "氢键 2" in text and "盐桥 1" in text
     assert "MET318" in text
     assert "PLIP" in text
+    # 氢键几何只作参考：报告需明确极性氢未优化。
+    assert "极性氢位置未优化" in text
 
 
 def test_report_includes_exhaustiveness_advice(result_workspace):
