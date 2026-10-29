@@ -97,6 +97,13 @@ def build_parser() -> argparse.ArgumentParser:
         "--only", choices=("all", "targets", "ligands"), default="all", help="只准备某一类条目"
     )
     prepare.add_argument("--ph", type=float, default=None, help="加氢时的 pH（默认读取设置）")
+    prepare.add_argument(
+        "--states",
+        type=int,
+        choices=(1, 2, 4, 8),
+        default=None,
+        help="候选分子的互变异构/质子化状态数，1 表示只用原始结构（默认读取设置）",
+    )
 
     dock = sub.add_parser("dock", help="运行对接并汇总结果")
     dock.add_argument("project", type=Path, help="工作目录")
@@ -368,6 +375,8 @@ def command_prepare(args: argparse.Namespace) -> int:
     settings = AppSettings.load()
     if args.ph is not None:
         settings.add_hydrogens_ph = float(args.ph)
+    if args.states is not None:
+        settings.enumeration_states = int(args.states)
     kinds = {
         "all": (KIND_TARGET, KIND_LIGAND),
         "targets": (KIND_TARGET,),

@@ -96,3 +96,11 @@ def test_bad_command_arguments(workspace):
     with pytest.raises(SystemExit) as exc:
         main(["dock", str(workspace.root), "--center", "1,2"])
     assert exc.value.code == 2
+
+
+def test_prepare_accepts_states_option():
+    from dockflowlab.cli import build_parser
+
+    args = build_parser().parse_args(["prepare", "项目", "--states", "2"])
+    assert args.states == 2
+    assert build_parser().parse_args(["prepare", "项目"]).states is None

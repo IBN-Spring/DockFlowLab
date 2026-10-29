@@ -532,6 +532,7 @@ dockflowlab-cli import D:/docking/demo aspirin.sdf --kind ligand --name 阿司�
 
 # 准备、对接、报告
 dockflowlab-cli prepare D:/docking/demo
+dockflowlab-cli prepare D:/docking/demo --states 1   # 关闭互变异构/质子化状态枚举
 dockflowlab-cli dock D:/docking/demo --exhaustiveness 8
 dockflowlab-cli dock D:/docking/demo --engine qvina2
 dockflowlab-cli dock D:/docking/demo --engine smina --scoring vinardo
