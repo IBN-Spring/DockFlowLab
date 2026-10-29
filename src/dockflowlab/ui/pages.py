@@ -1133,8 +1133,12 @@ class DockPage(Page):
             ]
             if flex_targets:
                 text += (
-                    f" 其中 {len(flex_targets)} 个靶点启用了柔性残基，"
-                    "侧链会与配体一起采样，耗时明显增加。"
+                    f" 其中 {len(flex_targets)} 个靶点启用了柔性残基："
+                    "每个柔性侧链都要和配体一起搜索，耗时大致按"
+                    "“柔性残基数 × 精细度 × 配体状态数”成倍增加，"
+                    "原本几十秒的一组可能变成十几分钟。"
+                    "建议只保留真正挡住配体的 2–4 个侧链；"
+                    "想先看趋势可把精细度改为“快速（8）”，确认后再用标准或精细设置重跑。"
                 )
                 if str(self.engine.currentData() or "") == "qvina2":
                     text += " 注意：QuickVina 2 不支持柔性残基，请改用 AutoDock Vina 或 Smina。"
@@ -1229,10 +1233,16 @@ class DockPage(Page):
         flex_residues = flex_service.selected_residues(target)
         summary = f"{prefix} · {box_text}" if prefix else box_text
         if flex_residues:
-            summary += f" · 柔性残基 {len(flex_residues)} 个"
+            summary += f" · 柔性残基 {len(flex_residues)} 个（耗时明显增加）"
         detail = QLabel(summary)
         detail.setObjectName("Warning" if needs_review else "Muted")
         detail.setWordWrap(True)
+        if flex_residues:
+            detail.setToolTip(
+                "柔性残基会让侧链与配体一起采样，耗时成倍增加。\n"
+                "如果一组对接超过预期，可先减少柔性残基数量，"
+                "或把精细度改为“快速（8）”做初步筛选。"
+            )
         text_box.addWidget(detail)
         layout.addLayout(text_box, 1)
         flex = QPushButton("柔性残基")
