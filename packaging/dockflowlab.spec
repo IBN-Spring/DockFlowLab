@@ -545,8 +545,8 @@ if IS_MACOS:
         info_plist={
             "CFBundleDisplayName": APP_NAME,
             "CFBundleName": APP_NAME,
-            "CFBundleShortVersionString": "2.4.0",
-            "CFBundleVersion": "2.4.0",
+            "CFBundleShortVersionString": "2.5.0",
+            "CFBundleVersion": "2.5.0",
             "NSHighResolutionCapable": True,
             "LSMinimumSystemVersion": "11.0",
             "NSPrincipalClass": "NSApplication",

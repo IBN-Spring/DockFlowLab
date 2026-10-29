@@ -8,8 +8,8 @@ abstract: >-
 authors:
   - name: "IBN-Spring"
     email: "3929555374@qq.com"
-version: 2.4.0
-date-released: 2026-10-26
+version: 2.5.0
+date-released: 2026-10-30
 license: GPL-2.0-only
 repository-code: "https://github.com/IBN-Spring/DockFlowLab"
 url: "https://github.com/IBN-Spring/DockFlowLab"

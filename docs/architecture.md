@@ -79,7 +79,7 @@ config.py    用户偏好（与项目无关）
   配体与 `SITE` 残基整理为独立原子组，供盒子编辑器叠加参考层；它只读原始
   结构，不参与盒子计算。
 - `docking.py`：批量组合、跳过已有结果、写元数据、生成复合物与 PyMOL 脚本。
-  2.4.0 起按 `meta["prep_details"]["states"]` 逐状态对接并取最优（`*_stateN.pdbqt`），
+  2.5.0 起按 `meta["prep_details"]["states"]` 逐状态对接并取最优（`*_stateN.pdbqt`），
   元数据记录实际最优文件；跳过判断同时比较状态数与柔性残基选择，任一变化都会重算。
 - `flexible.py`：柔性侧链选择与受体拆分。`residue_candidates()` 按盒子中心列出
   可旋转侧链，`auto_select()` 默认取 6 Å 内最多 12 个；`ensure_flexible_receptor()`

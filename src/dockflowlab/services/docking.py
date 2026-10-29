@@ -206,7 +206,7 @@ _PARAMETER_KEYS = (
     "engine_version",
     "vina_version",
     "scoring",
-    # 2.4.0 起记录柔性残基与多状态枚举，便于复现与比较。
+    # 2.5.0 起记录柔性残基与多状态枚举，便于复现与比较。
     "flex_residues",
     "flex_count",
     "ligand_state",
