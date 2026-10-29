@@ -91,6 +91,42 @@ def test_results_offer_interaction_details(qt_app, tmp_path):
     assert emitted == [("target", "ligand")]
 
 
+def test_prepare_page_shows_qc_and_disables_redocking_without_ligand(qt_app, tmp_path):
+    from dockflowlab.ui.pages import PreparePage
+    from dockflowlab.workspace import Workspace
+
+    workspace = Workspace.create(tmp_path / "体检")
+    source = tmp_path / "protein_only.pdb"
+    source.write_text(
+        "ATOM      1  CA  ALA A   1       0.000   0.000   0.000  1.00  0.00           C\n"
+        "END\n",
+        encoding="utf-8",
+    )
+    entry = workspace.import_file("target", source, display_name="测试靶点")
+    workspace.update_entry(
+        entry,
+        status="ready",
+        meta={
+            "prep_details": {
+                "structure_qc": {
+                    "summary": ["缺失残基：2；缺失原子：0", "金属离子：ZN"]
+                }
+            },
+            "prep_warnings": ["结构标注了 2 个缺失残基，补全区域可靠性有限"],
+        },
+    )
+
+    page = PreparePage()
+    page.refresh(workspace)
+
+    text = page.qc_label.text()
+    assert "缺失残基" in text
+    assert "金属离子" in text
+    assert "准备提示" in text
+    assert "共晶配体" in text
+    assert not page.redock_button.isEnabled()
+
+
 def test_results_filter_and_csv_export(qt_app, tmp_path):
     from dockflowlab.core.models import DockingResult, Pose
     from dockflowlab.services.interaction_index import (

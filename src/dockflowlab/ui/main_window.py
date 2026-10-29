@@ -38,6 +38,7 @@ from ..services.analysis import save_heatmap_config
 from ..services.boxes import suggest_box
 from ..services.docking import DockingOptions, collect_existing_results, run_batch
 from ..services.interaction_index import build_interaction_index
+from ..services.redocking import run_redocking
 from ..services.download import DownloadResult
 from ..services.pose_browser import build_pose_browser
 from ..services.preparation import prepare_all
@@ -311,6 +312,7 @@ class MainWindow(QMainWindow):
         self.prepare_page.cancel_requested.connect(self._request_cancel)
         self.prepare_page.back_requested.connect(lambda: self._navigate(1))
         self.prepare_page.next_requested.connect(lambda: self._navigate(3))
+        self.prepare_page.redocking_requested.connect(self._run_redocking)
         self.prepare_page.change_workspace_requested.connect(lambda: self._navigate(0))
 
         self.dock_page.box_requested.connect(self._edit_box)
@@ -826,6 +828,79 @@ class MainWindow(QMainWindow):
 
         self._set_busy(True)
         self._run_task(job, None, done, failed)
+
+    # ------------------------------------------------------------------
+    # 重对接验证
+    # ------------------------------------------------------------------
+    def _run_redocking(self, target_stem: str) -> None:
+        if self.workspace is None or self._busy_notice():
+            return
+        workspace = self.workspace
+        target = workspace.get(KIND_TARGET, target_stem)
+        if target is None:
+            return
+        page = self.prepare_page
+        engine = self._get_engine(self.settings.docking_engine)
+        if not engine.available:
+            QMessageBox.warning(
+                self,
+                f"未找到 {engine.label}",
+                f"当前无法启动 {engine.label}，请先在“设置”中指定可执行文件。",
+            )
+            return
+        options = DockingOptions.from_settings(self.settings)
+        obabel = self._get_obabel()
+        label = target.display_name
+        page.start_running()
+        page.log_panel.start(f"正在做重对接验证：{label}")
+        self._set_busy(True)
+
+        def job(progress, cancel, line):
+            box = workspace.load_box(target_stem)
+            if box is None:
+                box, _ = suggest_box(
+                    target_source=workspace.absolute(target.source),
+                    target_prepared_pdb=workspace.prepared_target_pdb(target_stem),
+                    ligand_paths=[],
+                    settings=self.settings,
+                    target_kind=modes.target_kind_for(target, workspace),
+                    chains=target.meta.get("chains", []),
+                    obabel=obabel,
+                )
+                workspace.save_box(target_stem, box)
+                workspace.update_entry(
+                    target, box=workspace.relative(workspace.box_path(target_stem))
+                )
+            return run_redocking(
+                workspace,
+                target,
+                box,
+                options=options,
+                engine=engine,
+                fallback_engines=self._fallback_engines(engine),
+                obabel=obabel,
+                progress=progress,
+                cancel=cancel,
+            )
+
+        def done(result) -> None:
+            self._set_busy(False)
+            if not result.ok:
+                page.finish_running(f"重对接验证未完成：{result.error}", False)
+                page.set_redocking_result(f"{label}：{result.error}", False)
+                return
+            message = f"{label}：{result.summary_text}"
+            page.finish_running(message, result.passed)
+            page.set_redocking_result(message, result.passed)
+            self.statusBar().showMessage(message, 10000)
+
+        def failed(message: str) -> None:
+            self._set_busy(False)
+            page.finish_running(f"重对接验证失败：{message}", False)
+            page.set_redocking_result(f"{label}：{message}", False)
+            QMessageBox.critical(self, "重对接验证失败", message)
+
+        self._run_task(job, page.log_panel, done, failed)
 
     # ------------------------------------------------------------------
     # 对接

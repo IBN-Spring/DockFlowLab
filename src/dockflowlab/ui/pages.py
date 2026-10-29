@@ -381,6 +381,7 @@ class PreparePage(Page):
     cancel_requested = Signal()
     back_requested = Signal()
     next_requested = Signal()
+    redocking_requested = Signal(str)
     change_workspace_requested = Signal()
 
     def __init__(self) -> None:
@@ -448,6 +449,39 @@ class PreparePage(Page):
         options.add(note)
         self.body.addWidget(options)
 
+        self.qc_card = Card(
+            "结构体检与重对接验证",
+            "体检读取 PDB 的 REMARK 350/465/470、altloc 与 occupancy。"
+            "重对接会用当前盒子与参数把晶体配体重新对接到受体上，"
+            "RMSD ≤ 2 Å 说明这套流程能复现实验构象。",
+        )
+        redock_row = QHBoxLayout()
+        redock_row.setSpacing(8)
+        redock_row.addWidget(QLabel("靶点"))
+        self.redock_target = QComboBox()
+        self.redock_target.setMaximumWidth(280)
+        self.redock_target.currentIndexChanged.connect(self._update_qc_label)
+        redock_row.addWidget(self.redock_target, 1)
+        self.redock_button = QPushButton("重对接验证")
+        self.redock_button.setObjectName("Small")
+        self.redock_button.setToolTip(
+            "从原始结构中提取共晶配体，按当前参数重新对接并计算对称校正 RMSD"
+        )
+        self.redock_button.clicked.connect(self._request_redocking)
+        redock_row.addWidget(self.redock_button)
+        self.qc_card.add_layout(redock_row)
+        self.qc_label = QLabel("准备靶点后可在这里看到结构体检摘要。")
+        self.qc_label.setObjectName("Muted")
+        self.qc_label.setWordWrap(True)
+        self.qc_card.add(self.qc_label)
+        self.redock_status = QLabel("")
+        self.redock_status.setObjectName("Muted")
+        self.redock_status.setWordWrap(True)
+        self.redock_status.setVisible(False)
+        self.qc_card.add(self.redock_status)
+        self.body.addWidget(self.qc_card)
+        self._target_entries: dict[str, ProjectFile] = {}
+
         self.entries_card = Card("条目状态")
         self.entries_layout = QVBoxLayout()
         self.entries_layout.setSpacing(0)
@@ -498,6 +532,7 @@ class PreparePage(Page):
             self.next_button.setEnabled(False)
             self._ready_entries = self._total_entries = 0
             self._can_continue = False
+            self._refresh_redocking_targets(workspace)
             self._update_action_state()
             return
         targets = workspace.targets
@@ -518,7 +553,117 @@ class PreparePage(Page):
         self.next_button.setEnabled(self._can_continue)
         self._ready_entries = len(ready)
         self._total_entries = len(entries)
+        self._refresh_redocking_targets(workspace)
         self._update_action_state()
+
+    # -- 结构体检与重对接 ----------------------------------------------
+    def _refresh_redocking_targets(self, workspace: Workspace | None) -> None:
+        self._workspace = workspace
+        current = str(self.redock_target.currentData() or "")
+        targets = [
+            entry
+            for entry in (workspace.targets if workspace is not None else [])
+            if entry.status == STATUS_READY
+        ]
+        self._target_entries = {entry.stem: entry for entry in targets}
+        self.redock_target.blockSignals(True)
+        self.redock_target.clear()
+        for entry in targets:
+            self.redock_target.addItem(entry.display_name, entry.stem)
+        if current in self._target_entries:
+            index = self.redock_target.findData(current)
+            if index >= 0:
+                self.redock_target.setCurrentIndex(index)
+        self.redock_target.blockSignals(False)
+        has_targets = bool(targets)
+        self.redock_target.setEnabled(has_targets)
+        self.redock_button.setEnabled(has_targets)
+        if not has_targets:
+            self.qc_label.setText("准备靶点后可在这里看到结构体检摘要。")
+            return
+        self._update_qc_label()
+
+    def _update_qc_label(self) -> None:
+        stem = str(self.redock_target.currentData() or "")
+        entry = self._target_entries.get(stem)
+        if entry is None:
+            self.qc_label.setText("准备靶点后可在这里看到结构体检摘要。")
+            return
+        details = entry.meta.get("prep_details") or {}
+        qc = details.get("structure_qc") if isinstance(details, dict) else None
+        lines: list[str] = []
+        if isinstance(qc, dict) and qc:
+            summary = qc.get("summary")
+            if isinstance(summary, list):
+                lines.extend(str(item) for item in summary)
+            else:
+                lines.append(
+                    f"缺失残基：{qc.get('missing_residue_count', 0)}；"
+                    f"缺失原子：{qc.get('missing_atom_count', 0)}；"
+                    f"altloc 原子：{qc.get('altloc_atoms', 0)}"
+                )
+        else:
+            lines.append("没有可用的结构体检信息（可能不是 PDB 格式或由旧版本准备）。")
+        warnings = entry.meta.get("prep_warnings") or []
+        if warnings:
+            lines.append("准备提示：" + "；".join(str(item) for item in warnings[:3]))
+        reason = self._redocking_unavailable_reason(entry)
+        if reason:
+            lines.append(f"重对接验证不可用：{reason}")
+        self.qc_label.setText("\n".join(lines))
+
+    def _redocking_unavailable_reason(self, entry: ProjectFile) -> str:
+        """PDB 结构里没有合适共晶配体时，禁用按钮并说明原因。"""
+        from ..core import pdbio
+        from ..services.redocking import find_reference_site
+
+        workspace = self._workspace
+        if workspace is None:
+            self.redock_button.setEnabled(False)
+            return "工作目录未打开"
+        try:
+            source = workspace.absolute(entry.source)
+        except Exception:
+            source = None
+        if source is None or not source.is_file():
+            self.redock_button.setEnabled(False)
+            self.redock_button.setToolTip("找不到原始结构文件")
+            return "找不到原始结构文件"
+        if pdbio.detect_format(source) != "pdb":
+            # mmCIF/MOL2 需要 OpenBabel 转换，放到点击时再处理。
+            self.redock_button.setEnabled(True)
+            self.redock_button.setToolTip(
+                "从原始结构中提取共晶配体，按当前参数重新对接并计算对称校正 RMSD"
+            )
+            return ""
+        try:
+            site, _, error = find_reference_site(workspace, entry)
+        except Exception as exc:  # 体检失败不应阻止用户尝试
+            self.redock_button.setEnabled(True)
+            self.redock_button.setToolTip(f"共晶配体预检失败：{exc}")
+            return ""
+        if site is None:
+            self.redock_button.setEnabled(False)
+            self.redock_button.setToolTip(error or "没有可用的共晶配体")
+            return error or "原始结构中没有可作为参考的共晶配体"
+        self.redock_button.setEnabled(True)
+        self.redock_button.setToolTip(
+            f"参考配体：{site.label}（{site.heavy_atom_count} 个重原子），"
+            "按当前参数重新对接并计算对称校正 RMSD"
+        )
+        return ""
+
+    def _request_redocking(self) -> None:
+        stem = str(self.redock_target.currentData() or "")
+        if stem:
+            self.redocking_requested.emit(stem)
+
+    def set_redocking_result(self, text: str, ok: bool = True) -> None:
+        self.redock_status.setText(text)
+        self.redock_status.setStyleSheet(
+            "" if ok else f"color: {theme.DANGER};"
+        )
+        self.redock_status.setVisible(bool(text))
 
     def _update_action_state(self) -> None:
         """全部就绪时把“下一步”设为主按钮，避免两个蓝色按钮抢注意力。"""
@@ -538,6 +683,7 @@ class PreparePage(Page):
         self.ph_spin.setEnabled(False)
         self.keep_metals_check.setEnabled(False)
         self.force_check.setEnabled(False)
+        self.redock_button.setEnabled(False)
 
     def finish_running(self, message: str, ok: bool) -> None:
         self.log_panel.finish(message, ok)
@@ -547,6 +693,10 @@ class PreparePage(Page):
         self.ph_spin.setEnabled(True)
         self.keep_metals_check.setEnabled(True)
         self.force_check.setEnabled(True)
+        if self._target_entries:
+            self._update_qc_label()
+        else:
+            self.redock_button.setEnabled(False)
 
 
 # ----------------------------------------------------------------------

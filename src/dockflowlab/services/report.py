@@ -393,6 +393,65 @@ def _pose_table(
     )
 
 
+def _redocking_section(workspace: Workspace) -> str:
+    """列出已完成的靶点重对接验证；没有记录时返回空字符串。"""
+    from .redocking import load_redocking
+
+    rows: list[str] = []
+    for target in workspace.targets:
+        result = load_redocking(workspace, target.stem)
+        if result is None:
+            continue
+        name = _e(target.display_name)
+        if not result.ok:
+            rows.append(
+                "<tr>"
+                f"<td>{name}</td><td>—</td><td>—</td><td>—</td>"
+                f'<td class="badge fail">未完成</td>'
+                f"<td>{_e(result.error or '未知错误')}</td>"
+                "</tr>"
+            )
+            continue
+        if result.rmsd is None:
+            verdict = '<span class="badge skip">无法计算</span>'
+            rmsd_text = "—"
+        else:
+            verdict = (
+                '<span class="badge ok">通过</span>'
+                if result.passed
+                else '<span class="badge fail">未通过</span>'
+            )
+            rmsd_text = f"{result.rmsd:.2f}"
+        parameters = result.parameters or {}
+        exhaustiveness = parameters.get("exhaustiveness", "—")
+        seed = parameters.get("seed", "—")
+        rows.append(
+            "<tr>"
+            f"<td>{name}</td>"
+            f"<td>{_e(result.site_label or '—')}</td>"
+            f"<td>{_e(BOX_LABELS.get(result.box_source, result.box_source or '自动'))}</td>"
+            f'<td class="num">{_e(rmsd_text)}</td>'
+            f"<td>{verdict}</td>"
+            f"<td>exhaustiveness={_e(exhaustiveness)}，seed={_e(seed)}"
+            f'<br><span class="meta">{_e(result.rmsd_method or "")}</span></td>'
+            "</tr>"
+        )
+    if not rows:
+        return ""
+    return (
+        "<section>"
+        "<h2>重对接验证</h2>"
+        '<div class="table-wrap"><table>'
+        "<thead><tr><th>靶点</th><th>参考配体</th><th>盒子来源</th>"
+        "<th class='num'>RMSD (Å)</th><th>判定</th><th>参数</th></tr></thead>"
+        f"<tbody>{''.join(rows)}</tbody></table></div>"
+        '<p class="meta">RMSD 为对接构象与实验晶体构象之间的对称校正重原子 RMSD'
+        "（阈值 2.0 Å），在受体坐标系中计算，不做叠合；"
+        "它与 Vina 输出的 pose 间 RMSD 含义不同。</p>"
+        "</section>"
+    )
+
+
 def _exhaustiveness_advice_text(
     workspace: Workspace, results: Sequence[DockingResult]
 ) -> str:
@@ -465,6 +524,18 @@ def _methods(workspace: Workspace, results: Sequence[DockingResult]) -> str:
     ph_value = _prep_ph(workspace)
     if ph_value:
         items.append(("质子化 pH", f"{ph_value}（准备时用于加氢或质子化校正）"))
+    qc_lines: list[str] = []
+    for entry in workspace.targets:
+        details = entry.meta.get("prep_details") or {}
+        qc = details.get("structure_qc") if isinstance(details, dict) else None
+        if not isinstance(qc, dict) or not qc:
+            continue
+        summary = qc.get("summary")
+        text = "；".join(str(item) for item in summary) if isinstance(summary, list) else ""
+        if text:
+            qc_lines.append(f"{entry.display_name}：{text}")
+    if qc_lines:
+        items.append(("结构体检", " ".join(qc_lines)))
     advice_text = _exhaustiveness_advice_text(workspace, results)
     items.extend(
         [
@@ -575,6 +646,7 @@ def generate_report(
             bundle.results, target_labels, ligand_labels, interaction_index
         ),
         "poses": _pose_table(bundle.results, target_labels, ligand_labels),
+        "redocking": _redocking_section(workspace),
         "methods": _methods(workspace, bundle.results),
         "warnings": _warnings(bundle, workspace),
         "version": _e(__version__),

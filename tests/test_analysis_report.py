@@ -283,6 +283,35 @@ def test_report_includes_exhaustiveness_advice(result_workspace):
     assert "低于建议值" in text
 
 
+def test_report_includes_redocking_validation(result_workspace):
+    import json
+
+    from dockflowlab.services.redocking import RedockingResult
+
+    workspace, target, _, _ = result_workspace
+    meta = workspace.redocking_meta(target.stem)
+    meta.parent.mkdir(parents=True, exist_ok=True)
+    result = RedockingResult(
+        target=target.stem,
+        ok=True,
+        passed=True,
+        rmsd=1.23,
+        rmsd_method="RDKit 等价原子匹配（对称校正）",
+        site_label="LIG A 500",
+        box_source="cocrystal",
+        parameters={"exhaustiveness": 16, "seed": 42},
+    )
+    meta.write_text(json.dumps(result.to_dict(), ensure_ascii=False), encoding="utf-8")
+
+    text = generate_report(workspace, []).read_text(encoding="utf-8")
+
+    assert "重对接验证" in text
+    assert "1.23" in text
+    assert "LIG A 500" in text
+    assert "通过" in text
+    assert "不做叠合" in text
+
+
 def test_analyze_warns_when_parameters_differ(result_workspace):
     workspace, target, first, second = result_workspace
     results = make_results(target, [first, second])
