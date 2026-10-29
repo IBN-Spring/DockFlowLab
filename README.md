@@ -6,7 +6,7 @@
 </p>
 
 <p align="center">
-  <img alt="release" src="https://img.shields.io/badge/release-v2.4.0-2A78D6?style=flat-square">
+  <img alt="release" src="https://img.shields.io/badge/release-v2.5.0-2A78D6?style=flat-square">
   <img alt="Windows" src="https://img.shields.io/badge/Windows-10%2F11%20x64-0E2A4D?style=flat-square&logo=windows&logoColor=white">
   <img alt="macOS" src="https://img.shields.io/badge/macOS-Apple%20Silicon-0E2A4D?style=flat-square&logo=apple&logoColor=white">
   <img alt="Python" src="https://img.shields.io/badge/Python-3.10--3.12-17A897?style=flat-square&logo=python&logoColor=white">
@@ -49,6 +49,22 @@ Python，也不要求你先把 PDB 转成 PDBQT、再去找口袋、再单独装
 - **操作简单**：五步向导 + 中文界面 + 合理默认值，第一次用也能跑完。
 - **跨平台**：Windows 10/11 x64 与 macOS Apple Silicon，共用同一套服务层与命令行。
 
+## 2.5.0 更新要点
+
+- **柔性侧链**：在“设置对接”页为每个靶点挑选最多 12 个可旋转残基——程序按搜索盒子
+  附近自动推荐，也可以手动勾选。Vina / Smina 会用 `--flex` 让这些侧链和配体一起采样；
+  QuickVina 2 不支持柔性残基，开始前会提示切换引擎。
+- **耗时提示更直白**：柔性侧链会让耗时按“柔性残基数 × 精细度 × 配体状态数”成倍增加。
+  界面会把倍数关系、2–4 个残基的建议和“先跑快速（8）看趋势”的替代方案直接写出来，不再
+  只给一句“可能较慢”。
+- **配体状态枚举**：默认枚举 4 个互变异构 / 质子化状态，每个状态单独对接并取最优；
+  可在设置里调整，命令行用 `prepare --states {1,2,4,8}`，`--states 1` 即关闭。
+- **相互作用视图更清楚**：细节窗口默认关闭蛋白卡通背景，只留配体与接触残基，避免半透明
+  蛋白盖住配体造成“断点”或结构错乱；需要看整体位置时再勾选“蛋白背景”。残基线框更细、
+  配体略微加粗，没有接触时自动把视角对准配体。
+- **能量最小化更稳**：MMFF94s 参数缺失或优化器内部报错时自动回退 UFF，界面不再显示
+  RDKit 的底层异常；只有两种力场都不可用时才提示保留原始构象。
+
 ## 项目定位与边界
 
 > **DockFlowLab 目前只支持“小分子配体”对接。**
@@ -76,6 +92,7 @@ DockFlowLab 的定位是**轻量、开源、离线、打开即用**的桌面工�
 
 ## 目录
 
+- [2.5.0 更新要点](#250-更新要点)
 - [项目定位与边界](#项目定位与边界)
 - [为什么是 DockFlowLab](#为什么是-dockflowlab)
 - [五步跑完一次对接](#五步跑完一次对接)
@@ -154,6 +171,7 @@ DockFlowLab 的定位是**轻量、开源、离线、打开即用**的桌面工�
 2. **添加分子**：拖入靶点结构与候选分子，或从 PDB / PubChem / AlphaFold / ChEMBL 下载。
 3. **检查与准备**：自动识别类型，补全缺失原子、按生理 pH 加氢、检查价态并生成对接格式。
 4. **设置对接**：为每个靶点确认搜索盒子；程序自动检测口袋并交叉校验，也可以在 3D 视图中手动调整。
+   需要模拟受体柔性时，在这里为每个靶点勾选柔性侧链。
 5. **运行与结果**：开始对接，查看结果表与图表，生成 HTML 报告或用 PyMOL 打开复合物。
 
 > 第 6 步 **PyMOL 渲染** 是可选出图步骤，不参与对接计算。它可以批量套用你已有的
@@ -190,8 +208,9 @@ DockFlowLab 的定位是**轻量、开源、离线、打开即用**的桌面工�
 - 自动区分靶点与候选分子，并根据内容判断是小分子、多肽、蛋白还是核酸。
 - 蛋白质与核酸使用 PDBFixer + OpenBabel 修复：补全缺失原子、按 pH 7.4 加氢、处理非标准残基。
 - 小分子使用 RDKit + Meeko 生成 PDBQT，支持柔性配体；必要时调用 OpenBabel 转换格式。
-- 可选互变异构/质子化状态枚举（默认 4 个状态）：每个状态单独对接，结果表只展示最优；
-  状态分数写入日志、结果参数与报告。
+- **配体状态枚举**：默认枚举 4 个互变异构 / 质子化状态，每个状态单独准备并单独对接，
+  结果表只展示最优；各状态分数写入日志、结果参数与报告。可在设置里调整，或用
+  `prepare --states 1` 关闭。
 - 问题条目会标红并说明原因，不会静默跳过；准备完成后给出成功 / 跳过 / 失败统计。
 
 ### 结合位点：先算口袋，再做交叉验证
@@ -215,17 +234,20 @@ DockFlowLab 的定位是**轻量、开源、离线、打开即用**的桌面工�
   实际使用的引擎。
 - **不同引擎、不同版本的分数不能直接比较。** 报告会记录实际引擎与版本，提醒同一批结果只在
   相同条件下排序。
-- **柔性侧链**：在“设置对接”页为每个靶点选择最多 12 个可旋转残基（按搜索盒子自动挑选或
-  手动勾选），Vina / Smina 会以 `--flex` 让侧链与配体一起采样。QuickVina 2 不支持柔性残基，
-  开始前会提示切换引擎。
+- **柔性侧链**：在“设置对接”页为每个靶点选择最多 12 个可旋转残基（按搜索盒子自动推荐或
+  手动勾选），Vina / Smina 会以 `--flex` 让侧链与配体一起采样。每个柔性残基都会扩大搜索
+  空间，耗时大致按“柔性残基数 × 精细度 × 配体状态数”成倍增加，建议只保留真正挡住配体的
+  2–4 个；想先看趋势可把精细度设为快速（8），确认后再用标准或精细设置重跑。QuickVina 2
+  不支持柔性残基，开始前会提示切换引擎。
 
 ### 结果、图表与报告
 
 - 结果表包含靶点、候选分子、对接类型、最佳打分、盒子来源、状态与说明。
-- 成功结果可点 **细节** 打开 3D 相互作用视图：蛋白背景半透明显示，配体与接触残基突出标记，
-  并用虚线连接氢键、金属配位、疏水作用、盐桥、π-堆积、π-阳离子、卤键与范德华接触；右侧
-  同步列出残基、原子与距离。点击列表条目或 3D 标签会加粗对应的金色虚线并定位该残基，也可
-  按类型隐藏接触、3D 标签或整个右侧列表。
+- 成功结果可点 **细节** 打开 3D 相互作用视图：默认只显示配体与接触残基，蛋白卡通背景
+  关闭，避免半透明蛋白盖在配体上造成“断点”或结构错乱；需要判断整体位置时再勾选底部
+  的“蛋白背景”。接触类型用虚线连接氢键、金属配位、疏水作用、盐桥、π-堆积、π-阳离子、
+  卤键与范德华接触；右侧同步列出残基、原子与距离。点击列表条目或 3D 标签会加粗对应的
+  金色虚线并定位该残基，也可按类型隐藏接触、3D 标签或整个右侧列表。
 - 相互作用由内置 **PLIP 3.0.1** 分析：自动补全极性氢后按供体/受体几何识别氢键、盐桥、
   π 相互作用与金属配位，疏水作用与卤键按 PLIP 规则判定；范德华接触与 PLIP 未覆盖的金属
   配位（如磺酰胺氮）由本地几何判定补充。PLIP 不可用或分析失败时自动回退到纯几何判定，
@@ -251,6 +273,15 @@ DockFlowLab 的定位是**轻量、开源、离线、打开即用**的桌面工�
 - 热图可导出 **PNG / SVG / PDF**：PNG 用于报告与预览，SVG 可继续编辑，PDF 适合打印。
 - 一键生成**可离线打开的中文 HTML 报告**，包含参数、结果、图表与评分含义说明。
 - 结果目录同时保留引擎原始输出，方便复核或换工具复算。
+
+<p align="center">
+  <img src="docs/assets/screenshots/08-interactions.png" alt="相互作用细节窗口：默认隐藏蛋白背景，配体与接触残基清晰可辨" width="100%">
+</p>
+
+<p align="center">
+  <sub>相互作用细节：蛋白背景默认关闭，配体与接触残基清晰可辨；底部可按类型隐藏接触、
+  开启“蛋白背景”、显示 3D 标签或导出 CSV。</sub>
+</p>
 
 ### PyMOL 渲染：用你自己的风格脚本出图
 
@@ -319,16 +350,17 @@ DockFlowLab 的定位是**轻量、开源、离线、打开即用**的桌面工�
    小碎片，并报告移除了多少重原子。
 4. **补氢与三维构象。** 先 `Chem.AddHs`；输入只有二维坐标时用 **ETKDGv3** 生成三维构象
    （随机种子 42，失败时改用随机初始坐标重试）。如果分子已有三维坐标，则保留原构象。
-5. **能量最小化。** 优先 MMFF94s；参数不全时退到 UFF；最多 500 步。没有可用力场时保留
-   输入构象并明确警告，不假装“优化过”。
+5. **能量最小化。** 优先 MMFF94s，最多 500 步；参数缺失或优化器内部报错时自动改用 UFF
+   重试，成功后不弹警告。两种力场都不可用时才保留输入构象并明确提示，不假装“优化过”。
 6. **生理 pH 质子化校正（可选）。** 通过 OpenBabel 的 pH 模型在 7.4 下重新分配质子化
    状态。只有重原子数不变时才接受校正结果，否则保留输入结构并警告。
 7. **生成柔性 PDBQT。** 用 Meeko 的 `MoleculePreparation` + `PDBQTWriterLegacy` 写出
    含 `ROOT/BRANCH/TORSDOF` 的可旋转配体；校验通过才落盘。Meeko 失败时回退到 OpenBabel，
    并在结果中注明回退路径。
-8. **状态枚举（可选）。** 按“状态枚举”设置用 RDKit `TautomerEnumerator` 枚举互变异构体，
-   去重后为每个额外状态重新补氢、生成三维构象、最小化并写出 `states/state_N.pdbqt`；
-   对接时逐状态计算并取最优，失败的状态单独跳过并警告。
+8. **状态枚举（默认 4 个状态）。** 按“状态枚举”设置用 RDKit `TautomerEnumerator` 枚举
+   互变异构体，去重后为每个额外状态重新补氢、生成三维构象、最小化并写出
+   `states/state_N.pdbqt`；对接时逐状态计算并取最优，失败的状态单独跳过并警告。设为 1
+   即可关闭。
 9. **刚性靶点模式。** 小分子–小分子对接时，先按上述流程准备，再移除扭转树，把该分子
    转成刚性受体，保证搜索空间只落在另一个分子上。
 
@@ -405,7 +437,23 @@ DockFlowLab 的定位是**轻量、开源、离线、打开即用**的桌面工�
 - **小分子靶点单独处理。** 分子–分子对接时，盒子以靶点分子为中心，覆盖两个分子的总跨度，
   并提示用户检查结果。
 
-### 5. 为什么这样设计
+### 5. 柔性侧链：`--flex` 的代价与边界
+
+入口：[services/flexible.py](src/dockflowlab/services/flexible.py) 与
+[services/docking.py](src/dockflowlab/services/docking.py)。柔性侧链通过 Vina / Smina 的
+`--flex` 机制实现：程序调用 Meeko 的 `mk_prepare_receptor`，把选中残基从刚性受体中拆出，
+分别写成刚性受体与柔性残基 PDBQT，再让这些侧链的 χ 角与配体一起搜索。
+
+- 自动推荐只考察盒子中心 6 Å 内的残基，手动列表展示 12 Å 内的残基，单靶点最多 12 个。
+- 拆分结果按“靶点 + 残基选择”缓存，位于 `prepared/targets/<名称>/flex/`；同一靶点的
+  不同配体与不同配体状态复用同一份文件，不会重复拆分。
+- 每个柔性残基都会增加搜索维度，耗时大致按“柔性残基数 × exhaustiveness × 配体状态数”
+  增长。设置页与任务摘要会直接给出耗时倍数、建议残基数和提速方案。
+- QuickVina 2 不支持 `--flex`，选中柔性残基后会提示改用 Vina 或 Smina。
+- 柔性侧链只影响受体侧链的采样，不改变评分函数；保存的复合物与可视化文件仍使用原始
+  侧链坐标。结果建议与刚性对接对照，避免把侧链调整带来的微小分数变化当成真实差异。
+
+### 6. 为什么这样设计
 
 - **先把证据用尽，再猜。** 共晶配体和 PDB SITE 是实验信息；几何口袋只是补充。两者一致时
   联合使用，不一致时明确回退并说明原因，避免“检测到一个口袋就当成结合位点”。
@@ -416,7 +464,7 @@ DockFlowLab 的定位是**轻量、开源、离线、打开即用**的桌面工�
 - **不把几何预测包装成实验结论。** 口袋分数、盒子来源和对接分数是三类不同信息，报告里
   分开呈现。
 
-### 6. 算法来源与原创性说明
+### 7. 算法来源与原创性说明
 
 DockFlowLab 的 Python 代码为独立实现，未直接复制 fpocket、P2Rank、AutoDockTools 等项目的
 源码。但**算法思想不是凭空产生的**，主要来自公开文献和开源组件：
@@ -425,16 +473,18 @@ DockFlowLab 的 Python 代码为独立实现，未直接复制 fpocket、P2Rank�
 | --- | --- | --- | --- |
 | 口袋检测 | LIGSITE 的 P-S-P 扫描与溶剂连通性 | Hendlich et al., 1997 | NumPy/SciPy 网格实现、评分权重、缓存、与实验位点的一致性校验 |
 | 分子对接 | AutoDock Vina / QuickVina 2 / Smina | Trott & Olson, 2010；Eberhardt et al., 2021；Alhossary et al., 2015；Koes et al., 2013 | 引擎适配、卡死/失败回退、结果归一化与报告 |
-| 配体读取与构象 | [RDKit](https://www.rdkit.org/)；ETKDGv3；MMFF94s / UFF | Riniker & Landrum, 2015；Halgren, 1999 | 读取、去盐、三维构象、能量最小化、pH 校正与回退 |
+| 柔性侧链 | Vina `--flex` 柔性受体 | Trott & Olson, 2010 | 残基筛选界面、柔性受体缓存、耗时提示、引擎兼容性检查 |
+| 配体读取与构象 | [RDKit](https://www.rdkit.org/)；ETKDGv3；MMFF94s / UFF | Riniker & Landrum, 2015；Halgren, 1999 | 读取、去盐、三维构象、能量最小化与力场回退、pH 校正 |
 | 结构修复 | [PDBFixer](https://github.com/openmm/pdbfixer) / OpenMM | Eastman et al., 2017 | 链与共晶配体处理、警告、OpenBabel 回退 |
 | 格式转换 | OpenBabel | O'Boyle et al., 2011 | 统一适配器、PDBQT 校验 |
 | 配体 PDBQT | [Meeko](https://github.com/forlilab/Meeko)（Forli lab） | Meeko 文档与源码 | 集成、校验、OpenBabel 回退 |
 | 3D 视图 / 出图 | NGL Viewer；[PyMOL](https://pymol.org/)（Schrödinger） | Rose et al., 2018 | 嵌入、无界面渲染、风格脚本 |
+| 相互作用分析 | PLIP 3.0.1 | Salentin et al., 2015 | 集成、缓存、几何回退、界面筛选 |
 | 盒子决策 | 证据优先的决策树 + 覆盖率共识 | 本项目 | 决策顺序、联合盒子裁剪、配体尺寸约束、边界与警告 |
 
 **本项目的原创部分**主要是工程与决策层：跨平台预处理流水线及其回退、口袋检测的具体实现与
-评分、口袋/共晶配体/SITE 的一致性校验、盒子决策树与尺寸约束、以及把这些步骤组织成可追溯
-的桌面工作流。底层物理模型、评分函数和文件格式并不是本项目发明的。
+评分、口袋/共晶配体/SITE 的一致性校验、盒子决策树与尺寸约束、柔性侧链的筛选与缓存、以及
+把这些步骤组织成可追溯的桌面工作流。底层物理模型、评分函数和文件格式并不是本项目发明的。
 
 如果你认为某段实现与现有项目过于相似、或某篇文献应被补充引用，欢迎提交 Issue 指出；
 我们会核对代码来源并更新署名。GPL-2.0 覆盖本项目的原创代码，内置第三方组件仍遵循各自
@@ -452,6 +502,7 @@ DockFlowLab 的 Python 代码为独立实现，未直接复制 fpocket、P2Rank�
 8. Eastman P, Swails J, Chodera JD, et al. OpenMM 7: rapid development of high performance algorithms for molecular dynamics. *PLoS Comput Biol*. 2017;13(7):e1005659. doi:10.1371/journal.pcbi.1005659
 9. Halgren TA. MMFF VI. MMFF94s option for energy minimization studies. *J Comput Chem*. 1999;20(7):720–729. doi:10.1002/(SICI)1096-987X(199905)20:7<720::AID-JCC7>3.0.CO;2-X
 10. Rose AS, Hildebrand PW. NGL Viewer: web-based molecular graphics for large complexes. *Bioinformatics*. 2018;34(21):3755–3758. doi:10.1093/bioinformatics/bty419
+11. Salentin S, Schreiber S, Haupt VJ, Adasme MF, Schroeder M. PLIP: fully automated protein–ligand interaction profiler. *Nucleic Acids Res*. 2015;43(W1):W443–W447. doi:10.1093/nar/gkv315
 
 ## 支持的对接场景
 
@@ -533,6 +584,7 @@ dockflowlab-cli import D:/docking/demo aspirin.sdf --kind ligand --name 阿司�
 # 准备、对接、报告
 dockflowlab-cli prepare D:/docking/demo
 dockflowlab-cli prepare D:/docking/demo --states 1   # 关闭互变异构/质子化状态枚举
+dockflowlab-cli prepare D:/docking/demo --states 8   # 最多枚举 8 个状态
 dockflowlab-cli dock D:/docking/demo --exhaustiveness 8
 dockflowlab-cli dock D:/docking/demo --engine qvina2
 dockflowlab-cli dock D:/docking/demo --engine smina --scoring vinardo
@@ -640,9 +692,11 @@ DockFlowLab 的目标是让流程**规范、可复现、可解释**，而不是�
 - **分数是经验评分函数的输出**，单位为 kcal/mol，数值越低表示该程序预测的结合越有利。
   它不等同于实验测得的 ΔG 或 Kd，也不能单独证明结合模式。
 - **只在相同条件下排序**。分数会随引擎与版本、评分函数、受体 / 配体预处理、是否保留水与
-  离子、盒子范围、exhaustiveness 和随机种子变化。不同软件或不同引擎的分数不宜直接比较。
+  离子、盒子范围、exhaustiveness、随机种子以及是否启用柔性侧链而变化。不同软件或不同
+  引擎的分数不宜直接比较。
 - **受体通常按刚性处理**。Vina 系列不模拟受体的大尺度构象变化；多肽、核酸等柔性靶点的
-  结果更适合相对排序，需要谨慎解读。
+  结果更适合相对排序，需要谨慎解读。柔性侧链只能局部调整选中残基的 χ 角，不能替代完整
+  的诱导契合模拟；保存的复合物与可视化仍使用原始侧链坐标，柔性只在搜索阶段生效。
 - **默认去水、去离子、去添加剂**，按 pH 7.4 加氢。若某个水分子或金属离子对结合至关重要，
   可在准备阶段勾选“保留金属离子”保留 Zn/Mg/Fe 等；水与添加剂目前仍会被移除，需要时请在
   项目外单独评估。
@@ -664,10 +718,21 @@ DockFlowLab 把结构准备、口袋检测、盒子设置、三种引擎、结�
 </details>
 
 <details>
+<summary><b>柔性残基选几个合适？为什么开启后这么慢？</b></summary>
+
+建议只保留真正挡住配体的 **2–4 个**侧链。`--flex` 会把每个选中残基的侧链扭转角加入搜索，
+计算量大致按“柔性残基数 × exhaustiveness × 配体状态数”增长，原本几十秒的一组可能变成
+十几分钟。想先看趋势，可把精细度设为快速（8）、状态枚举设为 1，确认结果合理后再用标准
+或精细设置重跑。QuickVina 2 不支持柔性残基，请改用 Vina 或 Smina。
+
+</details>
+
+<details>
 <summary><b>我的分数能和论文里的 Vina 分数直接比吗？</b></summary>
 
-不建议。即使是同一个引擎，受体准备、质子化状态、盒子大小、exhaustiveness 和版本不同，
-分数都会变化。请在同一项目、同一套参数下比较候选分子；跨研究比较只能作为非常粗略的参考。
+不建议。即使是同一个引擎，受体准备、质子化状态、盒子大小、exhaustiveness、柔性侧链和
+版本不同，分数都会变化。请在同一项目、同一套参数下比较候选分子；跨研究比较只能作为
+非常粗略的参考。
 
 </details>
 
@@ -716,11 +781,14 @@ PyMOL 是 Schrödinger, LLC 的商标，分发时请保留相应许可与声明�
 
 ## 路线图
 
-以下是方向，不是承诺；优先级会根据实际使用反馈调整。
+2.5.0 聚焦柔性侧链、配体状态枚举与结果视图的可读性。以下是后续方向，不是承诺；优先级会
+根据实际使用反馈调整。完整清单见 [docs/roadmap-2.5.0.md](docs/roadmap-2.5.0.md)。
 
+- 水分子保留与水桥显示
+- 多口袋盲对接
+- AutoDock4 支持
 - Windows / macOS 安装包的代码签名与 Apple 公证
 - 更多报告模板与示例项目
-- 批量项目队列与更完整的命令行参数
 - 英文界面与文档
 
 ## 参与贡献
@@ -743,7 +811,7 @@ PyMOL 是 Schrödinger, LLC 的商标，分发时请保留相应许可与声明�
   [smina](src/dockflowlab/resources/smina/LICENSE)。
 - 相互作用分析使用 **PLIP 3.0.1**（GPL-2.0，PharmAI GmbH / 原开发团队），
   许可见 [PLIP 仓库](https://github.com/pharmai/plip)。
-- 3D 盒子视图使用 **NGL Viewer 2.5.0**（MIT），许可见
+- 3D 视图使用 **NGL Viewer 2.5.0**（MIT），许可见
   [ngl](src/dockflowlab/resources/ngl/LICENSE)。
 - 感谢 AutoDock Vina、QuickVina 2、Smina、PLIP、NGL Viewer、Meeko、RDKit、OpenBabel、
   OpenMM、PDBFixer、PySide6 / QtWebEngine、matplotlib 与 pandas 的开发者与维护者。
@@ -760,7 +828,7 @@ PyMOL 是 Schrödinger, LLC 的商标，分发时请保留相应许可与声明�
   title        = {DockFlowLab: 面向非专业用户的跨平台分子对接桌面工作台},
   author       = {{IBN-Spring}},
   year         = {2026},
-  version      = {2.4.0},
+  version      = {2.5.0},
   url          = {https://github.com/IBN-Spring/DockFlowLab},
   license      = {GPL-2.0-only}
 }
