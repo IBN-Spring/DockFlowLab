@@ -187,6 +187,47 @@ def test_make_complex_uses_first_pose(tmp_path, pdb_path):
     assert pdbio.parse_first_pose_atoms(ligand)[0].x == pytest.approx(12.0)
 
 
+def test_parse_pose_atoms_by_index(tmp_path):
+    ligand = make_ligand_pdbqt(tmp_path / "ligand.pdbqt")
+
+    first = pdbio.parse_pose_atoms(ligand, 0)
+    second = pdbio.parse_pose_atoms(ligand, 1)
+    missing = pdbio.parse_pose_atoms(ligand, 2)
+
+    assert pdbio.count_poses(ligand) == 2
+    assert first[0].x == pytest.approx(12.0)
+    assert second[0].x == pytest.approx(12.1)
+    assert missing == []
+
+
+def test_make_complex_can_select_pose(tmp_path, pdb_path):
+    ligand = make_ligand_pdbqt(tmp_path / "ligand.pdbqt")
+    output = tmp_path / "complex_pose2.pdb"
+
+    pdbio.make_complex(pdb_path, ligand, output, pose_index=1)
+
+    text = output.read_text(encoding="utf-8")
+    assert "LIG L   1" in text
+    ligand_atoms = [
+        atom
+        for atom in pdbio.parse_first_pose_atoms(output)
+        if atom.resname == "LIG"
+    ]
+    assert ligand_atoms[0].x == pytest.approx(12.1)
+
+
+def test_count_poses_without_model(tmp_path):
+    path = tmp_path / "single.pdbqt"
+    path.write_text(
+        "ATOM      1  C1  LIG L   1      12.000  21.000  31.000"
+        "  1.00  0.00     0.000 C\n",
+        encoding="utf-8",
+    )
+    assert pdbio.count_poses(path) == 1
+    assert len(pdbio.parse_pose_atoms(path, 0)) == 1
+    assert pdbio.parse_pose_atoms(path, 1) == []
+
+
 def test_detect_format_by_content(tmp_path):
     cif = tmp_path / "model.xyz"
     cif.write_text("data_TEST\n_atom_site.group_PDB\n", encoding="utf-8")

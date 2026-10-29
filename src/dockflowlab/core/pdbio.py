@@ -388,28 +388,48 @@ def parse_pdbqt_atoms(path: str | Path) -> list[Atom]:
     return atoms
 
 
-def parse_first_pose_atoms(path: str | Path) -> list[Atom]:
-    """只解析 PDBQT 中的第一个 MODEL（用于生成复合物）。"""
+def parse_pose_atoms(path: str | Path, index: int = 0) -> list[Atom]:
+    """解析 PDBQT 中指定序号的 MODEL（从 0 开始）。
+
+    没有 MODEL 记录时，整个文件视为第 0 个构象。序号越界返回空列表，
+    方便姿态浏览器判断“只有 N 个 pose”。
+    """
     path = Path(path)
     atoms: list[Atom] = []
+    if index < 0:
+        return atoms
     try:
         lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
     except OSError:
         return atoms
     has_model = any(line.startswith("MODEL") for line in lines)
-    in_first_model = not has_model
+    if not has_model:
+        if index != 0:
+            return atoms
+        return _parse_pdbqt_lines(lines)
+
+    pose_index = 0
+    active = False
     for line in lines:
         if line.startswith("MODEL"):
-            if atoms:
+            if pose_index > index:
                 break
-            in_first_model = True
+            active = pose_index == index
+            pose_index += 1
             continue
         if line.startswith("ENDMDL"):
-            if in_first_model and atoms:
+            if active:
                 break
             continue
-        if not in_first_model:
+        if not active:
             continue
+        atoms.extend(_parse_pdbqt_lines([line]))
+    return atoms
+
+
+def _parse_pdbqt_lines(lines: Iterable[str]) -> list[Atom]:
+    atoms: list[Atom] = []
+    for line in lines:
         record = line[0:6].strip().upper()
         if record not in {"ATOM", "HETATM"}:
             continue
@@ -437,6 +457,21 @@ def parse_first_pose_atoms(path: str | Path) -> list[Atom]:
             )
         )
     return atoms
+
+
+def count_poses(path: str | Path) -> int:
+    """返回 PDBQT 中的构象数；没有 MODEL 时视为 1。"""
+    try:
+        text = Path(path).read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return 0
+    count = len(re.findall(r"^MODEL\b", text, re.M))
+    return count or 1
+
+
+def parse_first_pose_atoms(path: str | Path) -> list[Atom]:
+    """只解析 PDBQT 中的第一个 MODEL（用于生成复合物）。"""
+    return parse_pose_atoms(path, 0)
 
 
 def detect_format(path: str | Path) -> str:
@@ -1022,12 +1057,13 @@ def make_complex(
     *,
     ligand_resname: str = "LIG",
     ligand_chain: str = "L",
+    pose_index: int = 0,
 ) -> int:
-    """把受体 PDB 与对接构象合并为一个复合物 PDB，返回配体原子数。"""
+    """把受体 PDB 与指定对接构象合并为复合物 PDB，返回配体原子数。"""
     receptor_path = Path(receptor_pdb)
-    pose_atoms = parse_first_pose_atoms(pose_pdbqt)
+    pose_atoms = parse_pose_atoms(pose_pdbqt, pose_index)
     if not pose_atoms:
-        raise ValueError("对接构象文件为空，无法生成复合物")
+        raise ValueError(f"对接构象文件为空或没有第 {pose_index + 1} 个 pose，无法生成复合物")
 
     receptor_lines: list[str] = []
     max_serial = 0
