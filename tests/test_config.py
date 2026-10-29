@@ -88,3 +88,17 @@ def test_remember_and_forget_workspace(tmp_path):
     settings.forget_workspace(tmp_path / "one")
     assert all("one" not in path for path in settings.recent_workspaces)
     assert settings.last_workspace == ""
+
+
+def test_enumeration_states_defaults_and_clamps(tmp_path):
+    assert AppSettings().enumeration_states == 4
+
+    path = tmp_path / "settings.json"
+    path.write_text(json.dumps({"enumeration_states": 99}), encoding="utf-8")
+    assert AppSettings.load(path).enumeration_states == 8
+
+    path.write_text(json.dumps({"enumeration_states": 0}), encoding="utf-8")
+    assert AppSettings.load(path).enumeration_states == 1
+
+    path.write_text(json.dumps({"enumeration_states": "many"}), encoding="utf-8")
+    assert AppSettings.load(path).enumeration_states == 4

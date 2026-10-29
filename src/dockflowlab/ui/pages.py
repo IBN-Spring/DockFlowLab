@@ -31,6 +31,7 @@ from PySide6.QtWidgets import (
 )
 
 from ..core.models import KIND_LIGAND, KIND_TARGET, STATUS_READY, DockingResult, ProjectFile
+from ..services import flexible as flex_service
 from ..services import modes
 from ..services.advice import (
     ExhaustivenessAdvice,
@@ -453,6 +454,35 @@ class PreparePage(Page):
         option_row.addWidget(self.force_check)
         option_row.addStretch(1)
         options.add_layout(option_row)
+
+        state_row = QHBoxLayout()
+        state_row.setSpacing(16)
+        state_label = QLabel("状态枚举")
+        state_label.setObjectName("CardHint")
+        self.state_limit = QComboBox()
+        self.state_limit.addItem("关闭（只用原始结构）", 1)
+        self.state_limit.addItem("2 个状态", 2)
+        self.state_limit.addItem("4 个状态（推荐）", 4)
+        self.state_limit.addItem("8 个状态（较慢）", 8)
+        self.state_limit.setCurrentIndex(2)
+        self.state_limit.setMaximumWidth(220)
+        self.state_limit.setToolTip(
+            "候选分子按互变异构/质子化状态枚举，数字包含原始结构。"
+            "每个状态都会单独对接并取最优，因此数值越大耗时越长。"
+            "修改后需要重新准备候选分子才会生效。"
+        )
+        state_row.addWidget(state_label)
+        state_row.addWidget(self.state_limit)
+        state_row.addStretch(1)
+        options.add_layout(state_row)
+        self.state_hint = QLabel(
+            "对接时不同质子化/互变异构状态可能给出不同分数，枚举后取最优，"
+            "可以避免因分子结构写法不同而漏掉更有利的形式。关闭可让每组对接更快。"
+        )
+        self.state_hint.setObjectName("Muted")
+        self.state_hint.setWordWrap(True)
+        options.add(self.state_hint)
+
         note = QLabel(
             "默认会移除结晶水、离子和添加剂，保留聚合物链；缺失的残基与原子会被补全。"
             "研究金属酶时可勾选“保留金属离子”，此时 Zn/Mg/Fe 等金属会留在受体中，"
@@ -794,6 +824,7 @@ class PreparePage(Page):
         self.next_button.setEnabled(False)
         self.ph_spin.setEnabled(False)
         self.keep_metals_check.setEnabled(False)
+        self.state_limit.setEnabled(False)
         self.force_check.setEnabled(False)
         self.redock_button.setEnabled(False)
 
@@ -804,6 +835,7 @@ class PreparePage(Page):
         self.next_button.setEnabled(self._can_continue)
         self.ph_spin.setEnabled(True)
         self.keep_metals_check.setEnabled(True)
+        self.state_limit.setEnabled(True)
         self.force_check.setEnabled(True)
         if self._target_entries:
             self._update_qc_panel()
@@ -816,6 +848,7 @@ class PreparePage(Page):
 # ----------------------------------------------------------------------
 class DockPage(Page):
     box_requested = Signal(str)
+    flex_requested = Signal(str)
     auto_boxes_requested = Signal()
     run_requested = Signal(dict)
     cancel_requested = Signal()
@@ -827,6 +860,7 @@ class DockPage(Page):
         self._actions_enabled = True
         self._has_workspace = False
         self._run_ready = False
+        self._workspace: Workspace | None = None
         self._ligand_advice: ExhaustivenessAdvice | None = None
         self._row_buttons: list[QPushButton] = []
         change = QPushButton("更换工作目录")
@@ -892,7 +926,7 @@ class DockPage(Page):
         engine_grid.addWidget(self.smina_scoring, 1, 1)
         engine_grid.setColumnStretch(2, 1)
         engine_grid.setColumnMinimumWidth(0, 96)
-        self.engine.currentIndexChanged.connect(self._update_scoring_state)
+        self.engine.currentIndexChanged.connect(self._on_engine_changed)
         engine_card.add_layout(engine_grid)
         self.scoring_hint = QLabel("")
         self.scoring_hint.setObjectName("Muted")
@@ -989,6 +1023,12 @@ class DockPage(Page):
         self.engine.blockSignals(False)
         self._update_scoring_state()
 
+    def _on_engine_changed(self) -> None:
+        """引擎切换会影响评分函数与柔性残基的可用性，需要重绘任务摘要。"""
+        self._update_scoring_state()
+        if self._workspace is not None:
+            self.refresh(self._workspace)
+
     def _update_scoring_state(self) -> None:
         """评分函数只对 Smina 生效，其他引擎时置灰并说明去哪里开启。"""
         enabled = str(self.engine.currentData() or "") == "smina"
@@ -1028,6 +1068,7 @@ class DockPage(Page):
         self.refresh(workspace)
 
     def refresh(self, workspace: Workspace | None) -> None:
+        self._workspace = workspace
         _clear_layout(self.box_rows)
         self._row_buttons = []
         if workspace is None:
@@ -1086,6 +1127,17 @@ class DockPage(Page):
                     f" 另有 {review_boxes} 个靶点的自动盒子无法可靠定位"
                     "（盲对接或按分子尺寸估算），建议手动设置盒子。"
                 )
+            flex_targets = [
+                target for target in runnable_targets
+                if flex_service.selected_residues(target)
+            ]
+            if flex_targets:
+                text += (
+                    f" 其中 {len(flex_targets)} 个靶点启用了柔性残基，"
+                    "侧链会与配体一起采样，耗时明显增加。"
+                )
+                if str(self.engine.currentData() or "") == "qvina2":
+                    text += " 注意：QuickVina 2 不支持柔性残基，请改用 AutoDock Vina 或 Smina。"
             text += " 每组耗时从几十秒到几分钟不等，取决于分子大小和精细度。"
         elif total_pairs:
             text = (
@@ -1174,12 +1226,27 @@ class DockPage(Page):
             if box.needs_review:
                 box_text += " · 自动结果不可靠，请手动确认"
                 needs_review = True
+        flex_residues = flex_service.selected_residues(target)
         summary = f"{prefix} · {box_text}" if prefix else box_text
+        if flex_residues:
+            summary += f" · 柔性残基 {len(flex_residues)} 个"
         detail = QLabel(summary)
         detail.setObjectName("Warning" if needs_review else "Muted")
         detail.setWordWrap(True)
         text_box.addWidget(detail)
         layout.addLayout(text_box, 1)
+        flex = QPushButton("柔性残基")
+        flex.setObjectName("Small")
+        flex.setToolTip(
+            "选择对接时保持可动的氨基酸侧链（最多 "
+            f"{flex_service.MAX_FLEX_RESIDUES} 个），默认不柔化"
+        )
+        flex.setEnabled(self._actions_enabled)
+        flex.clicked.connect(
+            lambda _=False, stem=target.stem: self.flex_requested.emit(stem)
+        )
+        self._row_buttons.append(flex)
+        layout.addWidget(flex)
         edit = QPushButton("设置盒子")
         edit.setObjectName("Small")
         edit.setEnabled(self._actions_enabled)

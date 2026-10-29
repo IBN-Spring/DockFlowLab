@@ -181,3 +181,48 @@ def test_prepare_ligand_writes_into_chinese_path(tmp_path, sdf_path):
 
     preview_mol, _ = read_molecule(preview)
     assert preview_mol.GetNumAtoms() > 10
+
+
+def test_enumerate_states_keeps_original_first():
+    pytest.importorskip("rdkit")
+    from rdkit import Chem
+
+    from dockflowlab.services.ligand import _canonical_smiles, enumerate_states
+
+    mol = Chem.MolFromSmiles("Oc1ccccn1")
+    warnings: list[str] = []
+
+    states = enumerate_states(mol, 4, warnings)
+
+    assert states[0] == (mol, "状态 1（原始）")
+    assert 1 < len(states) <= 4
+    assert states[1][1] == "状态 2"
+    assert not warnings
+    smiles = {_canonical_smiles(item) for item, _ in states}
+    assert len(smiles) == len(states)
+
+
+def test_enumerate_states_limit_one_keeps_single_state():
+    pytest.importorskip("rdkit")
+    from rdkit import Chem
+
+    from dockflowlab.services.ligand import enumerate_states
+
+    mol = Chem.MolFromSmiles("Oc1ccccn1")
+    warnings: list[str] = []
+
+    assert enumerate_states(mol, 1, warnings) == [(mol, "原始结构")]
+    assert not warnings
+
+
+def test_enumerate_states_clamps_to_maximum():
+    pytest.importorskip("rdkit")
+    from rdkit import Chem
+
+    from dockflowlab.services.ligand import MAX_LIGAND_STATES, enumerate_states
+
+    mol = Chem.MolFromSmiles("O=C1NC=CC=C1")
+    states = enumerate_states(mol, 999, [])
+
+    assert MAX_LIGAND_STATES == 8
+    assert len(states) <= MAX_LIGAND_STATES

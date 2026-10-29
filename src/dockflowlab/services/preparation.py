@@ -182,14 +182,23 @@ def prepare_entry(
                     notify(f"该 SDF 含 {multi_record} 个分子；当前只准备第一个")
             pdbqt = workspace.prepared_ligand_pdbqt(entry.stem)
             sdf = workspace.prepared_ligand_sdf(entry.stem)
+            state_dir = workspace.prepared_ligand_state_dir(entry.stem)
             pdbqt.parent.mkdir(parents=True, exist_ok=True)
+            # 重新准备时清掉旧状态文件，避免新旧枚举结果混在一起。
+            if state_dir.is_dir():
+                for stale in state_dir.glob("state_*.pdbqt"):
+                    stale.unlink(missing_ok=True)
             outcome = prepare_ligand(
                 source,
                 pdbqt,
                 sdf,
-                options=LigandPrepOptions(ph=settings.add_hydrogens_ph),
+                options=LigandPrepOptions(
+                    ph=settings.add_hydrogens_ph,
+                    state_limit=settings.enumeration_states,
+                ),
                 obabel=obabel,
                 progress=notify,
+                states_dir=state_dir,
             )
             if multi_record > 1:
                 outcome.warnings.append(

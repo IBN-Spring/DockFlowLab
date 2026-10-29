@@ -172,7 +172,35 @@ def _run_parameters_text(results: Sequence[DockingResult]) -> str:
         parts.append(text)
     if missing:
         parts.append(f"{missing} 组结果未记录运行参数（由旧版本生成）")
+    flex_text = _flex_state_text(results)
+    if flex_text:
+        parts.append(flex_text)
     return "；".join(parts) or "未记录运行参数"
+
+
+def _flex_state_text(results: Sequence[DockingResult]) -> str:
+    """说明本次是否柔化了侧链、是否枚举了配体状态。"""
+    flex: list[str] = []
+    state_count = 0
+    for item in results:
+        if not item.ok:
+            continue
+        parameters = item.parameters or {}
+        residues = str(parameters.get("flex_residues") or "").strip()
+        if residues and residues not in flex:
+            flex.append(residues)
+        try:
+            state_count = max(state_count, int(parameters.get("ligand_state_count") or 1))
+        except (TypeError, ValueError):
+            continue
+    parts: list[str] = []
+    if flex:
+        parts.append("柔性残基：" + "；".join(flex))
+    if state_count > 1:
+        parts.append(
+            f"配体按 {state_count} 个互变异构/质子化状态分别对接，此处只展示最优状态"
+        )
+    return "；".join(parts)
 
 
 def _box_detail(item: DockingResult) -> str:

@@ -79,6 +79,12 @@ config.py    用户偏好（与项目无关）
   配体与 `SITE` 残基整理为独立原子组，供盒子编辑器叠加参考层；它只读原始
   结构，不参与盒子计算。
 - `docking.py`：批量组合、跳过已有结果、写元数据、生成复合物与 PyMOL 脚本。
+  2.4.0 起按 `meta["prep_details"]["states"]` 逐状态对接并取最优（`*_stateN.pdbqt`），
+  元数据记录实际最优文件；跳过判断同时比较状态数与柔性残基选择，任一变化都会重算。
+- `flexible.py`：柔性侧链选择与受体拆分。`residue_candidates()` 按盒子中心列出
+  可旋转侧链，`auto_select()` 默认取 6 Å 内最多 12 个；`ensure_flexible_receptor()`
+  在进程内调用 Meeko 的 `mk_prepare_receptor`，把刚性受体与柔性残基分别缓存到
+  `prepared/targets/<stem>/flex/`，供 Vina / Smina 的 `--flex` 使用。
 - `analysis.py`：结果表、矩阵、汇总 JSON、图表（matplotlib Agg）。热图支持
   自定义行列名称、标题、单色相配色与 PNG/SVG/PDF 输出；这些设置保存在
   `analysis/heatmap_config.json`，`analyze()` 每次都会重新应用。SVG 使用

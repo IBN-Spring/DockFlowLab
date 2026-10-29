@@ -229,6 +229,9 @@ class EngineAdapter:
 
     key = ENGINE_VINA
     label = "AutoDock Vina"
+    #: 是否支持柔性残基（``--flex``）。Vina 1.2 与 Smina 支持，
+    #: QuickVina 2 基于 Vina 1.1.2，没有这个参数。
+    supports_flexible = True
 
     def __init__(self, executable: str = "") -> None:
         self.executable = self._find(executable)
@@ -278,6 +281,7 @@ class EngineAdapter:
         seed: int,
         cpu: int,
         scoring: str = "",
+        flex: str = "",
     ) -> list[str]:
         return [self.executable]
 
@@ -298,6 +302,7 @@ class EngineAdapter:
         seed: int = 42,
         cpu: int = 0,
         scoring: str = "",
+        flexible_pdbqt: str | Path | None = None,
         timeout: float | None = None,
         stall_timeout: float | None = None,
         log_path: str | Path | None = None,
@@ -309,6 +314,9 @@ class EngineAdapter:
         ligand_pdbqt = Path(ligand_pdbqt)
         output_pdbqt = Path(output_pdbqt)
         log_path = Path(log_path) if log_path else output_pdbqt.with_suffix(".log")
+        flexible_pdbqt = Path(flexible_pdbqt) if flexible_pdbqt else None
+        if flexible_pdbqt is not None and not self.supports_flexible:
+            raise InputError(f"{self.label} 不支持柔性残基，请改用 AutoDock Vina 或 Smina")
 
         for path, label, is_receptor in (
             (receptor_pdbqt, "受体", True),
@@ -317,6 +325,10 @@ class EngineAdapter:
             valid, message, _ = validate_pdbqt(path, receptor=is_receptor)
             if not valid:
                 raise InputError(f"{label}文件不可用：{message}")
+        if flexible_pdbqt is not None:
+            valid, message, _ = validate_pdbqt(flexible_pdbqt)
+            if not valid:
+                raise InputError(f"柔性残基文件不可用：{message}")
 
         center = tuple(float(v) for v in box.center)
         size = tuple(float(v) for v in box.size)
@@ -331,6 +343,10 @@ class EngineAdapter:
         with work_directory(self.key) as temp:
             shutil.copy2(receptor_pdbqt, temp / "receptor.pdbqt")
             shutil.copy2(ligand_pdbqt, temp / "ligand.pdbqt")
+            flex_name = ""
+            if flexible_pdbqt is not None:
+                shutil.copy2(flexible_pdbqt, temp / "flexres.pdbqt")
+                flex_name = "flexres.pdbqt"
             command = self._command(
                 temp,
                 receptor="receptor.pdbqt",
@@ -344,6 +360,7 @@ class EngineAdapter:
                 seed=int(seed),
                 cpu=max(0, int(cpu)),
                 scoring=str(scoring or ""),
+                flex=flex_name,
             )
             result = run_process(
                 command,
@@ -419,7 +436,7 @@ class VinaAdapter(EngineAdapter):
 
     def _command(self, temp, *, receptor, ligand, output, center, size,
                  exhaustiveness, num_modes, energy_range, seed, cpu,
-                 scoring=""):
+                 scoring="", flex=""):
         lines = [
             f"receptor = {receptor}",
             f"ligand = {ligand}",
@@ -439,6 +456,8 @@ class VinaAdapter(EngineAdapter):
         ]
         if scoring:
             lines.append(f"scoring = {scoring}")
+        if flex:
+            lines.append(f"flex = {flex}")
         config = "\n".join(lines + [""])
         (temp / "vina.conf").write_text(config, encoding="ascii")
         return [self.executable, "--config", "vina.conf"]
@@ -449,7 +468,7 @@ class CliEngineAdapter(EngineAdapter):
 
     def _command(self, temp, *, receptor, ligand, output, center, size,
                  exhaustiveness, num_modes, energy_range, seed, cpu,
-                 scoring=""):
+                 scoring="", flex=""):
         command = [
             self.executable,
             "--receptor", receptor,
@@ -469,12 +488,15 @@ class CliEngineAdapter(EngineAdapter):
         ]
         if scoring:
             command.extend(["--scoring", scoring])
+        if flex:
+            command.extend(["--flex", flex])
         return command
 
 
 class QuickVina2Adapter(CliEngineAdapter):
     key = ENGINE_QVINA2
     label = "QuickVina 2"
+    supports_flexible = False
 
     def _find(self, executable: str) -> str:
         return find_qvina2(executable)

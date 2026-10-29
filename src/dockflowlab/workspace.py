@@ -504,6 +504,14 @@ class Workspace:
     def prepared_ligand_sdf(self, stem: str) -> Path:
         return self.prepared_dir(KIND_LIGAND, stem) / f"{stem}_prepared.sdf"
 
+    def prepared_ligand_state_dir(self, stem: str) -> Path:
+        """互变异构/质子化状态（protomer）的额外 PDBQT 文件目录。"""
+        return self.prepared_dir(KIND_LIGAND, stem) / "states"
+
+    def prepared_target_flex_dir(self, stem: str) -> Path:
+        """柔性残基拆分后的受体文件目录。"""
+        return self.prepared_dir(KIND_TARGET, stem) / "flex"
+
     def box_path(self, target_stem: str) -> Path:
         return self.root / "boxes" / f"{target_stem}.json"
 

@@ -76,6 +76,8 @@ class LigandPrepOptions:
     remove_salts: bool = True
     forcefield: str = "auto"  # auto / MMFF94s / UFF / none
     keep_names: bool = True
+    #：互变异构/质子化状态（protomer）枚举上限，1 表示只使用原始结构。
+    state_limit: int = 1
     extra_warnings: list[str] = field(default_factory=list)
 
 
@@ -282,6 +284,114 @@ def _meeko_pdbqt(mol: Any) -> str:
     return pdbqt_string
 
 
+# ----------------------------------------------------------------------
+# 互变异构/质子化状态（protomer）枚举
+# ----------------------------------------------------------------------
+MAX_LIGAND_STATES = 8
+
+
+def _canonical_smiles(mol: Any) -> str:
+    Chem, _, _ = _rdkit()
+    try:
+        return Chem.MolToSmiles(Chem.RemoveHs(mol))
+    except Exception:
+        try:
+            return Chem.MolToSmiles(mol)
+        except Exception:
+            return ""
+
+
+def enumerate_states(
+    mol: Any,
+    limit: int,
+    warnings: list[str],
+) -> list[tuple[Any, str]]:
+    """枚举互变异构体，返回 [(分子, 标签)]，第一项始终是输入结构。
+
+    只保留化学式不变的互变异构体；RDKit 的枚举器同时覆盖了常见的
+    质子迁移形式（例如酮式/烯醇式、内酰胺/内酰亚胺），因此界面统一称为
+    “互变异构/质子化状态”。
+    """
+    limit = max(1, min(int(limit), MAX_LIGAND_STATES))
+    if limit <= 1:
+        return [(mol, "原始结构")]
+    try:
+        from rdkit.Chem.MolStandardize import rdMolStandardize
+
+        Chem, _, _ = _rdkit()
+        # 枚举器要求隐式氢分子：带显式氢的结构（准备流程里的分子都带氢）
+        # 会得到价态异常的结果，后续 AddHs 直接失败，所以先去掉氢。
+        source = (
+            Chem.RemoveHs(mol)
+            if any(atom.GetAtomicNum() == 1 for atom in mol.GetAtoms())
+            else mol
+        )
+        enumerator = rdMolStandardize.TautomerEnumerator()
+        # 多取一倍再截断：枚举结果里会有重复与不合适的结构被丢弃。
+        enumerator.SetMaxTautomers(max(limit * 2, 8))
+        variants = enumerator.Enumerate(source)
+    except Exception as exc:
+        warnings.append(f"互变异构状态枚举失败（{exc}），只使用原始结构")
+        return [(mol, "原始结构")]
+
+    seen = {_canonical_smiles(mol)}
+    states: list[tuple[Any, str]] = [(mol, "状态 1（原始）")]
+    for variant in variants:
+        if len(states) >= limit:
+            break
+        key = _canonical_smiles(variant)
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        states.append((variant, f"状态 {len(states) + 1}"))
+    return states
+
+
+def _write_state_files(
+    states: list[tuple[Any, str]],
+    directory: Path,
+    options: LigandPrepOptions,
+    warnings: list[str],
+) -> list[dict[str, Any]]:
+    """把额外的状态写成 PDBQT，返回可写入 meta 的描述。"""
+    Chem, _, _ = _rdkit()
+    records: list[dict[str, Any]] = []
+    for index, (state_mol, label) in enumerate(states, start=1):
+        record: dict[str, Any] = {
+            "index": index,
+            "label": label,
+            "smiles": _canonical_smiles(state_mol),
+        }
+        records.append(record)
+        if index == 1:
+            continue  # 主文件由 prepare_ligand 自己写出
+        try:
+            variant = Chem.AddHs(state_mol)
+            # 枚举出来的互变异构体没有三维坐标，先重新生成构象再最小化，
+            # 否则 Meeko 无法写出可用的 PDBQT。
+            if variant.GetNumConformers() == 0:
+                _, AllChem, _ = _rdkit()
+                if AllChem.EmbedMolecule(
+                    variant, randomSeed=int(options.random_seed)
+                ) != 0:
+                    raise ValueError("无法生成三维构象")
+            variant, _ = _minimize(variant, options, warnings)
+            text = _meeko_pdbqt(variant)
+            directory.mkdir(parents=True, exist_ok=True)
+            path = directory / f"state_{index}.pdbqt"
+            path.write_text(text, encoding="utf-8")
+            valid, message, stats = pdbio.validate_pdbqt(path)
+            if not valid:
+                path.unlink(missing_ok=True)
+                warnings.append(f"{label} 生成的 PDBQT 不可用（{message}），已跳过")
+                continue
+            record["file"] = path.name
+            record["atoms"] = stats.get("atoms", 0)
+        except Exception as exc:
+            warnings.append(f"{label} 处理失败（{exc}），已跳过")
+    return [item for item in records if item.get("file") or item["index"] == 1]
+
+
 def _prepare_with_openbabel(
     input_path: Path,
     output_pdbqt: Path,
@@ -320,6 +430,7 @@ def prepare_ligand(
     options: LigandPrepOptions | None = None,
     obabel: OpenBabelAdapter | None = None,
     progress: Progress = None,
+    states_dir: str | Path | None = None,
 ) -> PrepOutcome:
     options = options or LigandPrepOptions()
     input_path = Path(input_path)
@@ -352,7 +463,13 @@ def prepare_ligand(
             ok=True,
             method="已有 PDBQT",
             message="已校验现有 PDBQT 文件",
-            details={"atoms": stats.get("atoms", 0), "kind": kind},
+            details={
+                "atoms": stats.get("atoms", 0),
+                "kind": kind,
+                # 已有 PDBQT 无法枚举互变异构体，保持单状态。
+                "states": [{"index": 1, "label": "状态 1（原始）", "smiles": ""}],
+                "state_count": 1,
+            },
             warnings=warnings,
         )
 
@@ -402,6 +519,15 @@ def prepare_ligand(
             "结果应视为初步筛选，可缩小盒子或改用多肽/大分子对接工具"
         )
 
+    # 互变异构/质子化状态枚举：额外的状态在 Meeko 成功后再写出，
+    # 这样主流程失败时不会留下半成品文件。
+    states: list[tuple[Any, str]] = [(mol, "状态 1（原始）")]
+    if int(options.state_limit) > 1:
+        _notify(progress, "枚举互变异构/质子化状态…")
+        states = enumerate_states(mol, int(options.state_limit), warnings)
+    details["states"] = [{"index": 1, "label": states[0][1], "smiles": ""}]
+    details["state_count"] = 1
+
     pdbqt_text: str | None = None
     try:
         _notify(progress, "用 Meeko 生成对接格式…")
@@ -418,6 +544,22 @@ def prepare_ligand(
             os.replace(temp_path, output_pdbqt)
             if output_sdf:
                 rdkit_io.write_sdf(mol, output_sdf)
+            state_records: list[dict[str, Any]] = []
+            if len(states) > 1:
+                if states_dir is None:
+                    warnings.append("未指定状态输出目录，只保存了原始结构")
+                else:
+                    _notify(progress, "生成其余状态的对接格式…")
+                    state_records = _write_state_files(
+                        states, Path(states_dir), options, warnings
+                    )
+            details["states"] = state_records
+            details["state_count"] = len(state_records)
+            if state_records:
+                warnings.append(
+                    f"已生成 {len(state_records)} 个互变异构/质子化状态，"
+                    "对接时会全部计算并取最优"
+                )
             return PrepOutcome(
                 ok=True,
                 method="RDKit + Meeko" + (" + pH 校正" if ph_corrected else ""),

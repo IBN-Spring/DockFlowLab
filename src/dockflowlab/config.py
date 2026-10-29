@@ -105,6 +105,9 @@ class AppSettings:
     add_hydrogens_ph: float = 7.4
     # 金属酶研究：保留 Zn/Mg/Fe 等金属离子；水、添加剂和共晶配体仍移除。
     keep_metals: bool = False
+    # 候选分子预处理时枚举的互变异构/质子化状态上限；1 表示只使用原始结构。
+    # 每个状态都会单独对接，因此数值越大耗时越长。
+    enumeration_states: int = 4
 
     def __post_init__(self) -> None:
         if self.smina_scoring not in {"default", "vinardo"}:
@@ -117,6 +120,11 @@ class AppSettings:
             self.box_min_size = 18.0
         if self.box_max_size < self.box_min_size:
             self.box_max_size = max(60.0, self.box_min_size)
+        try:
+            states = int(self.enumeration_states)
+        except (TypeError, ValueError):
+            states = 4
+        self.enumeration_states = min(8, max(1, states))
 
     # ------------------------------------------------------------------
     # 持久化

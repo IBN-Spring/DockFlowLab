@@ -348,3 +348,164 @@ def test_engine_env_finds_openbabel_next_to_plugins(monkeypatch, tmp_path):
     assert parts[1] == str(root)
     assert env["BABEL_LIBDIR"] == str(babel_bin)
     assert env["BABEL_DATADIR"] == str(babel_bin / "data")
+
+
+def test_engine_flex_support_flags():
+    assert make_engine(ENGINE_VINA).supports_flexible is True
+    assert make_engine(ENGINE_SMINA).supports_flexible is True
+    assert make_engine(ENGINE_QVINA2).supports_flexible is False
+
+
+def test_vina_config_records_flexible_residues(tmp_path):
+    config = make_engine(ENGINE_VINA)._command(
+        tmp_path, **(_command_args() | {"flex": "flexres.pdbqt"})
+    )
+    text = (tmp_path / "vina.conf").read_text(encoding="ascii")
+    assert "flex = flexres.pdbqt" in text
+
+    make_engine(ENGINE_VINA)._command(tmp_path, **_command_args())
+    text = (tmp_path / "vina.conf").read_text(encoding="ascii")
+    assert "flex =" not in text
+
+
+def test_smina_passes_flex_flag(tmp_path):
+    command = make_engine(ENGINE_SMINA)._command(
+        tmp_path, **(_command_args() | {"flex": "flexres.pdbqt"})
+    )
+    assert command[command.index("--flex") + 1] == "flexres.pdbqt"
+
+
+def test_qvina2_rejects_flexible_receptor(tmp_path):
+    from dockflowlab.errors import InputError
+
+    engine = make_engine(ENGINE_QVINA2)
+    engine.executable = sys.executable  # 只需通过可用性检查，不会真正运行
+
+    with pytest.raises(InputError, match="不支持柔性残基"):
+        engine.dock(
+            tmp_path / "receptor.pdbqt",
+            tmp_path / "ligand.pdbqt",
+            Box(center=(0.0, 0.0, 0.0), size=(20.0, 20.0, 20.0)),
+            tmp_path / "out.pdbqt",
+            flexible_pdbqt=tmp_path / "flexres.pdbqt",
+        )
+
+
+def test_ligand_states_ignores_missing_state_files(prepared_workspace):
+    from dockflowlab.services.docking import ligand_states
+
+    workspace = prepared_workspace
+    ligand = workspace.ligands[0]
+    ligand.meta["prep_details"] = {
+        "states": [
+            {"index": 1, "label": "状态 1（原始）"},
+            {"index": 2, "label": "状态 2", "file": "state_2.pdbqt"},
+        ]
+    }
+
+    states = ligand_states(workspace, ligand)
+
+    assert [label for label, _ in states] == ["状态 1（原始）"]
+
+
+class _StateAwareEngine(_FakeEngine):
+    """按配体文件名返回不同结合能，用来验证多状态取最优。"""
+
+    def __init__(self, scores: dict[str, float]) -> None:
+        super().__init__("vina", "AutoDock Vina", succeeds=True)
+        self.scores = scores
+
+    def dock(self, receptor_pdbqt, ligand_pdbqt, box, output_pdbqt, **kwargs) -> VinaRun:
+        self.calls += 1
+        affinity = self.scores.get(Path(ligand_pdbqt).stem, -6.0)
+        output = Path(output_pdbqt)
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text(_pdbqt().replace("-6.00", f"{affinity:.2f}", 1), encoding="utf-8")
+        return VinaRun(True, poses=pdbio.parse_pdbqt_poses(output), output_path=str(output))
+
+
+def test_multiple_ligand_states_keep_best_result(prepared_workspace):
+    workspace = prepared_workspace
+    target, ligand, box = _write_prepared(workspace)
+    state_dir = workspace.prepared_ligand_state_dir(ligand.stem)
+    state_dir.mkdir(parents=True, exist_ok=True)
+    (state_dir / "state_2.pdbqt").write_text(_pdbqt(), encoding="utf-8")
+    ligand.meta["prep_details"] = {
+        "states": [
+            {"index": 1, "label": "状态 1（原始）"},
+            {"index": 2, "label": "状态 2", "file": "state_2.pdbqt"},
+        ]
+    }
+
+    engine = _StateAwareEngine({"ligand": -6.0, "state_2": -8.5})
+    result = dock_pair(
+        workspace,
+        target,
+        ligand,
+        box,
+        options=_options(skip_existing=False),
+        vina=engine,
+    )
+
+    assert result.ok, result.error
+    assert engine.calls == 2
+    assert result.parameters["ligand_state"] == "状态 2"
+    assert result.parameters["ligand_state_count"] == 2
+    assert "状态 1（原始）：-6.00" in result.parameters["ligand_state_scores"]
+    assert result.best_affinity == pytest.approx(-8.5)
+    assert Path(workspace.absolute(result.output_path)).name.endswith("_state2.pdbqt")
+    assert any("最优结果来自 状态 2" in item for item in result.warnings)
+
+
+def test_changed_flex_selection_invalidates_existing_result(prepared_workspace):
+    import json
+
+    workspace = prepared_workspace
+    target, ligand, box = _write_prepared(workspace)
+    output = workspace.docking_output(target.stem, ligand.stem)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(_pdbqt(), encoding="utf-8")
+    meta = workspace.docking_meta(target.stem, ligand.stem)
+    meta.write_text(
+        json.dumps({"parameters": {"flex_residues": "ASP A292"}}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+    engine = _FakeEngine("vina", "AutoDock Vina", succeeds=True)
+    result = dock_pair(workspace, target, ligand, box, options=_options(), vina=engine)
+
+    # 当前没有柔性残基，旧结果的柔性选择不同 -> 必须重算而不是跳过。
+    assert result.ok, result.error
+    assert result.skipped is False
+    assert engine.calls == 1
+
+
+def test_collect_existing_results_uses_recorded_best_state(prepared_workspace):
+    import json
+
+    from dockflowlab.services.docking import collect_existing_results
+
+    workspace = prepared_workspace
+    target, ligand, _box = _write_prepared(workspace)
+    output = workspace.docking_output(target.stem, ligand.stem)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(_pdbqt(), encoding="utf-8")
+    best = output.with_name(f"{output.stem}_state2{output.suffix}")
+    best.write_text(_pdbqt().replace("-6.00", "-8.50", 1), encoding="utf-8")
+    workspace.docking_meta(target.stem, ligand.stem).write_text(
+        json.dumps(
+            {
+                "output": workspace.relative(best),
+                "parameters": {"ligand_state_count": 2},
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    results = collect_existing_results(workspace)
+
+    assert len(results) == 1
+    assert results[0].output_path == workspace.relative(best)
+    assert results[0].best_affinity == pytest.approx(-8.5)
+    assert results[0].parameters["ligand_state_count"] == 2

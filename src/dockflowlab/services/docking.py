@@ -22,6 +22,7 @@ from ..tools.runtime import open_path
 from ..tools.vina import EngineAdapter, make_engine
 from ..workspace import Workspace
 from . import boxes as box_service
+from . import flexible as flex_service
 from . import modes
 from .pymol import write_pml
 
@@ -87,6 +88,52 @@ def _result_paths(workspace: Workspace, target: ProjectFile, ligand: ProjectFile
     return output, log_path, complex_path, pml_path
 
 
+def ligand_states(workspace: Workspace, ligand: ProjectFile) -> list[tuple[str, Path]]:
+    """返回 [(状态标签, PDBQT 路径)]，第一项始终是主结构。"""
+    primary = workspace.absolute(ligand.prepared)
+    states: list[tuple[str, Path]] = [("状态 1（原始）", primary)]
+    details = ligand.meta.get("prep_details") or {}
+    raw = details.get("states") if isinstance(details, dict) else None
+    if not isinstance(raw, list):
+        return states
+    base = workspace.prepared_ligand_state_dir(ligand.stem)
+    for item in raw[1:]:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("file") or "")
+        if not name:
+            continue
+        path = base / name
+        if not path.is_file():
+            continue
+        label = str(item.get("label") or f"状态 {item.get('index') or len(states) + 1}")
+        states.append((label, path))
+    return states
+
+
+def _state_output(output: Path, index: int) -> Path:
+    if index <= 1:
+        return output
+    return output.with_name(f"{output.stem}_state{index}{output.suffix}")
+
+
+def _state_log(log_path: Path, index: int) -> Path:
+    if index <= 1:
+        return log_path
+    return log_path.with_name(f"{log_path.stem}_state{index}{log_path.suffix}")
+
+
+def _state_summary(scores: list[dict[str, Any]]) -> str:
+    parts = []
+    for item in scores:
+        value = item.get("affinity")
+        if value is None:
+            parts.append(f"{item['label']}：未完成")
+        else:
+            parts.append(f"{item['label']}：{float(value):.2f}")
+    return "；".join(parts)
+
+
 def _read_meta(workspace: Workspace, target_stem: str, ligand_stem: str) -> dict[str, Any]:
     path = workspace.docking_meta(target_stem, ligand_stem)
     if not path.is_file():
@@ -112,6 +159,9 @@ def _write_meta(workspace: Workspace, result: DockingResult) -> None:
         "mode_key": result.mode_key,
         "mode_label": result.mode_label,
         "mode_supported": result.mode_supported,
+        # 多状态对接的最优结果可能不是标准输出文件（例如 *_state4.pdbqt），
+        # 记录实际文件，重新打开项目时才能还原同一份构象与分数。
+        "output": str(result.output_path or ""),
         "parameters": dict(result.parameters),
         "box_center": list(result.box_center) if result.box_center else None,
         "box_size": list(result.box_size) if result.box_size else None,
@@ -156,6 +206,12 @@ _PARAMETER_KEYS = (
     "engine_version",
     "vina_version",
     "scoring",
+    # 2.4.0 起记录柔性残基与多状态枚举，便于复现与比较。
+    "flex_residues",
+    "flex_count",
+    "ligand_state",
+    "ligand_state_count",
+    "ligand_state_scores",
 )
 
 
@@ -165,6 +221,15 @@ def _stored_parameters(meta: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(raw, dict):
         return {}
     return {key: raw[key] for key in _PARAMETER_KEYS if raw.get(key) not in (None, "")}
+
+
+def _stored_output(workspace: Workspace, meta: dict[str, Any]) -> Path | None:
+    """meta 中记录的对接结果文件；旧结果没有该字段时返回 ``None``。"""
+    raw = str(meta.get("output") or "").strip()
+    if not raw:
+        return None
+    path = workspace.absolute(raw)
+    return path if path.is_file() else None
 
 
 def _stored_point(value: Any) -> tuple[float, float, float] | None:
@@ -216,10 +281,15 @@ def _ensure_complex_and_pymol(
     obabel: OpenBabelAdapter,
     options: DockingOptions,
     warnings: list[str],
+    overwrite: bool = False,
 ) -> None:
     if not options.make_complex:
         return
     try:
+        if overwrite:
+            # 重新计算后，旧的复合物/可视化脚本仍然是上一次的结果。
+            complex_path.unlink(missing_ok=True)
+            pml_path.unlink(missing_ok=True)
         if not complex_path.is_file():
             receptor_pdb = _target_pdb(workspace, target, obabel)
             complex_path.parent.mkdir(parents=True, exist_ok=True)
@@ -292,14 +362,29 @@ def dock_pair(
     output.parent.mkdir(parents=True, exist_ok=True)
     log_path.parent.mkdir(parents=True, exist_ok=True)
 
-    if options.skip_existing and output.is_file():
-        poses = pdbio.parse_pdbqt_poses(output)
-        valid, _, _ = pdbio.validate_pdbqt(output)
-        if valid and poses:
-            meta = _read_meta(workspace, target.stem, ligand.stem)
+    states = ligand_states(workspace, ligand)
+    current_flex = "、".join(
+        item.label for item in flex_service.selected_residues(target)
+    )
+
+    stored_meta = _read_meta(workspace, target.stem, ligand.stem)
+    # 多状态对接的最优构象可能写在 *_stateN.pdbqt，优先沿用记录的那一份。
+    stored_output = _stored_output(workspace, stored_meta) or output
+    if options.skip_existing and stored_output.is_file():
+        poses = pdbio.parse_pdbqt_poses(stored_output)
+        valid, _, _ = pdbio.validate_pdbqt(stored_output)
+        stored = _stored_parameters(stored_meta)
+        # 状态数量或柔性残基选择变化后，旧结果不能直接复用。
+        reusable = (
+            int(stored.get("ligand_state_count") or 1) == len(states)
+            and str(stored.get("flex_residues") or "") == current_flex
+        )
+        if valid and poses and reusable:
+            meta = stored_meta
             result.ok = True
             result.poses = poses
             result.skipped = True
+            result.output_path = workspace.relative(stored_output)
             result.runtime_seconds = float(meta.get("runtime_seconds") or 0.0)
             result.box_source = str(meta.get("box_source") or box.source)
             # 旧结果沿用生成时的参数与盒子，不能用当前设置覆盖。
@@ -309,7 +394,7 @@ def dock_pair(
             warnings = [str(item) for item in meta.get("warnings") or []] + warnings
             result.warnings = warnings
             _ensure_complex_and_pymol(
-                workspace, target, ligand, output, complex_path, pml_path,
+                workspace, target, ligand, stored_output, complex_path, pml_path,
                 obabel, options, warnings,
             )
             _write_meta(workspace, result)
@@ -336,73 +421,181 @@ def dock_pair(
             if getattr(candidate, "available", False):
                 engines.append(candidate)
 
+    # 柔性残基：按靶点的选择拆分受体，所有状态共用同一份。
+    flex_residues = flex_service.selected_residues(target)
+    flex_receptor = None
+    if flex_residues:
+        if not any(getattr(engine, "supports_flexible", False) for engine in engines):
+            result.error = (
+                f"选中的引擎（{'、'.join(item.label for item in engines)}）不支持柔性残基，"
+                "请改用 AutoDock Vina 或 Smina"
+            )
+            return result
+        try:
+            flex_receptor = flex_service.ensure_flexible_receptor(workspace, target)
+        except flex_service.FlexibleResidueError as exc:
+            result.error = f"柔性残基准备失败：{exc}"
+            return result
+        except Exception as exc:  # Meeko 的异常类型不一定可预期
+            log.exception("柔性残基拆分失败")
+            result.error = f"柔性残基准备失败：{exc}"
+            return result
+    if flex_receptor is not None:
+        warnings.append(
+            f"本次柔化了 {flex_receptor.count} 个残基（{flex_receptor.labels}）；"
+            "侧链会与配体一起采样，但复合物与可视化文件中的侧链仍是原始构象"
+        )
+        if flex_receptor.omitted:
+            warnings.append(
+                "以下残基没有可移动的侧链原子，已按刚性处理："
+                + "、".join(flex_receptor.omitted)
+            )
+
+    states = ligand_states(workspace, ligand)
+    if len(states) > 1:
+        warnings.append(
+            f"该分子已枚举 {len(states)} 个互变异构/质子化状态，将逐个对接并取最优"
+        )
+
     result.box_center = tuple(float(value) for value in box.center)  # type: ignore[assignment]
     result.box_size = tuple(float(value) for value in box.size)  # type: ignore[assignment]
     started = time.perf_counter()
-    run = None
-    for index, engine in enumerate(engines):
-        result.parameters = _run_parameters(options, engine)
-        try:
-            run = engine.dock(
-                receptor_pdbqt,
-                ligand_pdbqt,
-                box,
-                output,
-                exhaustiveness=options.exhaustiveness,
-                num_modes=options.num_modes,
-                energy_range=options.energy_range,
-                seed=options.seed,
-                cpu=options.cpu,
-                scoring=options.scoring if engine.key == "smina" else "",
-                timeout=options.timeout_seconds,
-                stall_timeout=options.stall_timeout_seconds,
-                log_path=log_path,
-                on_line=line_callback,
-                cancel=cancel,
-            )
-        except (InputError, DockingError) as exc:
-            result.error = str(exc)
-            return result
-        except Exception as exc:
-            log.exception("%s 对接异常", engine.label)
-            result.error = str(exc)
-            return result
-        result.runtime_seconds = time.perf_counter() - started
-        if run.ok:
-            break
 
-        result.error = run.error or "对接失败"
-        if not log_path.is_file():
-            log_path.write_text(f"[DockFlowLab] {result.error}\n{run.log_text}", encoding="utf-8")
+    state_scores: list[dict[str, Any]] = []
+    best: tuple[float, Any, Path, EngineAdapter, int] | None = None
+    first_error = ""
+    used_engine: EngineAdapter | None = None
+
+    for state_index, (state_label, state_path) in enumerate(states, start=1):
         if cancel is not None and cancel.is_set():
-            return result
-        next_engine = engines[index + 1] if index + 1 < len(engines) else None
-        if next_engine is None:
-            return result
-        message = (
-            f"{engine.label} 未能完成（{result.error}），"
-            f"已自动改用 {next_engine.label} 重试"
-        )
-        log.warning("%s + %s：%s", target.stem, ligand.stem, message)
-        warnings.append(message)
-        result.warnings = list(warnings)
-        _notify(progress, 0, 1, message)
+            break
+        state_output = _state_output(output, state_index)
+        state_log = _state_log(log_path, state_index)
+        if len(states) > 1:
+            _notify(
+                progress, 0, 1,
+                f"正在对接 {target.display_name} + {ligand.display_name}（{state_label}）…",
+            )
+        run = None
+        state_error = ""
+        for index, engine in enumerate(engines):
+            if flex_receptor is not None and not getattr(engine, "supports_flexible", False):
+                continue
+            result.parameters = _run_parameters(options, engine)
+            if flex_receptor is not None:
+                result.parameters["flex_residues"] = flex_receptor.labels
+                result.parameters["flex_count"] = flex_receptor.count
+            if len(states) > 1:
+                result.parameters["ligand_state"] = state_label
+                result.parameters["ligand_state_count"] = len(states)
+            try:
+                run = engine.dock(
+                    receptor_pdbqt,
+                    state_path,
+                    box,
+                    state_output,
+                    exhaustiveness=options.exhaustiveness,
+                    num_modes=options.num_modes,
+                    energy_range=options.energy_range,
+                    seed=options.seed,
+                    cpu=options.cpu,
+                    scoring=options.scoring if engine.key == "smina" else "",
+                    flexible_pdbqt=flex_receptor.flex if flex_receptor is not None else None,
+                    timeout=options.timeout_seconds,
+                    stall_timeout=options.stall_timeout_seconds,
+                    log_path=state_log,
+                    on_line=line_callback,
+                    cancel=cancel,
+                )
+            except (InputError, DockingError) as exc:
+                state_error = str(exc)
+                break
+            except Exception as exc:
+                log.exception("%s 对接异常", engine.label)
+                state_error = str(exc)
+                break
+            result.runtime_seconds = time.perf_counter() - started
+            if run.ok:
+                used_engine = engine
+                break
 
-    if run is None or not run.ok:
-        result.error = result.error or "对接失败"
+            state_error = run.error or "对接失败"
+            if not state_log.is_file():
+                state_log.write_text(
+                    f"[DockFlowLab] {state_error}\n{run.log_text}", encoding="utf-8"
+                )
+            if cancel is not None and cancel.is_set():
+                break
+            remaining = engines[index + 1:]
+            if flex_receptor is not None:
+                remaining = [
+                    item for item in remaining
+                    if getattr(item, "supports_flexible", False)
+                ]
+            next_engine = remaining[0] if remaining else None
+            if next_engine is None:
+                break
+            message = (
+                f"{engine.label} 未能完成（{state_error}），"
+                f"已自动改用 {next_engine.label} 重试"
+            )
+            log.warning("%s + %s：%s", target.stem, ligand.stem, message)
+            if message not in warnings:
+                warnings.append(message)
+            result.warnings = list(warnings)
+            _notify(progress, 0, 1, message)
+
+        success = run is not None and run.ok
+        affinity = run.poses[0].affinity if success and run.poses else None
+        state_scores.append(
+            {
+                "label": state_label,
+                "affinity": affinity,
+                "file": workspace.relative(state_output),
+                "engine": used_engine.key if success and used_engine else "",
+                "error": "" if success else (state_error or "对接失败"),
+            }
+        )
+        if not success:
+            first_error = first_error or state_error or "对接失败"
+            continue
+        if best is None or float(affinity) < best[0]:
+            best = (float(affinity), run, state_output, used_engine, state_index)
+
+    _merge_state_logs(log_path, len(states))
+
+    if best is None:
+        result.error = first_error or "对接失败"
+        if len(states) > 1 and len({item["error"] for item in state_scores}) > 1:
+            result.error = "所有状态都未能完成对接：" + "；".join(
+                f"{item['label']}：{item['error']}" for item in state_scores
+            )
+        result.warnings = warnings
         return result
 
-    valid, message, _ = pdbio.validate_pdbqt(output)
+    _best_affinity, best_run, best_output, used_engine, best_index = best
+    best_label = states[best_index - 1][0]
+    valid, message, _ = pdbio.validate_pdbqt(best_output)
     if not valid:
         result.error = f"对接结果文件异常：{message}"
+        result.warnings = warnings
         return result
 
     result.ok = True
-    result.poses = run.poses or pdbio.parse_pdbqt_poses(output)
+    result.poses = best_run.poses or pdbio.parse_pdbqt_poses(best_output)
+    result.output_path = workspace.relative(best_output)
     result.warnings = warnings
+    if len(states) > 1:
+        result.parameters["ligand_state"] = best_label
+        result.parameters["ligand_state_count"] = len(states)
+        result.parameters["ligand_state_scores"] = _state_summary(state_scores)
+        if best_index != 1:
+            warnings.append(
+                f"最优结果来自 {best_label}（其余状态见 {result.output_path} 同目录）"
+            )
     _ensure_complex_and_pymol(
-        workspace, target, ligand, output, complex_path, pml_path,
-        obabel, options, warnings,
+        workspace, target, ligand, best_output, complex_path, pml_path,
+        obabel, options, warnings, overwrite=True,
     )
     _write_meta(workspace, result)
     _notify(
@@ -413,6 +606,34 @@ def dock_pair(
         f"{result.best_affinity:.2f} kcal/mol",
     )
     return result
+
+
+def _merge_state_logs(log_path: Path, state_count: int) -> None:
+    """把各状态的日志合并到主日志，方便用户一次看到全部得分。"""
+    if state_count <= 1:
+        return
+    extras = [
+        log_path.with_name(f"{log_path.stem}_state{index}{log_path.suffix}")
+        for index in range(2, state_count + 1)
+    ]
+    existing = [path for path in extras if path.is_file()]
+    if not existing:
+        return
+    try:
+        chunks: list[str] = []
+        if log_path.is_file():
+            chunks.append(log_path.read_text(encoding="utf-8", errors="replace"))
+        for index, path in enumerate(extras, start=2):
+            if not path.is_file():
+                continue
+            chunks.append(
+                f"\n===== 状态 {index} =====\n"
+                + path.read_text(encoding="utf-8", errors="replace")
+            )
+            path.unlink(missing_ok=True)
+        log_path.write_text("\n".join(chunks), encoding="utf-8")
+    except OSError as exc:  # 日志合并失败不影响对接结果
+        log.warning("合并状态日志失败：%s", exc)
 
 
 def run_batch(
@@ -534,7 +755,11 @@ def collect_existing_results(workspace: Workspace) -> list[DockingResult]:
         for ligand in workspace.ligands:
             if not ligand.is_ready:
                 continue
-            output = workspace.docking_output(target.stem, ligand.stem)
+            meta = _read_meta(workspace, target.stem, ligand.stem)
+            # 多状态对接的最优结果可能记录在 *_stateN.pdbqt，优先读取它。
+            output = _stored_output(workspace, meta) or workspace.docking_output(
+                target.stem, ligand.stem
+            )
             if not output.is_file():
                 continue
             mode = modes.pair_mode(target, ligand, workspace)
@@ -545,7 +770,6 @@ def collect_existing_results(workspace: Workspace) -> list[DockingResult]:
             poses = pdbio.parse_pdbqt_poses(output)
             if not poses:
                 continue
-            meta = _read_meta(workspace, target.stem, ligand.stem)
             box = workspace.load_box(target.stem)
             results.append(
                 DockingResult(

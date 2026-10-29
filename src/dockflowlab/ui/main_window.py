@@ -33,6 +33,7 @@ from ..core.models import (
 )
 from ..errors import DockFlowError
 from ..logging_setup import get_logger, setup_logging
+from ..services import flexible as flex_service
 from ..services import modes
 from ..services.analysis import save_heatmap_config
 from ..services.boxes import suggest_box
@@ -59,6 +60,7 @@ from ..version import __app_name_zh__, __version__
 from ..workspace import Workspace
 from . import theme
 from .dialogs import BoxDialog, DownloadDialog, SettingsDialog
+from .flex_dialog import FlexResidueDialog
 from .geometry import (
     WINDOW_MINIMUM,
     WINDOW_PREFERRED,
@@ -316,6 +318,7 @@ class MainWindow(QMainWindow):
         self.prepare_page.change_workspace_requested.connect(lambda: self._navigate(0))
 
         self.dock_page.box_requested.connect(self._edit_box)
+        self.dock_page.flex_requested.connect(self._edit_flex)
         self.dock_page.auto_boxes_requested.connect(self._auto_boxes)
         self.dock_page.cancel_requested.connect(self._request_cancel)
         self.dock_page.run_requested.connect(self._start_docking)
@@ -650,6 +653,9 @@ class MainWindow(QMainWindow):
         self.settings.keep_metals = bool(
             self.prepare_page.keep_metals_check.isChecked()
         )
+        self.settings.enumeration_states = int(
+            self.prepare_page.state_limit.currentData() or 1
+        )
         self.settings.save()
         obabel = self._get_obabel()
         workspace = self.workspace
@@ -715,6 +721,29 @@ class MainWindow(QMainWindow):
         if dialog.exec() == dialog.DialogCode.Accepted and dialog.box is not None:
             self.dock_page.refresh(self.workspace)
             self.statusBar().showMessage(f"盒子已保存：{target.display_name}", 6000)
+
+    def _edit_flex(self, stem: str) -> None:
+        if self.workspace is None or self._busy_notice():
+            return
+        target = self.workspace.get(KIND_TARGET, stem)
+        if target is None:
+            return
+        dialog = FlexResidueDialog(
+            self.workspace,
+            target,
+            self.settings,
+            engine_key=str(self.dock_page.engine.currentData() or ""),
+            parent=self,
+        )
+        if dialog.exec() == dialog.DialogCode.Accepted:
+            self.dock_page.refresh(self.workspace)
+            count = len(flex_service.selected_residues(target))
+            message = (
+                f"已设置 {count} 个柔性残基：{target.display_name}"
+                if count
+                else f"已取消柔性残基：{target.display_name}"
+            )
+            self.statusBar().showMessage(message, 6000)
 
     def _auto_boxes(self) -> None:
         if self.workspace is None or self._busy_notice():
@@ -991,6 +1020,54 @@ class MainWindow(QMainWindow):
                 workspace.absolute(ligand.prepared)
             )
         runnable_targets = [target for target in ready_targets if target.stem in ligands_by_target]
+
+        # QuickVina 2 不支持柔性残基：与其跑到一半才失败，不如开始前就
+        # 提示用户换引擎或清除选择。
+        flex_targets = [
+            target for target in runnable_targets if flex_service.selected_residues(target)
+        ]
+        if flex_targets and not getattr(engine, "supports_flexible", True):
+            alternatives = [
+                candidate
+                for key in ENGINE_ORDER
+                if key != engine.key
+                for candidate in [self._get_engine(key)]
+                if candidate.available
+                and getattr(candidate, "supports_flexible", False)
+            ]
+            names = "\n".join(f"· {target.display_name}" for target in flex_targets[:8])
+            if not alternatives:
+                QMessageBox.warning(
+                    self,
+                    "当前引擎不支持柔性残基",
+                    f"{engine.label} 不支持柔性残基，但以下靶点设置了柔性残基：\n{names}\n\n"
+                    "请改用 AutoDock Vina 或 Smina，或先清除这些靶点的柔性残基选择。",
+                )
+                return
+            answer = QMessageBox.question(
+                self,
+                "当前引擎不支持柔性残基",
+                f"{engine.label} 不支持柔性残基，但以下靶点设置了柔性残基：\n{names}\n\n"
+                f"是否改用 {alternatives[0].label} 继续？",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.Yes,
+            )
+            if answer != QMessageBox.StandardButton.Yes:
+                return
+            engine = alternatives[0]
+            engine_key = engine.key
+            self.settings.docking_engine = engine_key
+            self.settings.save()
+            index = self.dock_page.engine.findData(engine_key)
+            if index >= 0:
+                self.dock_page.engine.setCurrentIndex(index)
+            options.engine = engine_key
+            options.scoring = (
+                self.settings.smina_scoring
+                if engine_key == "smina" and self.settings.smina_scoring != "default"
+                else ""
+            )
+            fallback_engines = self._fallback_engines(engine)
 
         # 自动盒子无法可靠定位时（盲对接、按分子尺寸估算），先让用户确认，
         # 而不是静默使用覆盖整个结构的盒子。
@@ -1498,6 +1575,13 @@ class MainWindow(QMainWindow):
     # 设置与通用
     # ------------------------------------------------------------------
     def _apply_settings_to_controls(self) -> None:
+        self.prepare_page.ph_spin.setValue(float(self.settings.add_hydrogens_ph))
+        self.prepare_page.keep_metals_check.setChecked(bool(self.settings.keep_metals))
+        index = self.prepare_page.state_limit.findData(
+            int(self.settings.enumeration_states)
+        )
+        if index >= 0:
+            self.prepare_page.state_limit.setCurrentIndex(index)
         index = self.dock_page.exhaustiveness.findData(self.settings.exhaustiveness)
         if index >= 0:
             self.dock_page.exhaustiveness.setCurrentIndex(index)
