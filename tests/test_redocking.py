@@ -131,6 +131,36 @@ def test_redocking_computes_low_rmsd_and_caches(tmp_path, workspace):
     assert load_redocking(workspace, target.stem).rmsd == pytest.approx(0.0)
 
 
+def test_redocking_passes_and_records_smina_scoring(tmp_path, workspace):
+    pytest.importorskip("rdkit")
+    target, _ = _workspace_with_complex(tmp_path, workspace)
+    site, _, _ = find_reference_site(workspace, target)
+    engine = _RecordingEngine(site.atoms)
+    engine.key = "smina"
+    engine.label = "Smina"
+    seen: dict[str, object] = {}
+    original = engine.dock
+
+    def dock(*args, **kwargs):
+        seen.update(kwargs)
+        return original(*args, **kwargs)
+
+    engine.dock = dock
+    options = replace(_options(), scoring="vinardo")
+
+    result = run_redocking(
+        workspace,
+        target,
+        Box(center=site.center, size=(20.0, 20.0, 20.0), source="cocrystal"),
+        options=options,
+        engine=engine,
+    )
+
+    assert result.ok, result.error
+    assert seen.get("scoring") == "vinardo"
+    assert result.parameters["scoring"] == "vinardo"
+
+
 def test_redocking_flags_pose_above_threshold(tmp_path, workspace):
     pytest.importorskip("rdkit")
     target, _ = _workspace_with_complex(tmp_path, workspace)

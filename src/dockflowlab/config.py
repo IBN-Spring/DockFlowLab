@@ -66,6 +66,9 @@ class AppSettings:
     docking_engine: str = "vina"
     # 首选引擎卡死或失败时，自动改用其他已安装的引擎重试。
     engine_fallback: bool = True
+    # Smina 评分函数："default"（Vina 默认）或 "vinardo"。
+    # 仅对 Smina 生效；不同评分函数的分数不能直接比较。
+    smina_scoring: str = "default"
 
     # 网络
     proxy: str = ""
@@ -104,6 +107,8 @@ class AppSettings:
     keep_metals: bool = False
 
     def __post_init__(self) -> None:
+        if self.smina_scoring not in {"default", "vinardo"}:
+            self.smina_scoring = "default"
         if self.exhaustiveness < 1:
             self.exhaustiveness = 16
         if self.num_modes < 1:

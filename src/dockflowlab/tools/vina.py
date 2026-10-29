@@ -277,6 +277,7 @@ class EngineAdapter:
         energy_range: float,
         seed: int,
         cpu: int,
+        scoring: str = "",
     ) -> list[str]:
         return [self.executable]
 
@@ -296,6 +297,7 @@ class EngineAdapter:
         energy_range: float = 3.0,
         seed: int = 42,
         cpu: int = 0,
+        scoring: str = "",
         timeout: float | None = None,
         stall_timeout: float | None = None,
         log_path: str | Path | None = None,
@@ -341,6 +343,7 @@ class EngineAdapter:
                 energy_range=float(energy_range),
                 seed=int(seed),
                 cpu=max(0, int(cpu)),
+                scoring=str(scoring or ""),
             )
             result = run_process(
                 command,
@@ -415,27 +418,28 @@ class VinaAdapter(EngineAdapter):
         return find_vina(executable)
 
     def _command(self, temp, *, receptor, ligand, output, center, size,
-                 exhaustiveness, num_modes, energy_range, seed, cpu):
-        config = "\n".join(
-            [
-                f"receptor = {receptor}",
-                f"ligand = {ligand}",
-                f"out = {output}",
-                f"center_x = {center[0]:.3f}",
-                f"center_y = {center[1]:.3f}",
-                f"center_z = {center[2]:.3f}",
-                f"size_x = {size[0]:.3f}",
-                f"size_y = {size[1]:.3f}",
-                f"size_z = {size[2]:.3f}",
-                f"exhaustiveness = {exhaustiveness}",
-                f"num_modes = {num_modes}",
-                f"energy_range = {energy_range:.2f}",
-                f"seed = {seed}",
-                f"cpu = {cpu}",
-                "verbosity = 1",
-                "",
-            ]
-        )
+                 exhaustiveness, num_modes, energy_range, seed, cpu,
+                 scoring=""):
+        lines = [
+            f"receptor = {receptor}",
+            f"ligand = {ligand}",
+            f"out = {output}",
+            f"center_x = {center[0]:.3f}",
+            f"center_y = {center[1]:.3f}",
+            f"center_z = {center[2]:.3f}",
+            f"size_x = {size[0]:.3f}",
+            f"size_y = {size[1]:.3f}",
+            f"size_z = {size[2]:.3f}",
+            f"exhaustiveness = {exhaustiveness}",
+            f"num_modes = {num_modes}",
+            f"energy_range = {energy_range:.2f}",
+            f"seed = {seed}",
+            f"cpu = {cpu}",
+            "verbosity = 1",
+        ]
+        if scoring:
+            lines.append(f"scoring = {scoring}")
+        config = "\n".join(lines + [""])
         (temp / "vina.conf").write_text(config, encoding="ascii")
         return [self.executable, "--config", "vina.conf"]
 
@@ -444,8 +448,9 @@ class CliEngineAdapter(EngineAdapter):
     """接受 Vina 1.1.2 风格命令行参数的引擎（QuickVina 2、Smina）。"""
 
     def _command(self, temp, *, receptor, ligand, output, center, size,
-                 exhaustiveness, num_modes, energy_range, seed, cpu):
-        return [
+                 exhaustiveness, num_modes, energy_range, seed, cpu,
+                 scoring=""):
+        command = [
             self.executable,
             "--receptor", receptor,
             "--ligand", ligand,
@@ -462,6 +467,9 @@ class CliEngineAdapter(EngineAdapter):
             "--seed", str(seed),
             "--cpu", str(cpu),
         ]
+        if scoring:
+            command.extend(["--scoring", scoring])
+        return command
 
 
 class QuickVina2Adapter(CliEngineAdapter):

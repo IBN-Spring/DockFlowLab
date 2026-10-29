@@ -114,6 +114,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="对接引擎（默认读取设置）：vina、qvina2 或 smina",
     )
     dock.add_argument(
+        "--scoring",
+        choices=("default", "vinardo"),
+        default=None,
+        help="Smina 评分函数：default（Vina 评分）或 vinardo；仅对 Smina 生效",
+    )
+    dock.add_argument(
         "--no-fallback",
         action="store_true",
         help="首选引擎失败时不自动改用其他可用引擎",
@@ -478,11 +484,19 @@ def command_dock(args: argparse.Namespace) -> int:
         ]
     options.engine = engine.key
     options.fallback = bool(fallback_engines)
+    if args.scoring is not None:
+        options.scoring = "" if args.scoring == "default" else args.scoring
+    if options.scoring and engine.key != "smina":
+        options.scoring = ""
+    if args.scoring is not None and engine.key != "smina" and args.scoring != "default":
+        print("提示：--scoring 仅对 Smina 生效，已忽略。")
     print(f"对接引擎：{engine.label}" + (
         "（失败时自动改用 " + "、".join(item.label for item in fallback_engines) + "）"
         if fallback_engines
         else ""
     ))
+    if options.scoring:
+        print("评分函数：Vinardo（与 Vina 默认评分不可直接比较）")
 
     obabel = get_openbabel()
     boxes: dict[str, Box] = {}

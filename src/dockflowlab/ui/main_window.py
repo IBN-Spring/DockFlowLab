@@ -931,6 +931,8 @@ class MainWindow(QMainWindow):
         self.settings.num_modes = int(params["num_modes"])
         self.settings.seed = int(params["seed"])
         self.settings.cpu = int(params["cpu"])
+        scoring = str(params.get("smina_scoring") or "default")
+        self.settings.smina_scoring = scoring if scoring in {"default", "vinardo"} else "default"
         self.settings.save()
         advice = self.dock_page.exhaustiveness_advice()
         if advice is not None and self.settings.exhaustiveness < advice.recommended:
@@ -953,6 +955,11 @@ class MainWindow(QMainWindow):
             seed=self.settings.seed,
             cpu=self.settings.cpu,
             engine=engine_key,
+            scoring=(
+                self.settings.smina_scoring
+                if engine_key == "smina" and self.settings.smina_scoring != "default"
+                else ""
+            ),
             fallback=self.settings.engine_fallback,
             skip_existing=False,
             make_complex=True,
@@ -1497,6 +1504,9 @@ class MainWindow(QMainWindow):
         self.dock_page.num_modes.setValue(self.settings.num_modes)
         self.dock_page.seed.setValue(self.settings.seed)
         self.dock_page.cpu.setValue(self.settings.cpu)
+        index = self.dock_page.smina_scoring.findData(self.settings.smina_scoring)
+        if index >= 0:
+            self.dock_page.smina_scoring.setCurrentIndex(index)
 
     def _open_settings(self) -> None:
         dialog = SettingsDialog(self.settings, self)

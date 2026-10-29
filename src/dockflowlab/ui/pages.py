@@ -801,10 +801,22 @@ class DockPage(Page):
         _plain_number(self.cpu)
         self.cpu.setMaximumWidth(120)
         grid.addWidget(self.cpu, 2, 3)
+        grid.addWidget(QLabel("Smina 评分函数"), 3, 0)
+        self.smina_scoring = QComboBox()
+        self.smina_scoring.addItem("默认（Vina 评分）", "default")
+        self.smina_scoring.addItem("Vinardo", "vinardo")
+        self.smina_scoring.setMaximumWidth(240)
+        self.smina_scoring.setToolTip(
+            "仅对 Smina 引擎生效。Vinardo 更强调疏水作用与去溶剂化，"
+            "但不同评分函数的分数不能直接比较；切换后请重新计算，不要与旧结果对比。"
+        )
+        grid.addWidget(self.smina_scoring, 3, 1, 1, 3)
+        self.engine.currentIndexChanged.connect(self._update_scoring_state)
         grid.setColumnStretch(1, 1)
         grid.setColumnStretch(3, 1)
         grid.setColumnMinimumWidth(0, 110)
         grid.setColumnMinimumWidth(2, 130)
+        self._update_scoring_state()
         params.add_layout(grid)
         self.advice_label = QLabel("")
         self.advice_label.setObjectName("Muted")
@@ -850,6 +862,12 @@ class DockPage(Page):
         index = self.engine.findData(selected)
         self.engine.setCurrentIndex(index if index >= 0 else 0)
         self.engine.blockSignals(False)
+        self._update_scoring_state()
+
+    def _update_scoring_state(self) -> None:
+        """评分函数只对 Smina 生效，其他引擎时置灰。"""
+        enabled = str(self.engine.currentData() or "") == "smina"
+        self.smina_scoring.setEnabled(enabled)
 
     def _emit_run(self) -> None:
         self.run_requested.emit(
@@ -859,6 +877,7 @@ class DockPage(Page):
                 "num_modes": int(self.num_modes.value()),
                 "seed": int(self.seed.value()),
                 "cpu": int(self.cpu.value()),
+                "smina_scoring": str(self.smina_scoring.currentData() or "default"),
             }
         )
 
@@ -1486,6 +1505,21 @@ class ResultsPage(Page):
                 if min(used) < advice.recommended:
                     text += "（当前偏低，搜索可能未收敛）"
             lines.append(text)
+
+        # 评分函数：只有用到 Smina Vinardo 时才提示，避免噪音。
+        scoring_counts: dict[str, int] = {}
+        for item in successes:
+            if not isinstance(item.parameters, dict):
+                continue
+            key = str(item.parameters.get("scoring") or "default")
+            label = "Vinardo" if key == "vinardo" else "Vina 默认"
+            scoring_counts[label] = scoring_counts.get(label, 0) + 1
+        if scoring_counts.get("Vinardo"):
+            lines.append(
+                "评分函数："
+                + "、".join(f"{label} {count}" for label, count in scoring_counts.items())
+                + "；不同评分函数的分值不可直接比较"
+            )
 
         # 结构体检：缺失残基、金属、水。
         qc_notes: list[str] = []

@@ -109,6 +109,55 @@ def test_cli_engines_pass_arguments_directly(tmp_path):
         assert command[command.index("--num_modes") + 1] == "5"
 
 
+def test_smina_passes_scoring_flag_only_when_requested(tmp_path):
+    args = _command_args() | {"scoring": "vinardo"}
+    command = make_engine(ENGINE_SMINA)._command(tmp_path, **args)
+
+    assert command[command.index("--scoring") + 1] == "vinardo"
+
+    command = make_engine(ENGINE_SMINA)._command(tmp_path, **_command_args())
+    assert "--scoring" not in command
+
+
+def test_scoring_is_recorded_for_smina_only(prepared_workspace):
+    target, ligand, box = _write_prepared(prepared_workspace)
+
+    smina = _FakeEngine("smina", "Smina", succeeds=True)
+    result = dock_pair(
+        prepared_workspace,
+        target,
+        ligand,
+        box,
+        options=_options(scoring="vinardo"),
+        vina=smina,
+    )
+    assert result.ok, result.error
+    assert result.parameters["scoring"] == "vinardo"
+
+    vina = _FakeEngine("vina", "AutoDock Vina", succeeds=True)
+    result = dock_pair(
+        prepared_workspace,
+        target,
+        ligand,
+        box,
+        options=_options(scoring="vinardo", skip_existing=False),
+        vina=vina,
+    )
+    assert result.ok, result.error
+    assert "scoring" not in result.parameters
+
+
+def test_settings_normalize_smina_scoring(tmp_path):
+    import json
+
+    path = tmp_path / "settings.json"
+    path.write_text(json.dumps({"smina_scoring": "bogus"}), encoding="utf-8")
+    assert AppSettings.load(path).smina_scoring == "default"
+
+    path.write_text(json.dumps({"smina_scoring": "vinardo"}), encoding="utf-8")
+    assert AppSettings.load(path).smina_scoring == "vinardo"
+
+
 def test_smina_parses_mode_table_and_annotates_output(tmp_path):
     output = tmp_path / "out.pdbqt"
     output.write_text(_pdbqt(models=2), encoding="utf-8")

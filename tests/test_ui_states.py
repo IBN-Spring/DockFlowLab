@@ -260,6 +260,26 @@ def test_dock_page_engine_choices_and_run_payload(qt_app):
     assert emitted[0]["engine"] == "qvina2"
 
 
+def test_dock_page_smina_scoring_only_enabled_for_smina(qt_app):
+    from dockflowlab.ui.pages import DockPage
+
+    page = DockPage()
+    page.set_engine_choices(
+        [("vina", "AutoDock Vina", True, "标准引擎"), ("smina", "Smina", True, "Vinardo")],
+        selected="vina",
+    )
+    assert not page.smina_scoring.isEnabled()
+
+    page.engine.setCurrentIndex(page.engine.findData("smina"))
+    assert page.smina_scoring.isEnabled()
+
+    page.smina_scoring.setCurrentIndex(page.smina_scoring.findData("vinardo"))
+    emitted: list[dict] = []
+    page.run_requested.connect(emitted.append)
+    page._emit_run()
+    assert emitted[0]["smina_scoring"] == "vinardo"
+
+
 def test_entity_row_shows_prep_warnings(qt_app):
     from PySide6.QtWidgets import QLabel
 

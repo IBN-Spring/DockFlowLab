@@ -39,6 +39,8 @@ class DockingOptions:
     seed: int = 42
     cpu: int = 0
     engine: str = "vina"
+    # Smina 评分函数："" / "default" 使用 Vina 评分，"vinardo" 使用 Vinardo。
+    scoring: str = ""
     # 首选引擎卡死/失败时，自动换用其他已安装引擎重试一次。
     fallback: bool = True
     skip_existing: bool = True
@@ -60,6 +62,11 @@ class DockingOptions:
             seed=settings.seed,
             cpu=settings.cpu,
             engine=settings.docking_engine,
+            scoring=(
+                ""
+                if getattr(settings, "smina_scoring", "default") == "default"
+                else str(settings.smina_scoring)
+            ),
             fallback=settings.engine_fallback,
         )
 
@@ -121,7 +128,7 @@ def _run_parameters(options: DockingOptions, engine: EngineAdapter) -> dict[str,
         version = str(engine.version or "")
     except Exception:
         version = ""
-    return {
+    parameters = {
         "exhaustiveness": int(options.exhaustiveness),
         "num_modes": int(options.num_modes),
         "energy_range": float(options.energy_range),
@@ -133,6 +140,9 @@ def _run_parameters(options: DockingOptions, engine: EngineAdapter) -> dict[str,
         # 旧版本只记录 vina_version；保留它以便报告与旧结果继续兼容。
         "vina_version": version if engine.key == "vina" else "",
     }
+    if options.scoring and engine.key == "smina":
+        parameters["scoring"] = str(options.scoring)
+    return parameters
 
 
 _PARAMETER_KEYS = (
@@ -145,6 +155,7 @@ _PARAMETER_KEYS = (
     "engine_label",
     "engine_version",
     "vina_version",
+    "scoring",
 )
 
 
@@ -342,6 +353,7 @@ def dock_pair(
                 energy_range=options.energy_range,
                 seed=options.seed,
                 cpu=options.cpu,
+                scoring=options.scoring if engine.key == "smina" else "",
                 timeout=options.timeout_seconds,
                 stall_timeout=options.stall_timeout_seconds,
                 log_path=log_path,

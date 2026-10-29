@@ -378,6 +378,9 @@ def run_redocking(
             "engine": current.key,
             "engine_label": current.label,
         }
+        scoring = options.scoring if current.key == "smina" else ""
+        if scoring:
+            result.parameters["scoring"] = str(scoring)
         try:
             run = current.dock(
                 receptor,
@@ -389,6 +392,7 @@ def run_redocking(
                 energy_range=options.energy_range,
                 seed=options.seed,
                 cpu=options.cpu,
+                scoring=scoring,
                 timeout=options.timeout_seconds,
                 stall_timeout=options.stall_timeout_seconds,
                 log_path=log_path,

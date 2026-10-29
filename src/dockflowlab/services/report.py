@@ -97,6 +97,7 @@ _PARAM_KEYS = (
     "engine_label",
     "engine_version",
     "vina_version",
+    "scoring",
 )
 
 
@@ -142,7 +143,7 @@ def _run_parameters_text(results: Sequence[DockingResult]) -> str:
     parts: list[str] = []
     for signature, count in groups.items():
         (exhaustiveness, num_modes, energy_range, seed, cpu, engine,
-         engine_label, engine_version, vina_version) = signature
+         engine_label, engine_version, vina_version, scoring) = signature
         try:
             text = (
                 f"exhaustiveness = {int(exhaustiveness)}，"
@@ -163,6 +164,9 @@ def _run_parameters_text(results: Sequence[DockingResult]) -> str:
         )
         if engine_text:
             text += f"，{engine_text}"
+        if scoring:
+            label = "Vinardo 评分" if str(scoring) == "vinardo" else f"scoring = {scoring}"
+            text += f"，{label}"
         if len(groups) > 1 or count != len(successful):
             text += f"（{count} 组）"
         parts.append(text)
@@ -625,6 +629,17 @@ def _trust_section(
         items.append("重对接验证：" + "；".join(validated) + "。")
     else:
         items.append("尚未进行重对接验证；无法确认当前盒子与参数能复现实验构象。")
+    vinardo = sum(
+        1
+        for item in successes
+        if isinstance(item.parameters, dict)
+        and str(item.parameters.get("scoring", "")) == "vinardo"
+    )
+    if vinardo:
+        items.append(
+            f"{vinardo} 组结果使用 Vinardo 评分函数；其分值与 Vina 默认评分不可直接比较，"
+            "请勿与其他批次的分数混排。"
+        )
     if interaction_index is not None:
         geometric = sum(
             1
