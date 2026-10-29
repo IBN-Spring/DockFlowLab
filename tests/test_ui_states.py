@@ -79,7 +79,7 @@ def test_results_offer_interaction_details(qt_app, tmp_path):
     page = ResultsPage()
     page.show_results(workspace, [result])
 
-    actions = page.table.cellWidget(0, 7)
+    actions = page.table.cellWidget(0, 8)
     assert actions is not None
     buttons = {button.text(): button for button in actions.findChildren(QPushButton)}
     assert set(buttons) == {"细节", "PyMOL", "定位"}
@@ -89,6 +89,78 @@ def test_results_offer_interaction_details(qt_app, tmp_path):
     buttons["细节"].click()
 
     assert emitted == [("target", "ligand")]
+
+
+def test_results_filter_and_csv_export(qt_app, tmp_path):
+    from dockflowlab.core.models import DockingResult, Pose
+    from dockflowlab.services.interaction_index import (
+        InteractionEntry,
+        InteractionIndex,
+    )
+    from dockflowlab.ui.pages import ResultsPage
+    from dockflowlab.workspace import Workspace
+
+    workspace = Workspace.create(tmp_path / "筛选")
+    results = [
+        DockingResult(
+            target="t", ligand=ligand, ok=True, poses=[Pose(rank=1, affinity=-7.0 + i)]
+        )
+        for i, ligand in enumerate(("a", "b", "c"))
+    ]
+    entries = {
+        ("t", "a"): InteractionEntry(
+            target="t",
+            ligand="a",
+            ok=True,
+            counts={"hbond": 1},
+            interactions=({"kind": "hbond", "residue": "MET318"},),
+            engine="plip",
+        ),
+        ("t", "b"): InteractionEntry(
+            target="t",
+            ligand="b",
+            ok=True,
+            counts={"saltbridge": 1},
+            interactions=({"kind": "saltbridge", "residue": "ASP100"},),
+            engine="plip",
+        ),
+        ("t", "c"): InteractionEntry(
+            target="t",
+            ligand="c",
+            ok=True,
+            counts={"hbond": 1, "hydrophobic": 1},
+            interactions=(
+                {"kind": "hbond", "residue": "ALA200"},
+                {"kind": "hydrophobic", "residue": "LEU50"},
+            ),
+            engine="geometric",
+        ),
+    }
+    page = ResultsPage()
+    page.show_results(workspace, results)
+    page.set_interaction_index(InteractionIndex(entries=entries))
+
+    # 表格顺序按分数排序，先确认相互作用列已回填。
+    assert not page.filter_row.isHidden()
+    assert page.table.item(0, 5).text() != "—"
+
+    page.residue_filter.setText("met318")
+    assert page.visible_row_keys() == [("t", "a")]
+
+    page.residue_filter.clear()
+    page.kind_filter.setCurrentIndex(page.kind_filter.findData("hbond"))
+    page.exclude_filter.setCurrentIndex(page.exclude_filter.findData("hydrophobic"))
+    assert page.visible_row_keys() == [("t", "a")]
+
+    page._clear_filters()
+    assert len(page.visible_row_keys()) == 3
+
+    path = tmp_path / "out.csv"
+    count = page.write_csv(path)
+    text = path.read_text(encoding="utf-8-sig")
+    assert count == 3
+    assert "相互作用" in text.splitlines()[0]
+    assert "氢键" in text
 
 
 def test_interaction_row_is_clickable(qt_app):

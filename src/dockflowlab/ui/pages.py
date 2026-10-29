@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QHeaderView,
     QLabel,
+    QLineEdit,
     QMenu,
     QPushButton,
     QScrollArea,
@@ -845,16 +846,30 @@ class ResultsPage(Page):
     open_pymol_requested = Signal(str, str)
     locate_result_requested = Signal(str, str)
     interaction_requested = Signal(str, str)
+    interactions_scan_requested = Signal()
+    export_requested = Signal()
     heatmap_edit_requested = Signal()
     back_requested = Signal()
 
     def __init__(self) -> None:
         super().__init__()
         self._has_results = False
+        self._workspace: Workspace | None = None
+        self._row_keys: list[tuple[str, str]] = []
+        self._row_index: dict[tuple[str, str], int] = {}
+        self._interaction_index = None
+        self._interaction_cells: dict[tuple[str, str], QTableWidgetItem] = {}
         self.refresh_button = QPushButton("刷新结果")
         self.refresh_button.clicked.connect(self.refresh_requested.emit)
         self.folder_button = QPushButton("打开结果文件夹")
         self.folder_button.clicked.connect(self.open_folder_requested.emit)
+        self.scan_button = QPushButton("批量分析相互作用")
+        self.scan_button.setToolTip(
+            "对每条成功结果运行 PLIP（不可用时回退几何判定），结果会缓存；"
+            "完成后可按相互作用类型或残基筛选。"
+        )
+        self.scan_button.setVisible(False)
+        self.scan_button.clicked.connect(self.interactions_scan_requested.emit)
         self.report_button = QPushButton("生成结果报告")
         self.report_button.setObjectName("Primary")
         self.report_button.clicked.connect(self.report_requested.emit)
@@ -864,7 +879,7 @@ class ResultsPage(Page):
                 "对接结果",
                 "分数越低，表示该程序预测的结合越有利。不同对接类型的分数不宜直接比较；"
                 "请结合实验或文献证据判断。",
-                [self.refresh_button, self.folder_button, self.report_button],
+                [self.scan_button, self.refresh_button, self.folder_button, self.report_button],
             )
         )
 
@@ -884,9 +899,53 @@ class ResultsPage(Page):
         self.body.addWidget(self.log_panel)
 
         self.table_card = Card("结果列表")
-        self.table = QTableWidget(0, 8)
+        self.filter_row = QWidget()
+        filter_layout = QHBoxLayout(self.filter_row)
+        filter_layout.setContentsMargins(0, 0, 0, 0)
+        filter_layout.setSpacing(6)
+        filter_layout.addWidget(QLabel("相互作用筛选"))
+        self.kind_filter = QComboBox()
+        self.kind_filter.addItem("包含任意类型", "")
+        for kind in ("hbond", "saltbridge", "metal", "pistacking", "pication", "halogen", "hydrophobic"):
+            self.kind_filter.addItem(
+                {"hbond": "氢键", "saltbridge": "盐桥", "metal": "金属配位",
+                 "pistacking": "π-堆积", "pication": "π-阳离子", "halogen": "卤键",
+                 "hydrophobic": "疏水作用"}[kind],
+                kind,
+            )
+        self.kind_filter.setToolTip("只保留至少包含这类相互作用的结果")
+        filter_layout.addWidget(self.kind_filter)
+        self.residue_filter = QLineEdit()
+        self.residue_filter.setPlaceholderText("关键残基，如 MET318（多个用逗号分隔）")
+        self.residue_filter.setClearButtonEnabled(True)
+        self.residue_filter.setToolTip("只保留与这些残基有接触的结果；不区分大小写")
+        filter_layout.addWidget(self.residue_filter, 1)
+        self.exclude_filter = QComboBox()
+        self.exclude_filter.addItem("不排除类型", "")
+        for kind in ("vdw", "hydrophobic", "hbond"):
+            self.exclude_filter.addItem(
+                {"vdw": "范德华接触", "hydrophobic": "疏水作用", "hbond": "氢键"}[kind], kind
+            )
+        self.exclude_filter.setToolTip("排除包含这类相互作用的结果")
+        filter_layout.addWidget(self.exclude_filter)
+        self.clear_filter_button = QPushButton("清除筛选")
+        self.clear_filter_button.setObjectName("Small")
+        self.clear_filter_button.clicked.connect(self._clear_filters)
+        filter_layout.addWidget(self.clear_filter_button)
+        self.export_button = QPushButton("导出 CSV")
+        self.export_button.setObjectName("Small")
+        self.export_button.setToolTip("导出当前筛选后可见的结果")
+        self.export_button.clicked.connect(self.export_requested.emit)
+        filter_layout.addWidget(self.export_button)
+        self.filter_row.setVisible(False)
+        self.table_card.add(self.filter_row)
+        for widget in (self.kind_filter, self.exclude_filter):
+            widget.currentIndexChanged.connect(self._apply_filter)
+        self.residue_filter.textChanged.connect(self._apply_filter)
+
+        self.table = QTableWidget(0, 9)
         self.table.setHorizontalHeaderLabels(
-            ["靶点", "候选分子", "对接类型", "最佳打分", "盒子来源", "状态", "说明", "操作"]
+            ["靶点", "候选分子", "对接类型", "最佳打分", "盒子来源", "相互作用", "状态", "说明", "操作"]
         )
         self.table.verticalHeader().setVisible(False)
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
@@ -903,11 +962,12 @@ class ResultsPage(Page):
         header.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
         header.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
         header.setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
-        header.setSectionResizeMode(5, QHeaderView.ResizeMode.Fixed)
-        self.table.setColumnWidth(5, round(92 * ui_scale))
-        header.setSectionResizeMode(6, QHeaderView.ResizeMode.Stretch)
-        header.setSectionResizeMode(7, QHeaderView.ResizeMode.Fixed)
-        self.table.setColumnWidth(7, round(208 * ui_scale))
+        header.setSectionResizeMode(5, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(6, QHeaderView.ResizeMode.Fixed)
+        self.table.setColumnWidth(6, round(92 * ui_scale))
+        header.setSectionResizeMode(7, QHeaderView.ResizeMode.Stretch)
+        header.setSectionResizeMode(8, QHeaderView.ResizeMode.Fixed)
+        self.table.setColumnWidth(8, round(208 * ui_scale))
         self.table.setMinimumHeight(round(120 * ui_scale))
         self.table.setVisible(False)
         self.table.setToolTip("选中行后按 Ctrl+C 或右键复制，可直接粘贴到 Excel")
@@ -962,6 +1022,9 @@ class ResultsPage(Page):
         self.refresh_button.setEnabled(not busy)
         self.folder_button.setEnabled(not busy)
         self.report_button.setEnabled(not busy and self._has_results)
+        self.scan_button.setEnabled(not busy and self._has_results)
+        self.export_button.setEnabled(not busy and self._has_results)
+        self.clear_filter_button.setEnabled(not busy)
         self.heatmap_button.setEnabled(not busy)
 
     # -- 结果表：复制与右键菜单 ----------------------------------------
@@ -999,6 +1062,9 @@ class ResultsPage(Page):
         self.log_panel.setVisible(True)
         self.log_panel.start("正在运行对接…")
         self.report_button.setEnabled(False)
+        self._interaction_index = None
+        self.filter_row.setVisible(False)
+        self.scan_button.setEnabled(False)
         self.table.setRowCount(0)
         self.table.setVisible(False)
         self.empty_label.setVisible(False)
@@ -1016,8 +1082,15 @@ class ResultsPage(Page):
 
     def show_results(self, workspace: Workspace | None, results: list[DockingResult]) -> None:
         self._has_results = bool(results)
+        self._workspace = workspace
+        self._row_keys = []
+        self._row_index: dict[tuple[str, str], int] = {}
+        self._interaction_cells = {}
         self.table.setRowCount(0)
         self.table.setVisible(False)
+        self.scan_button.setVisible(bool(results))
+        self.scan_button.setEnabled(bool(results))
+        self.filter_row.setVisible(False)
         if workspace is None:
             self.empty_label.setVisible(True)
             self.empty_label.setText("还没有打开工作目录。")
@@ -1054,6 +1127,9 @@ class ResultsPage(Page):
         )
         self.table.setRowCount(len(ordered))
         for row, result in enumerate(ordered):
+            key = (result.target, result.ligand)
+            self._row_keys.append(key)
+            self._row_index[key] = row
             self.table.setItem(row, 0, QTableWidgetItem(target_labels.get(result.target, result.target)))
             self.table.setItem(row, 1, QTableWidgetItem(ligand_labels.get(result.ligand, result.ligand)))
             self.table.setItem(row, 2, QTableWidgetItem(result.mode_label or "—"))
@@ -1079,11 +1155,15 @@ class ResultsPage(Page):
             holder_layout.setContentsMargins(6, 0, 0, 0)
             holder_layout.addWidget(chip, 0, Qt.AlignmentFlag.AlignVCenter)
             holder_layout.addStretch(1)
-            self.table.setCellWidget(row, 5, holder)
+            self.table.setCellWidget(row, 6, holder)
             note = result.error if not result.ok else "；".join(result.warnings)
             note_item = QTableWidgetItem(note or "—")
             note_item.setToolTip(note)
-            self.table.setItem(row, 6, note_item)
+            self.table.setItem(row, 7, note_item)
+            interaction_item = QTableWidgetItem("—")
+            interaction_item.setToolTip("点击“批量分析相互作用”后可在此查看并筛选")
+            self.table.setItem(row, 5, interaction_item)
+            self._interaction_cells[key] = interaction_item
             if result.ok and result.pymol_path:
                 actions = QWidget()
                 action_layout = QHBoxLayout(actions)
@@ -1111,7 +1191,7 @@ class ResultsPage(Page):
                 action_layout.addWidget(detail)
                 action_layout.addWidget(pymol)
                 action_layout.addWidget(locate)
-                self.table.setCellWidget(row, 7, actions)
+                self.table.setCellWidget(row, 8, actions)
         mode_labels = sorted({result.mode_label for result in results if result.ok and result.mode_label})
         if len(mode_labels) > 1:
             self.mode_note.setText(
@@ -1122,7 +1202,114 @@ class ResultsPage(Page):
         else:
             self.mode_note.setVisible(False)
             self.mode_note.setText("")
+        if self._interaction_index is not None:
+            self._apply_interaction_index(self._interaction_index)
         self._load_chart(workspace)
+
+    # -- 相互作用列与筛选 ----------------------------------------------
+    def set_interaction_index(self, index) -> None:
+        """回填批量分析结果，并显示筛选栏。"""
+        self._interaction_index = index
+        available = bool(index is not None and index.entries)
+        self.filter_row.setVisible(available and self._has_results)
+        self._apply_interaction_index(index)
+        self._apply_filter()
+
+    def _apply_interaction_index(self, index) -> None:
+        from ..services.interaction_index import InteractionIndex
+
+        if not isinstance(index, InteractionIndex):
+            return
+        for key, item in self._interaction_cells.items():
+            entry = index.get(*key)
+            if entry is None:
+                item.setText("—")
+                item.setToolTip("还没有分析这条结果")
+                continue
+            if not entry.ok:
+                item.setText("分析失败")
+                item.setToolTip(entry.error or entry.detail_tip or "分析失败")
+                continue
+            item.setText(entry.summary)
+            item.setToolTip(entry.detail_tip or "无可展示接触")
+
+    def _current_filter(self):
+        from ..services.interaction_index import InteractionFilter
+
+        residues = tuple(
+            token.strip()
+            for token in self.residue_filter.text().replace("，", ",").split(",")
+            if token.strip()
+        )
+        kind = self.kind_filter.currentData() or ""
+        exclude = self.exclude_filter.currentData() or ""
+        return InteractionFilter(
+            required_kinds=(kind,) if kind else (),
+            required_residues=residues,
+            exclude_kinds=(exclude,) if exclude else (),
+        )
+
+    def _apply_filter(self) -> None:
+        filt = self._current_filter()
+        if not filt.active:
+            for row in range(self.table.rowCount()):
+                self.table.setRowHidden(row, False)
+            return
+        for row, key in enumerate(self._row_keys):
+            entry = (
+                self._interaction_index.get(*key)
+                if self._interaction_index is not None
+                else None
+            )
+            self.table.setRowHidden(row, not filt.matches(entry))
+        self._fit_table_height(
+            sum(1 for row in range(self.table.rowCount()) if not self.table.isRowHidden(row))
+        )
+
+    def _clear_filters(self) -> None:
+        self.residue_filter.clear()
+        self.kind_filter.setCurrentIndex(0)
+        self.exclude_filter.setCurrentIndex(0)
+        self._apply_filter()
+
+    def visible_row_keys(self) -> list[tuple[str, str]]:
+        """当前筛选后可见的结果（保持表格顺序）。"""
+        return [
+            key
+            for row, key in enumerate(self._row_keys)
+            if not self.table.isRowHidden(row)
+        ]
+
+    def write_csv(self, path: str | Path) -> int:
+        """把当前可见结果导出为 CSV，内容与界面一致。返回行数。"""
+        import csv
+
+        path = Path(path)
+        headers = [
+            self.table.horizontalHeaderItem(column).text()
+            for column in range(self.table.columnCount() - 1)  # 最后一列是操作按钮
+        ]
+        rows: list[list[str]] = []
+        for row, key in enumerate(self._row_keys):
+            if self.table.isRowHidden(row):
+                continue
+            cells = []
+            for column in range(self.table.columnCount() - 1):
+                item = self.table.item(row, column)
+                text = item.text() if item is not None else ""
+                # 状态列是自定义控件，直接写状态名。
+                if column == 6:
+                    widget = self.table.cellWidget(row, column)
+                    chip = widget.findChild(StatusChip) if widget is not None else None
+                    if chip is not None:
+                        text = chip.text()
+                cells.append(text)
+            rows.append(cells)
+        with path.open("w", encoding="utf-8-sig", newline="") as handle:
+            writer = csv.writer(handle)
+            writer.writerow(headers)
+            writer.writerows(rows)
+        return len(rows)
 
     def _fit_table_height(self, rows: int) -> None:
         section = self.table.verticalHeader().defaultSectionSize()

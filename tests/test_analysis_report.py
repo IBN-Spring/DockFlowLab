@@ -236,6 +236,40 @@ def test_report_lists_prep_warnings_and_ph(result_workspace):
     assert "质子化 pH" in text and "6.5" in text
 
 
+def test_report_can_include_interaction_summary(result_workspace):
+    from dockflowlab.services.interaction_index import (
+        InteractionEntry,
+        InteractionIndex,
+    )
+
+    workspace, target, first, _ = result_workspace
+    results = make_results(target, [first])
+    index = InteractionIndex(
+        entries={
+            (target.stem, first.stem): InteractionEntry(
+                target=target.stem,
+                ligand=first.stem,
+                ok=True,
+                counts={"hbond": 2, "saltbridge": 1},
+                interactions=(
+                    {"kind": "hbond", "residue": "MET318"},
+                    {"kind": "saltbridge", "residue": "ASP100"},
+                ),
+                engine="plip",
+            )
+        }
+    )
+
+    text = generate_report(
+        workspace, results, interaction_index=index
+    ).read_text(encoding="utf-8")
+
+    assert "相互作用" in text
+    assert "氢键 2" in text and "盐桥 1" in text
+    assert "MET318" in text
+    assert "PLIP" in text
+
+
 def test_analyze_warns_when_parameters_differ(result_workspace):
     workspace, target, first, second = result_workspace
     results = make_results(target, [first, second])

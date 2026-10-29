@@ -553,6 +553,13 @@ class Workspace:
     def pymol_path(self, target_stem: str, ligand_stem: str) -> Path:
         return self.root / "pymol" / f"{target_stem}__{ligand_stem}.pml"
 
+    def interaction_dir(self, target_stem: str) -> Path:
+        """批量相互作用分析的缓存目录。"""
+        return self.root / "analysis" / "interactions" / target_stem
+
+    def interaction_cache_path(self, target_stem: str, ligand_stem: str) -> Path:
+        return self.interaction_dir(target_stem) / f"{ligand_stem}.json"
+
     def validation_dir(self, target_stem: str) -> Path:
         """重对接验证的独立目录，避免与用户自己的对接结果混在一起。"""
         return self.root / "validation" / target_stem

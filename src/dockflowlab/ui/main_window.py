@@ -37,6 +37,7 @@ from ..services import modes
 from ..services.analysis import save_heatmap_config
 from ..services.boxes import suggest_box
 from ..services.docking import DockingOptions, collect_existing_results, run_batch
+from ..services.interaction_index import build_interaction_index
 from ..services.download import DownloadResult
 from ..services.pose_browser import build_pose_browser
 from ..services.preparation import prepare_all
@@ -327,6 +328,8 @@ class MainWindow(QMainWindow):
         self.results_page.open_pymol_requested.connect(self._open_pymol)
         self.results_page.locate_result_requested.connect(self._locate_result)
         self.results_page.interaction_requested.connect(self._show_interactions)
+        self.results_page.interactions_scan_requested.connect(self._scan_interactions)
+        self.results_page.export_requested.connect(self._export_results_csv)
         self.results_page.back_requested.connect(lambda: self._navigate(3))
 
         self.render_page.render_requested.connect(self._start_render)
@@ -485,7 +488,7 @@ class MainWindow(QMainWindow):
         self.prepare_page.set_workspace(workspace)
         self.dock_page.set_workspace(workspace)
         results = collect_existing_results(workspace)
-        self.results_page.show_results(workspace, results)
+        self._display_results(results)
         self.render_page.set_workspace(workspace, results)
         self._update_sidebar()
 
@@ -1025,7 +1028,7 @@ class MainWindow(QMainWindow):
             self.results_page.finish_running(message, failed == 0)
         if workspace is not None:
             self._refresh_all()
-            self.results_page.show_results(workspace, results)
+            self._display_results(results)
         report_path = payload.get("report", "")
         if cancelled:
             self.statusBar().showMessage(message, 8000)
@@ -1049,12 +1052,87 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------
     # 结果与报告
     # ------------------------------------------------------------------
+    def _display_results(self, results) -> None:
+        """显示结果表，并用已有缓存回填相互作用列。"""
+        if self.workspace is None:
+            return
+        self.results_page.show_results(self.workspace, results)
+        try:
+            cached = build_interaction_index(
+                self.workspace, results, only_cached=True
+            )
+        except Exception as exc:
+            log.debug("读取相互作用缓存失败：%s", exc)
+            return
+        if cached.entries:
+            self.results_page.set_interaction_index(cached)
+
     def _refresh_results(self) -> None:
         if self.workspace is None or self._busy_notice():
             return
         results = collect_existing_results(self.workspace)
-        self.results_page.show_results(self.workspace, results)
+        self._display_results(results)
         self.statusBar().showMessage(f"已刷新：{len(results)} 组结果。", 5000)
+
+    def _scan_interactions(self) -> None:
+        if self.workspace is None or self._busy_notice():
+            return
+        results = collect_existing_results(self.workspace)
+        if not results:
+            QMessageBox.information(
+                self, "还没有结果", "请先完成至少一组对接，再分析相互作用。"
+            )
+            return
+        workspace = self.workspace
+        page = self.results_page
+        self._set_busy(True)
+        page.log_panel.setVisible(True)
+        page.log_panel.start("正在批量分析相互作用…")
+
+        def job(progress, cancel, line):
+            return build_interaction_index(
+                workspace, results, progress=progress, cancel=cancel
+            )
+
+        def done(index) -> None:
+            self._set_busy(False)
+            total = len(index.entries)
+            if index.cancelled:
+                page.log_panel.finish(f"已取消：完成 {total} 条分析。", False)
+            else:
+                page.log_panel.finish(
+                    f"分析完成：新分析 {index.analyzed} 条，复用缓存 {index.reused} 条。",
+                    True,
+                )
+            page.set_interaction_index(index)
+            self.statusBar().showMessage(
+                f"相互作用分析完成：{total} 条结果可筛选。", 8000
+            )
+
+        def failed(message: str) -> None:
+            self._set_busy(False)
+            page.log_panel.finish(f"分析失败：{message}", False)
+            QMessageBox.critical(self, "相互作用分析失败", message)
+
+        self._run_task(job, page.log_panel, done, failed)
+
+    def _export_results_csv(self) -> None:
+        if self.workspace is None or self._busy_notice():
+            return
+        default = self.workspace.analysis_dir / "docking_results.csv"
+        path, _ = QFileDialog.getSaveFileName(
+            self, "导出结果 CSV", str(default), "CSV 文件 (*.csv)"
+        )
+        if not path:
+            return
+        if not path.lower().endswith(".csv"):
+            path += ".csv"
+        try:
+            count = self.results_page.write_csv(path)
+        except OSError as exc:
+            QMessageBox.critical(self, "导出失败", f"无法写入文件：{exc}")
+            return
+        self.statusBar().showMessage(f"已导出 {count} 行：{path}", 8000)
 
     def _make_report(self) -> None:
         if self.workspace is None or self._busy_notice():
@@ -1069,7 +1147,7 @@ class MainWindow(QMainWindow):
 
         def done(path: str) -> None:
             self._set_busy(False)
-            self.results_page.show_results(workspace, collect_existing_results(workspace))
+            self._display_results(collect_existing_results(workspace))
             self.statusBar().showMessage(f"报告已生成：{path}", 8000)
             answer = QMessageBox.question(
                 self,
@@ -1114,7 +1192,7 @@ class MainWindow(QMainWindow):
             return
         finally:
             self._set_busy(False)
-        self.results_page.show_results(workspace, results)
+        self._display_results(results)
         self.statusBar().showMessage("热图与报告已更新。", 8000)
 
     def _open_workspace_folder(self) -> None:
@@ -1359,7 +1437,7 @@ class MainWindow(QMainWindow):
         elif index == 3 and self.workspace is not None:
             self.dock_page.refresh(self.workspace)
         elif index == 4 and self.workspace is not None and not self._busy:
-            self.results_page.show_results(self.workspace, collect_existing_results(self.workspace))
+            self._display_results(collect_existing_results(self.workspace))
         elif index == 5 and self.workspace is not None and not self._busy:
             self.render_page.set_renderer(find_renderer(self.settings.pymol_path))
             self.render_page.refresh_complexes()

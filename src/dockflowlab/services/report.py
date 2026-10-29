@@ -274,6 +274,7 @@ def _results_table(
     results: Sequence[DockingResult],
     target_labels: dict[str, str],
     ligand_labels: dict[str, str],
+    interaction_index=None,
 ) -> str:
     if not results:
         return '<p class="empty">项目里还没有对接结果。完成至少一组对接后重新生成报告。</p>'
@@ -307,6 +308,22 @@ def _results_table(
         box_detail = _box_detail(item)
         if box_detail:
             box_cell += f'<br><span class="meta">{_e(box_detail)}</span>'
+        interaction_cell = ""
+        if interaction_index is not None:
+            entry = interaction_index.get(item.target, item.ligand)
+            if entry is None:
+                interaction_cell = "<td>—</td>"
+            elif not entry.ok:
+                interaction_cell = f'<td class="meta">{_e(entry.error or "分析失败")}</td>'
+            else:
+                detail = entry.residue_text
+                engine = "PLIP" if entry.engine == "plip" else "几何判定"
+                interaction_cell = (
+                    f"<td>{_e(entry.summary)}"
+                    f'<br><span class="meta">{_e(engine)}'
+                    + (f" · {_e(detail)}" if detail else "")
+                    + "</span></td>"
+                )
         rows.append(
             "<tr>"
             f"<td>{_e(target_labels.get(item.target, item.target))}</td>"
@@ -316,14 +333,22 @@ def _results_table(
             f"<td>{box_cell}</td>"
             f'<td class="num">{_e(runtime)}</td>'
             f"<td>{status}</td>"
+            f"{interaction_cell}"
             f"<td>{_e(note)}</td>"
             "</tr>"
+        )
+    interaction_head = "<th>相互作用</th>" if interaction_index is not None else ""
+    note = ""
+    if interaction_index is not None:
+        note = (
+            '<p class="meta">“相互作用”来自 PLIP（不可用时回退几何判定），'
+            "只统计当前展示的接触；筛选请在软件结果页进行。</p>"
         )
     return (
         '<div class="table-wrap"><table>'
         "<thead><tr><th>靶点</th><th>候选分子</th><th>对接类型</th><th class='num'>最佳打分</th>"
-        "<th>盒子来源</th><th class='num'>耗时 (秒)</th><th>状态</th><th>说明</th></tr></thead>"
-        f"<tbody>{''.join(rows)}</tbody></table></div>"
+        f"<th>盒子来源</th><th class='num'>耗时 (秒)</th><th>状态</th>{interaction_head}<th>说明</th></tr></thead>"
+        f"<tbody>{''.join(rows)}</tbody></table></div>{note}"
     )
 
 
@@ -461,13 +486,24 @@ def generate_report(
     *,
     output_path: str | Path | None = None,
     settings: AppSettings | None = None,
+    interaction_index=None,
 ) -> Path:
     """汇总结果、生成图表并写出单个 HTML 文件。
 
     ``settings`` 保留在签名中以兼容调用方；报告中的参数取自结果自身记录，
     不使用报告生成时的当前设置，避免用户改过设置后报告与实际计算不符。
+    ``interaction_index`` 为空时尝试读取已有的批量相互作用缓存（不重新分析）。
     """
     results = list(results) if results is not None else collect_existing_results(workspace)
+    if interaction_index is None:
+        try:
+            from .interaction_index import build_interaction_index
+
+            cached = build_interaction_index(workspace, results, only_cached=True)
+            interaction_index = cached if cached.entries else None
+        except Exception as exc:
+            log.debug("读取相互作用缓存失败：%s", exc)
+            interaction_index = None
     bundle = analyze(workspace, results)
 
     output = Path(output_path) if output_path else workspace.report_dir / "report.html"
@@ -493,7 +529,9 @@ def generate_report(
         "generated": datetime.now().astimezone().strftime("%Y-%m-%d %H:%M"),
         "tiles": _tiles(bundle),
         "charts": _charts(bundle),
-        "results": _results_table(bundle.results, target_labels, ligand_labels),
+        "results": _results_table(
+            bundle.results, target_labels, ligand_labels, interaction_index
+        ),
         "poses": _pose_table(bundle.results, target_labels, ligand_labels),
         "methods": _methods(workspace, bundle.results),
         "warnings": _warnings(bundle, workspace),
