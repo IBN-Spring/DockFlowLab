@@ -9,6 +9,7 @@ from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
     QComboBox,
+    QFileDialog,
     QFrame,
     QHBoxLayout,
     QLabel,
@@ -20,6 +21,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from ..services.interaction_export import write_interactions_csv
 from ..services.interactions import (
     GEOMETRIC_KINDS,
     KIND_HINTS,
@@ -482,10 +484,20 @@ class InteractionDialog(ScreenFittedDialog):
         caveat.setWordWrap(True)
         layout.addWidget(caveat)
 
+        buttons = QHBoxLayout()
+        buttons.setSpacing(8)
+        self.export_button = QPushButton("导出 CSV")
+        self.export_button.setToolTip(
+            "导出当前构象的相互作用表：类型、残基、原子、距离与构象排名"
+        )
+        self.export_button.setEnabled(bool(self._analysis.interactions))
+        self.export_button.clicked.connect(self._export_csv)
+        buttons.addWidget(self.export_button)
         close_button = QPushButton("关闭")
         close_button.setObjectName("Primary")
         close_button.clicked.connect(self._close)
-        layout.addWidget(close_button)
+        buttons.addWidget(close_button)
+        layout.addLayout(buttons)
         return panel
 
     def _interaction_row(
@@ -678,6 +690,37 @@ class InteractionDialog(ScreenFittedDialog):
         self._apply_selection(-1, notify_view=True)
         if self._view is not None:
             self._view.reset_view()
+
+    def _pose_rank(self) -> int:
+        if self._pose_options and 0 <= self._current_pose_index < len(
+            self._pose_options
+        ):
+            return int(self._pose_options[self._current_pose_index].rank)
+        return 1
+
+    def _export_csv(self) -> None:
+        default_name = (
+            f"{self._target_label}_{self._ligand_label}_相互作用.csv"
+        ).replace("/", "_")
+        path, _ = QFileDialog.getSaveFileName(
+            self, "导出相互作用 CSV", default_name, "CSV 文件 (*.csv)"
+        )
+        if not path:
+            return
+        try:
+            count = write_interactions_csv(
+                path,
+                self._analysis,
+                target=self._target_label,
+                ligand=self._ligand_label,
+                pose_rank=self._pose_rank(),
+            )
+        except OSError as exc:
+            QMessageBox.warning(self, "导出失败", f"无法写入文件：{exc}")
+            return
+        QMessageBox.information(
+            self, "已导出", f"已导出 {count} 条相互作用。"
+        )
 
     def _close(self) -> None:
         self._shutdown_view()
