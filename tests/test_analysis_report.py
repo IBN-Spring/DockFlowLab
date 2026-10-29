@@ -115,6 +115,8 @@ def test_html_report_is_self_contained(result_workspace):
     assert "<img" in text
     assert "http://" not in text.split("<style")[0]
     assert "-7.50" in text
+    assert "结果可信度" in text
+    assert "尚未进行重对接验证" in text
 
 
 def test_heatmap_custom_text_color_and_svg(result_workspace):

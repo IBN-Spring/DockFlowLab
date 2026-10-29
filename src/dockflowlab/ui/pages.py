@@ -1059,6 +1059,7 @@ class ResultsPage(Page):
         self._workspace: Workspace | None = None
         self._row_keys: list[tuple[str, str]] = []
         self._row_index: dict[tuple[str, str], int] = {}
+        self._last_results: list[DockingResult] = []
         self._interaction_index = None
         self._interaction_cells: dict[tuple[str, str], QTableWidgetItem] = {}
         self.refresh_button = QPushButton("刷新结果")
@@ -1094,6 +1095,17 @@ class ResultsPage(Page):
         tiles.addWidget(self.tile_success)
         tiles.addWidget(self.tile_time)
         self.body.addLayout(tiles)
+
+        self.trust_card = Card("结果可信度")
+        self.trust_label = QLabel("—")
+        self.trust_label.setObjectName("CardHint")
+        self.trust_label.setWordWrap(True)
+        self.trust_label.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse
+        )
+        self.trust_card.add(self.trust_label)
+        self.trust_card.setVisible(False)
+        self.body.addWidget(self.trust_card)
 
         self.log_panel = LogPanel()
         self.log_panel.setVisible(False)
@@ -1285,6 +1297,7 @@ class ResultsPage(Page):
     def show_results(self, workspace: Workspace | None, results: list[DockingResult]) -> None:
         self._has_results = bool(results)
         self._workspace = workspace
+        self._last_results = list(results)
         self._row_keys = []
         self._row_index: dict[tuple[str, str], int] = {}
         self._interaction_cells = {}
@@ -1301,6 +1314,7 @@ class ResultsPage(Page):
             self.tile_time.set_value("—")
             self.chart_card.setVisible(False)
             self.report_button.setEnabled(False)
+            self.trust_card.setVisible(False)
             return
 
         successes = [item for item in results if item.ok and item.poses]
@@ -1314,6 +1328,7 @@ class ResultsPage(Page):
         self.report_button.setEnabled(bool(results))
         if not results:
             self.chart_card.setVisible(False)
+            self.trust_card.setVisible(False)
             return
 
         self.table.setVisible(True)
@@ -1406,7 +1421,137 @@ class ResultsPage(Page):
             self.mode_note.setText("")
         if self._interaction_index is not None:
             self._apply_interaction_index(self._interaction_index)
+        self._update_trust_card(workspace, results)
         self._load_chart(workspace)
+
+    def _update_trust_card(self, workspace: Workspace, results: list[DockingResult]) -> None:
+        """把影响结果解释的因素集中成一张卡，避免分数被单独放大。"""
+        successes = [item for item in results if item.ok and item.poses]
+        if not successes:
+            self.trust_card.setVisible(False)
+            return
+        from ..services.advice import ligand_efficiency, recommend_exhaustiveness
+        from ..services.redocking import load_redocking
+
+        lines: list[str] = []
+
+        # 盒子来源与需要人工确认的自动盒子。
+        source_counts: dict[str, int] = {}
+        review = 0
+        for item in successes:
+            label = {
+                "pocket": "几何口袋", "cocrystal": "共晶配体", "site": "PDB 位点",
+                "blind": "盲对接", "manual": "手动",
+            }.get(item.box_source, item.box_source or "自动")
+            source_counts[label] = source_counts.get(label, 0) + 1
+            box = workspace.load_box(item.target)
+            if box is not None and box.needs_review:
+                review += 1
+        if source_counts:
+            text = "盒子来源：" + "、".join(
+                f"{label} {count}" for label, count in source_counts.items()
+            )
+            if review:
+                text += f"；其中 {review} 个自动盒子定位不可靠，建议人工确认"
+            lines.append(text)
+
+        # 搜索深度与配体复杂度建议。
+        advice = None
+        ligand_by_stem = {entry.stem: entry for entry in workspace.ligands}
+        for item in successes:
+            entry = ligand_by_stem.get(item.ligand)
+            details = (entry.meta.get("prep_details") if entry else None) or {}
+            try:
+                rotatable = int(details.get("rotatable_bonds") or 0)
+                heavy = int(details.get("heavy_atoms") or 0)
+            except (TypeError, ValueError):
+                continue
+            if heavy <= 0:
+                continue
+            candidate = recommend_exhaustiveness(rotatable, heavy)
+            if advice is None or candidate.recommended > advice.recommended:
+                advice = candidate
+        used = [
+            int(item.parameters["exhaustiveness"])
+            for item in successes
+            if isinstance(item.parameters, dict)
+            and str(item.parameters.get("exhaustiveness", "")).isdigit()
+        ]
+        if used:
+            text = f"搜索深度：exhaustiveness {min(used)}"
+            if max(used) != min(used):
+                text += f"–{max(used)}"
+            if advice is not None:
+                text += f"；按配体复杂度建议 {advice.recommended}"
+                if min(used) < advice.recommended:
+                    text += "（当前偏低，搜索可能未收敛）"
+            lines.append(text)
+
+        # 结构体检：缺失残基、金属、水。
+        qc_notes: list[str] = []
+        for target in workspace.targets:
+            details = target.meta.get("prep_details") or {}
+            qc = details.get("structure_qc") if isinstance(details, dict) else None
+            if not isinstance(qc, dict) or not qc:
+                continue
+            bits = [f"缺失残基 {qc.get('missing_residue_count', 0)}",
+                    f"缺失原子 {qc.get('missing_atom_count', 0)}"]
+            metals = qc.get("metals") or []
+            waters = int(qc.get("waters") or 0)
+            if metals:
+                bits.append("金属 " + "、".join(str(item) for item in metals))
+            if waters:
+                bits.append(f"水 {waters}")
+            qc_notes.append(f"{target.display_name}：" + "，".join(bits))
+        if qc_notes:
+            lines.append("结构体检：" + "；".join(qc_notes[:3]))
+
+        # 重对接验证（可选）。
+        redock_notes: list[str] = []
+        for stem in sorted({item.target for item in successes}):
+            result = load_redocking(workspace, stem)
+            if result is None:
+                continue
+            entry = next((t for t in workspace.targets if t.stem == stem), None)
+            name = entry.display_name if entry else stem
+            if not result.ok:
+                redock_notes.append(f"{name} 未完成（{result.error}）")
+            elif result.rmsd is None:
+                redock_notes.append(f"{name} 无法计算 RMSD")
+            else:
+                verdict = "通过" if result.passed else "未通过"
+                redock_notes.append(f"{name} {result.rmsd:.2f} Å（{verdict}）")
+        if redock_notes:
+            lines.append("重对接验证：" + "；".join(redock_notes))
+        else:
+            lines.append("重对接验证：尚未进行（可选，用于校准当前盒子与参数）")
+
+        # 相互作用筛选状态。
+        if self._interaction_index is not None:
+            entries = [entry for entry in self._interaction_index.entries.values() if entry.ok]
+            geometric = sum(1 for entry in entries if entry.engine != "plip")
+            text = f"相互作用：已分析 {len(entries)} 条"
+            if geometric:
+                text += f"，其中 {geometric} 条使用几何判定（PLIP 不可用或未识别配体）"
+            lines.append(text)
+
+        # 配体效率。
+        best = min(successes, key=lambda item: item.poses[0].affinity)
+        entry = ligand_by_stem.get(best.ligand)
+        details = (entry.meta.get("prep_details") if entry else None) or {}
+        try:
+            heavy = int(details.get("heavy_atoms") or 0)
+        except (TypeError, ValueError):
+            heavy = 0
+        efficiency = ligand_efficiency(best.poses[0].affinity, heavy)
+        if efficiency is not None:
+            name = entry.display_name if entry else best.ligand
+            lines.append(
+                f"最佳配体效率：{efficiency:.2f} kcal/mol/重原子（{name}，{heavy} 个重原子）"
+            )
+
+        self.trust_label.setText("\n".join(f"· {line}" for line in lines))
+        self.trust_card.setVisible(True)
 
     # -- 相互作用列与筛选 ----------------------------------------------
     def set_interaction_index(self, index) -> None:
@@ -1416,6 +1561,8 @@ class ResultsPage(Page):
         self.filter_row.setVisible(available and self._has_results)
         self._apply_interaction_index(index)
         self._apply_filter()
+        if self._workspace is not None and self._last_results:
+            self._update_trust_card(self._workspace, self._last_results)
 
     def _apply_interaction_index(self, index) -> None:
         from ..services.interaction_index import InteractionIndex

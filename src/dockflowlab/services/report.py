@@ -561,6 +561,92 @@ def _methods(workspace: Workspace, results: Sequence[DockingResult]) -> str:
     return "".join(f"<dt>{_e(key)}</dt><dd>{_e(value)}</dd>" for key, value in items)
 
 
+def _trust_section(
+    workspace: Workspace,
+    results: Sequence[DockingResult],
+    interaction_index=None,
+) -> str:
+    """结果可信度小结：盒子、搜索深度、体检、重对接与相互作用来源。"""
+    successes = [item for item in results if item.ok and item.poses]
+    if not successes:
+        return ""
+    from .advice import recommend_exhaustiveness
+    from .redocking import load_redocking
+
+    items: list[str] = []
+    review = 0
+    for item in successes:
+        box = workspace.load_box(item.target)
+        if box is not None and box.needs_review:
+            review += 1
+    if review:
+        items.append(
+            f"{review} 组结果使用自动定位的盒子（盲对接或按分子尺寸估算），"
+            "建议在软件中人工确认中心与边长。"
+        )
+    advice = None
+    for entry in workspace.ligands:
+        details = entry.meta.get("prep_details") or {}
+        if not isinstance(details, dict):
+            continue
+        try:
+            rotatable = int(details.get("rotatable_bonds") or 0)
+            heavy = int(details.get("heavy_atoms") or 0)
+        except (TypeError, ValueError):
+            continue
+        if heavy <= 0:
+            continue
+        candidate = recommend_exhaustiveness(rotatable, heavy)
+        if advice is None or candidate.recommended > advice.recommended:
+            advice = candidate
+    used = [
+        int(item.parameters["exhaustiveness"])
+        for item in successes
+        if isinstance(item.parameters, dict)
+        and str(item.parameters.get("exhaustiveness", "")).isdigit()
+    ]
+    if advice is not None and used and min(used) < advice.recommended:
+        items.append(
+            f"实际 exhaustiveness={min(used)}，低于按配体复杂度给出的建议值 "
+            f"{advice.recommended}；低搜索深度可能产生未收敛的构象。"
+        )
+    validated = []
+    for stem in sorted({item.target for item in successes}):
+        result = load_redocking(workspace, stem)
+        if result is None:
+            continue
+        if result.ok and result.rmsd is not None:
+            validated.append(
+                f"{stem}：{result.rmsd:.2f} Å（{'通过' if result.passed else '未通过'}）"
+            )
+        else:
+            validated.append(f"{stem}：未完成")
+    if validated:
+        items.append("重对接验证：" + "；".join(validated) + "。")
+    else:
+        items.append("尚未进行重对接验证；无法确认当前盒子与参数能复现实验构象。")
+    if interaction_index is not None:
+        geometric = sum(
+            1
+            for entry in interaction_index.entries.values()
+            if entry.ok and entry.engine != "plip"
+        )
+        if geometric:
+            items.append(
+                f"{geometric} 条相互作用由几何判定生成（PLIP 不可用或未识别配体），"
+                "类型与距离需谨慎解读。"
+            )
+    if not items:
+        return ""
+    body = "".join(f"<li>{_e(text)}</li>" for text in items)
+    return (
+        "<section><h2>结果可信度</h2>"
+        f"<ul>{body}</ul>"
+        '<p class="meta">这些因素会直接影响分数的解释；'
+        "对接分数本身不等于实验结合亲和力。</p></section>"
+    )
+
+
 def _warnings(bundle: AnalysisBundle, workspace: Workspace) -> str:
     messages: list[str] = []
     messages.extend(bundle.warnings or [])
@@ -648,6 +734,7 @@ def generate_report(
         "poses": _pose_table(bundle.results, target_labels, ligand_labels),
         "redocking": _redocking_section(workspace),
         "methods": _methods(workspace, bundle.results),
+        "trust": _trust_section(workspace, bundle.results, interaction_index),
         "warnings": _warnings(bundle, workspace),
         "version": _e(__version__),
         "app_name": _e(__app_name__),

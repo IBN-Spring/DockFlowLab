@@ -79,6 +79,9 @@ def test_results_offer_interaction_details(qt_app, tmp_path):
     page = ResultsPage()
     page.show_results(workspace, [result])
 
+    assert not page.trust_card.isHidden()
+    assert "盒子来源" in page.trust_label.text()
+
     actions = page.table.cellWidget(0, 8)
     assert actions is not None
     buttons = {button.text(): button for button in actions.findChildren(QPushButton)}
