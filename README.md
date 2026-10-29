@@ -6,7 +6,7 @@
 </p>
 
 <p align="center">
-  <img alt="release" src="https://img.shields.io/badge/release-v2.3.0-2A78D6?style=flat-square">
+  <img alt="release" src="https://img.shields.io/badge/release-v2.4.0-2A78D6?style=flat-square">
   <img alt="Windows" src="https://img.shields.io/badge/Windows-10%2F11%20x64-0E2A4D?style=flat-square&logo=windows&logoColor=white">
   <img alt="macOS" src="https://img.shields.io/badge/macOS-Apple%20Silicon-0E2A4D?style=flat-square&logo=apple&logoColor=white">
   <img alt="Python" src="https://img.shields.io/badge/Python-3.10--3.12-17A897?style=flat-square&logo=python&logoColor=white">
@@ -206,7 +206,7 @@ DockFlowLab 的定位是**轻量、开源、离线、打开即用**的桌面工�
 | --- | --- | --- | --- |
 | **AutoDock Vina** | 1.2.7 | 常规蛋白–小分子对接 | 默认引擎，文献使用最广 |
 | **QuickVina 2** | 2.1 | Vina 较慢或卡死的复合物 | 基于 Vina 的加速实现，参数含义接近 |
-| **Smina** | 2020.12.10 | 需要换评分函数或交叉检查 | 支持 Vinardo 等评分函数，结果用于相对排序 |
+| **Smina** | 2020.12.10 | 需要换评分函数或交叉检查 | 支持 Vinardo 评分（`--scoring vinardo`），结果用于相对排序 |
 
 - 可在界面或命令行按项目切换引擎，不需要改配置。
 - 开启“引擎回退”后，首选引擎卡死或失败会自动改用另一个已安装的引擎重试，并在结果中注明
@@ -226,7 +226,22 @@ DockFlowLab 的定位是**轻量、开源、离线、打开即用**的桌面工�
   配位（如磺酰胺氮）由本地几何判定补充。PLIP 不可用或分析失败时自动回退到纯几何判定，
   界面仍可正常使用。
 - 复合物由 PDBQT 转换而来时缺少键级与形式电荷，盐桥和 π 相互作用可能被低估；结果适合
-  快速复核构象，定量结论仍建议结合实验或更高精度方法。
+  快速复核构象，定量结论仍建议结合实验或更高精度方法。对接输出的极性氢未优化，氢键的
+  供体–氢–受体角度只作参考，界面与报告均按此口径提示。
+- **构象浏览**：Vina 的多个输出构象可逐个查看，切换时重新分析相互作用；当最佳构象与
+  次优构象分数接近时给出收敛提示，避免把偶然的最低分当作唯一解。
+- **批量相互作用筛选**：为整批结果建立带缓存的相互作用索引，可按类型、残基（包含/排除）
+  过滤结果表；缓存按复合物文件的时间与大小失效，单条分析失败不影响其他结果。
+- **重对接验证**：用靶点自带的共晶配体做一次对照对接，按对称校正 RMSD 判断盒子与参数
+  能否复现实验构象；结果写入项目与报告，作为整批结果可信度的校准依据。
+- **结构体检卡**：准备阶段解析缺失残基/原子、金属离子与共晶配体、altloc 与占有率，
+  在开始对接前提示可能影响结果的结构问题。
+- **exhaustiveness 建议**：按配体的可旋转键与重原子数给出搜索深度建议，实际值偏低时
+  在界面和报告中提醒。
+- **配体效率与可信度卡**：结果页按 `LE = −ΔG / 重原子数` 计算配体效率，并把盒子来源、
+  搜索深度、结构体检、重对接与相互作用来源集中成一张“结果可信度”卡。
+- 细节窗口可将当前构象的相互作用导出为 CSV（类型、残基、原子、距离、构象排名）；
+  结果页的 CSV 导出只包含筛选后可见的行。
 - 结合能热图与柱状图使用统一的科学配色；支持修改标题、靶点显示名称、配色方案。
 - 热图可导出 **PNG / SVG / PDF**：PNG 用于报告与预览，SVG 可继续编辑，PDF 适合打印。
 - 一键生成**可离线打开的中文 HTML 报告**，包含参数、结果、图表与评分含义说明。
@@ -511,6 +526,7 @@ dockflowlab-cli import D:/docking/demo aspirin.sdf --kind ligand --name 阿司�
 dockflowlab-cli prepare D:/docking/demo
 dockflowlab-cli dock D:/docking/demo --exhaustiveness 8
 dockflowlab-cli dock D:/docking/demo --engine qvina2
+dockflowlab-cli dock D:/docking/demo --engine smina --scoring vinardo
 dockflowlab-cli report D:/docking/demo
 ```
 
@@ -735,7 +751,7 @@ PyMOL 是 Schrödinger, LLC 的商标，分发时请保留相应许可与声明�
   title        = {DockFlowLab: 面向非专业用户的跨平台分子对接桌面工作台},
   author       = {{IBN-Spring}},
   year         = {2026},
-  version      = {2.3.0},
+  version      = {2.4.0},
   url          = {https://github.com/IBN-Spring/DockFlowLab},
   license      = {GPL-2.0-only}
 }

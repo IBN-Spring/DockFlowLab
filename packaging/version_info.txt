@@ -1,7 +1,7 @@
 VSVersionInfo(
   ffi=FixedFileInfo(
-    filevers=(2, 3, 0, 0),
-    prodvers=(2, 3, 0, 0),
+    filevers=(2, 4, 0, 0),
+    prodvers=(2, 4, 0, 0),
     mask=0x3f,
     flags=0x0,
     OS=0x40004,
@@ -17,12 +17,12 @@ VSVersionInfo(
           [
             StringStruct(u'CompanyName', u'DockFlowLab'),
             StringStruct(u'FileDescription', u'DockFlowLab molecular docking desktop app'),
-            StringStruct(u'FileVersion', u'2.3.0'),
+            StringStruct(u'FileVersion', u'2.4.0'),
             StringStruct(u'InternalName', u'DockFlowLab'),
             StringStruct(u'LegalCopyright', u'Copyright (c) DockFlowLab contributors'),
             StringStruct(u'OriginalFilename', u'DockFlowLab.exe'),
             StringStruct(u'ProductName', u'DockFlowLab'),
-            StringStruct(u'ProductVersion', u'2.3.0')
+            StringStruct(u'ProductVersion', u'2.4.0')
           ]
         )
       ]

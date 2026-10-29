@@ -5,7 +5,7 @@ from __future__ import annotations
 from importlib import import_module
 from importlib.metadata import PackageNotFoundError, version as package_version
 
-__version__ = "2.3.0"
+__version__ = "2.4.0"
 __app_name__ = "DockFlowLab"
 __app_name_zh__ = "分子对接工作台"
 
