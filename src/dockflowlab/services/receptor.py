@@ -22,7 +22,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Callable
 
-from ..core import pdbio
+from ..core import pdbio, structure_qc
 from ..core.models import PrepOutcome
 from ..errors import DependencyError, InputError, PreparationError
 from ..logging_setup import get_logger
@@ -459,6 +459,16 @@ def prepare_receptor(
                 else:
                     warnings.append(f"mmCIF 转 PDB 失败（{message}），将直接交给 PDBFixer")
 
+        # 结构体检必须在移除水/金属/配体之前做，否则报告里看到的只是
+        # “准备后的受体”，无法反映下载结构本身的问题。
+        qc: structure_qc.StructureQC | None = None
+        if pdbio.detect_format(source) == "pdb":
+            try:
+                qc = structure_qc.analyze_structure(source)
+                warnings.extend(qc.warnings())
+            except Exception as exc:
+                log.warning("结构体检失败：%s", exc, exc_info=True)
+
         if options.keep_metals and options.remove_heterogens:
             source, kept_metals, removed_other = _filter_for_metal_retention(
                 source, temp / "with_metals.pdb"
@@ -508,6 +518,8 @@ def prepare_receptor(
                 "kind", kind if kind in {"protein", "peptide", "nucleic_acid"} else "macromolecule"
             )
             outcome.details.setdefault("ph", options.ph)
+            if qc is not None:
+                outcome.details["structure_qc"] = qc.as_dict()
             return outcome
 
         _notify(progress, "转换为受体 PDBQT（Gasteiger 电荷）…")
@@ -527,6 +539,8 @@ def prepare_receptor(
                 "kind": kind if kind in {"protein", "peptide", "nucleic_acid"} else "macromolecule",
             }
         )
+        if qc is not None:
+            details["structure_qc"] = qc.as_dict()
         return PrepOutcome(
             ok=True,
             method=details.get("method", "PDBFixer") + " + OpenBabel",
@@ -670,6 +684,10 @@ def inspect_target(path: str | Path, obabel: OpenBabelAdapter | None = None) -> 
     chains = pdbio.polymer_chains(path)
     sites = pdbio.find_ligand_sites(path)
     site_records = pdbio.parse_site_records(path)
+    try:
+        qc = structure_qc.analyze_structure(path)
+    except Exception:
+        qc = None
     info.update(
         {
             "ok": True,
@@ -683,6 +701,7 @@ def inspect_target(path: str | Path, obabel: OpenBabelAdapter | None = None) -> 
                 for site in sites[:8]
             ],
             "sites": len(site_records),
+            "structure_qc": qc.as_dict() if qc is not None else {},
         }
     )
     return info
