@@ -527,7 +527,8 @@ DockFlowLab 的 Python 代码为独立实现，未直接复制 fpocket、P2Rank�
 
 | 平台 | 推荐文件 | 说明 |
 | --- | --- | --- |
-| Windows 10/11 x64 | `DockFlowLab-Windows-x64.zip` | 解压即用，内置三种对接引擎与无界面 PyMOL |
+| Windows 10/11 x64 | `DockFlowLab-Setup-2.5.0-x64.exe` | 向导式安装，按用户安装、不需要管理员权限；生成开始菜单与桌面快捷方式 |
+| Windows 10/11 x64（便携） | `DockFlowLab-Windows-x64.zip` | 解压即用，不写注册表；内置三种对接引擎与无界面 PyMOL |
 | macOS 11+ Apple Silicon | `DockFlowLab-macOS-arm64.dmg` | 拖入“应用程序”即可；内置三种引擎与 PyMOL |
 
 - [GitHub Releases](https://github.com/IBN-Spring/DockFlowLab/releases/latest)（推荐，单文件直接下载）
@@ -536,6 +537,16 @@ DockFlowLab 的 Python 代码为独立实现，未直接复制 fpocket、P2Rank�
     `合并并打开-macOS.command` 与 SHA256 校验文件。请下载同一版本的全部分卷后再合并。
 
 ### Windows
+
+**安装版（推荐）**
+
+1. 下载 `DockFlowLab-Setup-2.5.0-x64.exe` 并双击运行。
+2. 按向导选择安装目录（默认 `%LOCALAPPDATA%\Programs\DockFlowLab`），完成后可直接启动。
+3. 安装按当前用户进行，不需要管理员权限；开始菜单和桌面会生成快捷方式，可在“设置 →
+   应用”中卸载。
+4. 首次启动若被 SmartScreen 拦截，点击“更多信息 → 仍要运行”。
+
+**便携版**
 
 1. 下载 `DockFlowLab-Windows-x64.zip` 并解压到任意目录。
 2. 双击 `DockFlowLab.exe`。不需要安装，不写注册表。

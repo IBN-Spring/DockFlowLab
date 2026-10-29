@@ -79,6 +79,33 @@ Windows 二进制，路径由 `tools/runtime.resource_path()` 在源码与打包
 解析。QuickVina 2 / Smina 依赖的 boost 与 OpenBabel DLL 由 spec 收集到
 `_internal/`，运行时由 `tools/vina.engine_env()` 加入子进程的 DLL 搜索路径。
 
+### Windows 安装包（Setup.exe）
+
+目录版构建完成后，可以用 [NSIS 3](https://nsis.sourceforge.io/) 生成向导式安装包。
+不需要把 NSIS 装进系统：下载官方的 `nsis-3.x.zip`，解压后把 `makensis.exe` 的路径
+传给构建脚本即可。
+
+```bat
+packaging\build_windows_installer.bat "C:\path\to\nsis-3.10\makensis.exe"
+```
+
+脚本读取 `packaging\installer.nsi`，把整个 `dist\DockFlowLab\` 收进安装程序，输出：
+
+```text
+release\DockFlowLab-Setup-2.5.0-x64.exe
+```
+
+安装包的行为：
+
+- **按用户安装**，默认目录 `%LOCALAPPDATA%\Programs\DockFlowLab`，不需要管理员权限；
+- 安装时创建开始菜单与桌面快捷方式，并注册当前用户的卸载信息；
+- 控制面板 / Windows 设置的“应用”中可以卸载，卸载程序为 `$INSTDIR\Uninstall.exe`；
+- 安装包只包含程序文件，项目数据、设置与日志仍写入用户目录，卸载不会删除用户项目。
+
+升级时直接运行新版本安装包覆盖安装即可。若修改了版本号，需要同步
+`installer.nsi` 里的 `APP_VERSION`、`OutFile` 与 `VIProductVersion`，以及
+`build_windows_installer.bat` 末尾的产物文件名校验。
+
 ### 构建诊断版（带控制台）
 
 正式版 `console=False`，启动阶段的错误不会显示在终端。排查打包问题时构建控制台版：

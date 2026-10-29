@@ -306,7 +306,7 @@
 - [ ] 高柔性配体（如伊马替尼/1IEP）验证 exhaustiveness 建议与收敛提示
 - [x] 批量相互作用缓存与筛选（两条真实结果 + 单元测试覆盖 3 条以上）
 - [x] 版本号同步：`version.py`、`pyproject.toml`、`version_info.txt`、`dockflowlab.spec`、README 徽章/BibTeX、`CITATION.cff`
-- [ ] Windows 包构建，`DockFlowLab.exe` 版本号 2.5.0
+- [x] Windows 包构建，`DockFlowLab.exe` 版本号 2.5.0（含便携 zip 与 NSIS 安装包）
 - [ ] 发布说明、tag `v2.5.0`、上传 zip
 - [x] 不把 `可视化脚本/` 加入提交；提交不加 Claude 共同作者
 
