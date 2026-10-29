@@ -229,20 +229,43 @@ def _ensure_3d(mol: Any, options: LigandPrepOptions, warnings: list[str]) -> Any
 
 
 def _minimize(mol: Any, options: LigandPrepOptions, warnings: list[str]) -> tuple[Any, str]:
+    """依次尝试 MMFF94s / UFF。
+
+    两个力场分开 try：MMFF 优化器在个别分子上会抛出内部异常（例如
+    ``Invariant Violation: bad direction in linearSearch``），此时仍应继续
+    尝试 UFF，而不是直接放弃最小化。异常细节写入日志即可，界面只显示简短
+    提示，避免把 RDKit/Boost 的内部文本暴露给用户。
+    """
     Chem, AllChem, (Descriptors, _) = _rdkit()
     if not options.minimize or options.forcefield == "none":
         return mol, "未最小化"
-    prefers_uff = options.forcefield == "UFF"
-    try:
-        if not prefers_uff and AllChem.MMFFHasAllMoleculeParams(mol):
-            AllChem.MMFFOptimizeMolecule(mol, maxIters=options.max_iters, mmffVariant="MMFF94s")
-            return mol, "MMFF94s"
-        if AllChem.UFFHasAllMoleculeParams(mol):
-            AllChem.UFFOptimizeMolecule(mol, maxIters=options.max_iters)
-            return mol, "UFF"
-    except Exception as exc:
-        warnings.append(f"能量最小化失败（{exc}），继续使用原始构象")
-    warnings.append("当前分子缺少可用的 MMFF94s/UFF 参数，未进行能量最小化")
+
+    order = ["UFF"] if options.forcefield == "UFF" else ["MMFF94s", "UFF"]
+    missing: list[str] = []
+    failed: list[str] = []
+    for name in order:
+        try:
+            if name == "MMFF94s":
+                if not AllChem.MMFFHasAllMoleculeParams(mol):
+                    missing.append(name)
+                    continue
+                AllChem.MMFFOptimizeMolecule(
+                    mol, maxIters=options.max_iters, mmffVariant="MMFF94s"
+                )
+            else:
+                if not AllChem.UFFHasAllMoleculeParams(mol):
+                    missing.append(name)
+                    continue
+                AllChem.UFFOptimizeMolecule(mol, maxIters=options.max_iters)
+            return mol, name
+        except Exception:
+            failed.append(name)
+            log.debug("力场 %s 最小化失败", name, exc_info=True)
+
+    if failed:
+        warnings.append("能量最小化未收敛，已保留原始构象")
+    else:
+        warnings.append("当前分子缺少可用的 MMFF94s/UFF 参数，未进行能量最小化")
     return mol, "无可用力场"
 
 

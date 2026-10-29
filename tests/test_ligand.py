@@ -226,3 +226,112 @@ def test_enumerate_states_clamps_to_maximum():
 
     assert MAX_LIGAND_STATES == 8
     assert len(states) <= MAX_LIGAND_STATES
+
+
+def test_minimize_falls_back_to_uff_when_mmff_raises(monkeypatch):
+    pytest.importorskip("rdkit")
+    from rdkit import Chem
+
+    from dockflowlab.services import ligand
+
+    calls: list[str] = []
+
+    class FakeAllChem:
+        @staticmethod
+        def MMFFHasAllMoleculeParams(mol):
+            return True
+
+        @staticmethod
+        def MMFFOptimizeMolecule(mol, maxIters=500, mmffVariant="MMFF94s"):
+            calls.append("MMFF94s")
+            raise RuntimeError(
+                "Invariant Violation: bad direction in linearSearch "
+                "in function linearSearch, file BFGSOpt.h, line 638"
+            )
+
+        @staticmethod
+        def UFFHasAllMoleculeParams(mol):
+            return True
+
+        @staticmethod
+        def UFFOptimizeMolecule(mol, maxIters=500):
+            calls.append("UFF")
+
+    monkeypatch.setattr(
+        ligand, "_rdkit", lambda: (Chem, FakeAllChem, (None, None))
+    )
+    warnings: list[str] = []
+
+    _, forcefield = ligand._minimize(
+        Chem.MolFromSmiles("CCO"), ligand.LigandPrepOptions(), warnings
+    )
+
+    assert calls == ["MMFF94s", "UFF"]
+    assert forcefield == "UFF"
+    # UFF 成功了就不算失败，界面不出现任何力场内部报错。
+    assert warnings == []
+    assert all("Invariant" not in text for text in warnings)
+
+
+def test_minimize_reports_failure_when_all_forcefields_raise(monkeypatch):
+    pytest.importorskip("rdkit")
+    from rdkit import Chem
+
+    from dockflowlab.services import ligand
+
+    class BrokenAllChem:
+        @staticmethod
+        def MMFFHasAllMoleculeParams(mol):
+            return True
+
+        @staticmethod
+        def UFFHasAllMoleculeParams(mol):
+            return True
+
+        @staticmethod
+        def MMFFOptimizeMolecule(mol, maxIters=500, mmffVariant="MMFF94s"):
+            raise RuntimeError("bfgs failed")
+
+        @staticmethod
+        def UFFOptimizeMolecule(mol, maxIters=500):
+            raise RuntimeError("uff failed")
+
+    monkeypatch.setattr(
+        ligand, "_rdkit", lambda: (Chem, BrokenAllChem, (None, None))
+    )
+    warnings: list[str] = []
+
+    _, forcefield = ligand._minimize(
+        Chem.MolFromSmiles("CCO"), ligand.LigandPrepOptions(), warnings
+    )
+
+    assert forcefield == "无可用力场"
+    assert warnings == ["能量最小化未收敛，已保留原始构象"]
+
+
+def test_minimize_reports_missing_parameters(monkeypatch):
+    pytest.importorskip("rdkit")
+    from rdkit import Chem
+
+    from dockflowlab.services import ligand
+
+    class NoParamsAllChem:
+        @staticmethod
+        def MMFFHasAllMoleculeParams(mol):
+            return False
+
+        @staticmethod
+        def UFFHasAllMoleculeParams(mol):
+            return False
+
+    monkeypatch.setattr(
+        ligand, "_rdkit", lambda: (Chem, NoParamsAllChem, (None, None))
+    )
+    warnings: list[str] = []
+
+    _, forcefield = ligand._minimize(
+        Chem.MolFromSmiles("CCO"), ligand.LigandPrepOptions(), warnings
+    )
+
+    assert forcefield == "无可用力场"
+    assert warnings == ["当前分子缺少可用的 MMFF94s/UFF 参数，未进行能量最小化"]
