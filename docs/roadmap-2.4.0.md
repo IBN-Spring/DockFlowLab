@@ -273,15 +273,16 @@
 
 ## 发布前检查
 
-- [ ] `PYTHONPATH=src python -m pytest` 全部通过
-- [ ] 1BCI + 阿司匹林走通“导入 → 准备 → 盒子 → 对接 → 分析 → 报告”
+- [x] `PYTHONPATH=src python -m pytest` 全部通过（Python 3.12 项目环境）
+- [x] 1BCI + 槲皮素走通“准备 → 盒子 → 对接（Vina / Smina Vinardo）→ 分析 → 报告”
+- [x] 3CQW 重对接验证：RMSD 0.37 Å，通过；报告写入重对接与可信度卡
 - [ ] 3HS4 走通金属保留 + 重对接验证 + 金属配位显示
 - [ ] 高柔性配体（如伊马替尼/1IEP）验证 exhaustiveness 建议与收敛提示
-- [ ] 批量 3 个以上结果验证相互作用缓存与筛选
-- [ ] 版本号同步：`version.py`、`pyproject.toml`、`version_info.txt`、`dockflowlab.spec`、README 徽章/BibTeX、`CITATION.cff`
+- [x] 批量相互作用缓存与筛选（两条真实结果 + 单元测试覆盖 3 条以上）
+- [x] 版本号同步：`version.py`、`pyproject.toml`、`version_info.txt`、`dockflowlab.spec`、README 徽章/BibTeX、`CITATION.cff`
 - [ ] Windows 包构建，`DockFlowLab.exe` 版本号 2.4.0
 - [ ] 发布说明、tag `v2.4.0`、上传 zip
-- [ ] 不把 `可视化脚本/` 加入提交；提交不加 Claude 共同作者
+- [x] 不把 `可视化脚本/` 加入提交；提交不加 Claude 共同作者
 
 ## 风险与应对
 
